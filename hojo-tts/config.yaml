@@ -36,7 +36,7 @@ options:
   default_voice: hojo_zh_f_01
   temperature: 0.8
   preload: true
-  discovery_api_key: ''
+  discovery_api_key: ""
 schema:
   log_level: list(trace|debug|info|warning|error|fatal)
   num_threads: int(0,16)

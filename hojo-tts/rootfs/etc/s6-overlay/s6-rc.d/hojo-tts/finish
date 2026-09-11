@@ -4,8 +4,8 @@
 # Service finish script
 # Standard pattern from hassio-addons/app-example
 # ==============================================================================
-declare exit_code
-readonly exit_code_container=$(</run/s6-linux-init-container-results/exitcode)
+exit_code_container=$(</run/s6-linux-init-container-results/exitcode)
+readonly exit_code_container
 readonly exit_code_service="${1}"
 readonly exit_code_signal="${2}"
 readonly service="hojo-tts"

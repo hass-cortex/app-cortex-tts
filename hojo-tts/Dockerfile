@@ -2,6 +2,10 @@
 # HA Supervisor injects BUILD_FROM via --build-arg from build.yaml.
 ARG BUILD_FROM=ghcr.io/hassio-addons/debian-base:9.3.0
 
+# The uv binary is copied in from its own published image; naming the
+# stage is what lets `COPY --from` reference it.
+FROM ghcr.io/astral-sh/uv:0.9.9 AS uv
+
 # hadolint ignore=DL3006
 FROM ${BUILD_FROM}
 
@@ -27,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -s /bin/false hojo-tts
 
-COPY --from=ghcr.io/astral-sh/uv:0.9.9 /uv /usr/local/bin/uv
+COPY --from=uv /uv /usr/local/bin/uv
 
 WORKDIR /app
 
