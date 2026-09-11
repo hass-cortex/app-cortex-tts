@@ -1,0 +1,42 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Hojo TTS — Init oneshot
+# Dev override + data dirs + discovery key + permissions
+# ==============================================================================
+
+DEV_DIR="/share/.dev/hojo-tts"
+
+# Hot-deploy path: dev.sh drops the Python package here and a restart picks it
+# up in seconds. Only source is swapped — the virtualenv is baked into the
+# image, so adding a dependency still needs `--init` and a rebuild.
+if [ -d "${DEV_DIR}/src/hojo_tts" ]; then
+    bashio::log.warning "[DEV MODE] Loading source from ${DEV_DIR}"
+    rm -rf /app/src/hojo_tts
+    mkdir -p /app/src
+    cp -r "${DEV_DIR}/src/hojo_tts" /app/src/hojo_tts
+fi
+
+if [ -d "${DEV_DIR}/web" ]; then
+    bashio::log.warning "[DEV MODE] Loading web UI from ${DEV_DIR}"
+    rm -rf /app/web
+    cp -r "${DEV_DIR}/web" /app/web
+fi
+
+# Model bundles and reference recordings live under /data so Home Assistant's
+# "remove with data" sweeps them up; they are downloaded on demand, not baked
+# into the image.
+mkdir -p /data/models /data/references /data/.cache/huggingface /data/.cache/numba
+
+# The bootstrap key Supervisor discovery hands to the integration. Admins can
+# rotate it from the Configuration tab — clearing the field regenerates it on
+# the next restart.
+if ! bashio::config.has_value 'discovery_api_key'; then
+    GENERATED_KEY="$(head -c 32 /dev/urandom | base64 | tr -d '=+/\n')"
+    bashio::addon.option 'discovery_api_key' "${GENERATED_KEY}"
+    bashio::addon.options > /data/options.json
+    bashio::log.info "Generated bootstrap API key for Home Assistant discovery"
+fi
+
+chown -R hojo-tts:hojo-tts /data 2>/dev/null || true
+chown -R hojo-tts:hojo-tts /app/src /app/web 2>/dev/null || true

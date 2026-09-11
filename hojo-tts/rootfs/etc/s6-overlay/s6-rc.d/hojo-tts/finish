@@ -1,0 +1,34 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Service finish script
+# Standard pattern from hassio-addons/app-example
+# ==============================================================================
+declare exit_code
+readonly exit_code_container=$(</run/s6-linux-init-container-results/exitcode)
+readonly exit_code_service="${1}"
+readonly exit_code_signal="${2}"
+readonly service="hojo-tts"
+
+bashio::log.info \
+  "Service ${service} exited with code ${exit_code_service}" \
+  "(by signal ${exit_code_signal})"
+
+# Received a signal
+if [[ "${exit_code_service}" -eq 256 ]]; then
+  if [[ "${exit_code_container}" -eq 0 ]]; then
+    echo $((128 + exit_code_signal)) > /run/s6-linux-init-container-results/exitcode
+  fi
+  [[ "${exit_code_signal}" -eq 15 ]] && exec /run/s6/basedir/bin/halt
+
+# Non-zero exit — service crashed
+elif [[ "${exit_code_service}" -ne 0 ]]; then
+  if [[ "${exit_code_container}" -eq 0 ]]; then
+    echo "${exit_code_service}" > /run/s6-linux-init-container-results/exitcode
+  fi
+  exec /run/s6/basedir/bin/halt
+
+# Zero exit — let s6 restart it
+else
+  bashio::log.info "Service ${service} restarting..."
+fi

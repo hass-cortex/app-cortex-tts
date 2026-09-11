@@ -1,0 +1,57 @@
+---
+configuration:
+  log_level:
+    name: Log Level
+    description: Logging verbosity level
+  num_threads:
+    name: Inference threads
+    description: >-
+      ONNX Runtime threads per synthesis. 0 lets the runtime decide. Measured
+      scaling on these models is nearly flat (RTF 0.232 at one thread against
+      0.212 at eight) because the decode loop is Python-bound, so raising this
+      mostly costs the rest of the host CPU rather than buying speed. Leave at
+      2 unless you have cores to spare.
+  max_loaded_models:
+    name: Models kept in memory
+    description: >-
+      How many models may stay loaded at once. The 40M needs about 780 MB and
+      the 80M about 2 GB, so the default of 1 swaps between them on demand.
+      Raise to 2 only if the host has the memory to hold both.
+  default_model:
+    name: Default model
+    description: >-
+      Model used when a request does not name one. The 40M has built-in voices
+      and is roughly four times faster; the 80M clones a voice from a
+      reference recording you upload.
+  default_voice:
+    name: Default voice
+    description: >-
+      Voice used when a request does not name one, e.g. hojo_zh_f_01. Ignored
+      when the model does not offer it; the first available voice is used
+      instead. Leave empty to always take the first voice.
+  preload:
+    name: Load the model at startup
+    description: >-
+      Load the default model when the app starts instead of on the first
+      request. Costs about a second of startup and roughly 780 MB of memory,
+      and removes that delay from the first thing you ask it to say.
+  temperature:
+    name: Sampling temperature
+    description: >-
+      How randomly the model picks each step. It only stops speaking when it
+      *samples* its end-of-speech token, so a higher value occasionally
+      overrides a correct stop and appends an invented syllable. Measured on
+      one phrase across five seeds: 0.8 produced 1.96-2.32s and a stray sound,
+      0.0 produced exactly 2.02s every time and none. Set 0 for reproducible
+      output that never over-runs, at the cost of flatter delivery. The app
+      already adds sentence-final punctuation, which removes most of the
+      problem at 0.8.
+  discovery_api_key:
+    name: Home Assistant discovery API key
+    description: >-
+      API key used by the Hojo TTS integration in Home Assistant. Generated
+      automatically on first start and pushed to the Supervisor via the
+      discovery service. Clear this field and restart the app to rotate the
+      key — the integration picks up the new value automatically.
+network:
+  8771/tcp: TTS HTTP API and Admin UI

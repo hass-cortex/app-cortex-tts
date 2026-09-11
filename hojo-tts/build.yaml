@@ -1,0 +1,9 @@
+---
+build_from:
+  amd64: ghcr.io/hassio-addons/debian-base:9.3.0
+
+labels:
+  org.opencontainers.image.title: Hojo TTS
+  org.opencontainers.image.description: On-device text-to-speech with a Chinese text pipeline
+  org.opencontainers.image.source: https://github.com/hass-cortex/app-hojo-tts
+  org.opencontainers.image.licenses: MIT

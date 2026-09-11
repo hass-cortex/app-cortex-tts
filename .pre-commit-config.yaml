@@ -1,0 +1,83 @@
+---
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^hojo-tts/(src|tests)/
+      - id: ruff-format
+        files: ^hojo-tts/(src|tests)/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+
+  # ─── Mirrors of hassio-addons/workflows app-ci.yaml lint jobs ───
+  # The release deploy chain calls app-ci as a reusable workflow; any of
+  # these failing blocks deploy. Catch them locally so a tag push doesn't
+  # discover Dockerfile / YAML / shell mistakes the hard way.
+
+  # `.yamllint` config in repo root sets the rules.
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+
+  - repo: https://github.com/AleksaC/hadolint-py
+    rev: v2.14.0
+    hooks:
+      - id: hadolint
+        files: ^hojo-tts/Dockerfile(\..+)?$
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: ["-s", "bash"] # matches SHELLCHECK_OPTS in app-ci.yaml
+        # s6-overlay run/finish scripts have no .sh extension and use a
+        # non-standard `#!/command/with-contenv bashio` shebang, so the
+        # default identify heuristics miss them — list them explicitly.
+        files: |
+          (?x)^(
+            .*\.sh|
+            hojo-tts/rootfs/etc/s6-overlay/s6-rc\.d/[^/]+/(run|finish)
+          )$
+
+  - repo: local
+    hooks:
+      # Mirror the Prettier step in hassio-addons/workflows app-ci.yaml — it
+      # pins prettier and runs --check on the whole repo (minus
+      # .prettierignore). Catch the same issues locally so the release deploy
+      # does not get blocked on whitespace.
+      - id: prettier-md
+        name: prettier (markdown)
+        entry: prettier
+        language: node
+        additional_dependencies: ["prettier@3.8.3"]
+        files: \.md$
+        args: ["--write"]
+
+      - id: pyright
+        name: pyright (type check)
+        entry: bash -c 'cd hojo-tts && uv run --with pyright pyright'
+        language: system
+        stages: [pre-push]
+        files: ^hojo-tts/src/.*\.py$
+        pass_filenames: false
+
+      - id: pytest
+        name: pytest
+        entry: bash -c 'cd hojo-tts && uv run pytest -q'
+        language: system
+        stages: [pre-push]
+        files: ^hojo-tts/(src|tests)/.*\.py$|^hojo-tts/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false

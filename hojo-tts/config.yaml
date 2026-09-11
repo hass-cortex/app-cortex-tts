@@ -1,0 +1,48 @@
+---
+name: Hojo TTS
+description: On-device text-to-speech (Hojo TTS Light ONNX) with a Chinese text
+  pipeline — Traditional-to-Simplified conversion and number/unit normalisation
+version: "dev"
+slug: hojo_tts
+url: https://github.com/hass-cortex/repository
+arch:
+  - amd64
+startup: services
+init: false
+homeassistant: 2026.3.0
+timeout: 300
+hassio_api: true
+homeassistant_api: true
+ingress: true
+ingress_port: 8771
+panel_icon: mdi:account-voice
+panel_title: Hojo TTS
+discovery:
+  - hojo_tts
+ports:
+  8771/tcp: 8771
+ports_description:
+  8771/tcp: TTS HTTP API and Admin UI
+map:
+  - type: addon_config
+    read_only: false
+  - type: share
+    read_only: false
+options:
+  log_level: info
+  num_threads: 2
+  max_loaded_models: 1
+  default_model: hojo-40m
+  default_voice: hojo_zh_f_01
+  temperature: 0.8
+  preload: true
+  discovery_api_key: ''
+schema:
+  log_level: list(trace|debug|info|warning|error|fatal)
+  num_threads: int(0,16)
+  max_loaded_models: int(1,2)
+  default_model: list(hojo-40m|hojo-80m-clone)
+  default_voice: str?
+  temperature: float(0,1)
+  preload: bool
+  discovery_api_key: password?

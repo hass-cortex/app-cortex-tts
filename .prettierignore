@@ -1,0 +1,9 @@
+# Skip Prettier on the app source. hassio-addons app-ci runs Prettier on the
+# entire repo by default; Prettier is not a formatter we use here (ruff owns
+# the Python), so ignore everything except the markdown and config files it
+# reasonably owns.
+hojo-tts/src/
+hojo-tts/tests/
+hojo-tts/web/
+hojo-tts/uv.lock
+.github/

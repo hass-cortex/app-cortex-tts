@@ -1,0 +1,45 @@
+---
+name: Release
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+*"
+
+permissions: {}
+
+jobs:
+  # A tag that fails here never becomes a release, so a broken build cannot
+  # reach the catalog and from there someone's install.
+  checks:
+    uses: ./.github/workflows/python-checks.yml
+    permissions:
+      contents: read
+    with:
+      cache: false
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [checks]
+    # The release is created with DISPATCH_TOKEN, not GITHUB_TOKEN.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          # Use the PAT so the release.published event triggers deploy.yaml.
+          # GITHUB_TOKEN-created releases do not trigger downstream workflows.
+          token: ${{ secrets.DISPATCH_TOKEN }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          # Semver pre-release tags (0.2.0-beta.1) are marked prerelease so
+          # app-deploy routes them to repository-beta only, leaving the
+          # stable catalog untouched.
+          prerelease: ${{ contains(github.ref_name, '-') }}
