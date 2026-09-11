@@ -43,9 +43,12 @@ repos:
     hooks:
       - id: shellcheck
         args: ["-s", "bash"] # matches SHELLCHECK_OPTS in app-ci.yaml
-        # s6-overlay run/finish scripts have no .sh extension and use a
-        # non-standard `#!/command/with-contenv bashio` shebang, so the
-        # default identify heuristics miss them — list them explicitly.
+        # s6-overlay run/finish scripts have no .sh extension and a
+        # `#!/command/with-contenv bashio` shebang, so identify does not call
+        # them shell. `files` alone cannot reach them: the hook's default
+        # `types: [shell]` filters first, which is why CI caught SC2155 that
+        # this hook reported as "no files to check".
+        types: [file]
         files: |
           (?x)^(
             .*\.sh|
@@ -58,12 +61,14 @@ repos:
       # pins prettier and runs --check on the whole repo (minus
       # .prettierignore). Catch the same issues locally so the release deploy
       # does not get blocked on whitespace.
-      - id: prettier-md
-        name: prettier (markdown)
+      - id: prettier
+        name: prettier
         entry: prettier
         language: node
         additional_dependencies: ["prettier@3.8.3"]
-        files: \.md$
+        # Everything prettier understands; .prettierignore does the excluding,
+        # exactly as it does for app-ci.
+        types_or: [markdown, yaml, json, javascript, css, html]
         args: ["--write"]
 
       - id: pyright

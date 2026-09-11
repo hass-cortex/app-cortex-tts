@@ -7,3 +7,12 @@ hojo-tts/tests/
 hojo-tts/web/
 hojo-tts/uv.lock
 .github/
+
+# Extensionless config files. app-ci runs `prettier .` over a directory, which
+# skips what it cannot parse; handing the same file to prettier by name is an
+# error instead. Ignoring them keeps the local hook and CI in agreement.
+.yamllint
+.mdlrc
+.gitignore
+.prettierignore
+hojo-tts/.dockerignore
