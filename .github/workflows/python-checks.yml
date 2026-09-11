@@ -24,12 +24,12 @@ jobs:
       run:
         working-directory: hojo-tts
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: ${{ inputs.cache }}
 
