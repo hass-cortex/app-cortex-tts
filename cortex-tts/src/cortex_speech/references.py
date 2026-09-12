@@ -1,0 +1,295 @@
+"""Storage for the reference recordings that define cloned voices.
+
+A reference is an audio file plus the words spoken in it. The model needs
+both: the recording supplies the timbre, the transcript tells it which sounds
+in that recording map to which text. A wrong transcript degrades the clone
+without failing, so it is validated on the way in rather than debugged later.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+import time
+import unicodedata
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import soundfile as sf
+
+from .text.pipeline import TextOptions, prepare
+
+_LOGGER = logging.getLogger(__name__)
+
+INDEX_NAME = "references.json"
+
+# Upstream conditions the speaker encoder on a fixed window and pushes the
+# codec tokens of the whole clip into the LM prompt at 50 Hz, so a long
+# reference inflates every prompt for no extra fidelity.
+MIN_SECONDS = 2.0
+MAX_SECONDS = 20.0
+
+_ID_SAFE = re.compile(r"[^a-z0-9_-]+")
+
+
+class ReferenceError(ValueError):
+    """An uploaded reference cannot be used as a voice."""
+
+
+def slugify(name: str) -> str:
+    """Derive a filesystem- and API-safe id from a display name."""
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = _ID_SAFE.sub("-", folded.strip().lower()).strip("-")
+    # A name that survives ASCII-folding only as digits or punctuation carries
+    # none of its meaning: "灣灣小何2" becomes "2", which is both unreadable and
+    # a collision waiting to happen with every other name ending in 2. Require
+    # a letter before trusting the folded form.
+    if not any(character.isalpha() for character in slug):
+        slug = "voice-" + hashlib.sha256(name.encode()).hexdigest()[:8]
+    return slug[:48]
+
+
+@dataclass(frozen=True)
+class Reference:
+    """One stored reference recording.
+
+    Attributes:
+        id: Stable voice id used in synthesis requests.
+        name: Display name.
+        transcript: Model-ready transcript (normalised and script-converted).
+        raw_transcript: What the user typed, kept for display and editing.
+        language: Base language code of the recording.
+        gender: ``female``, ``male`` or ``unknown``; label only.
+        seconds: Duration of the stored audio.
+        created: Unix timestamp of upload.
+        audio_path: Where the 24 kHz mono WAV lives.
+        fingerprint: Identifies the stored audio. Engines key their cached
+            encodings on it, and those depend on the recording only — editing
+            the transcript must not force a re-encode.
+    """
+
+    id: str
+    name: str
+    transcript: str
+    raw_transcript: str
+    language: str
+    gender: str
+    seconds: float
+    created: float
+    audio_path: Path
+    fingerprint: str
+
+    def to_json(self) -> dict[str, Any]:
+        """Return the JSON-serialisable form stored in the index."""
+        data = asdict(self)
+        data["audio_path"] = self.audio_path.name
+        return data
+
+
+class ReferenceStore:
+    """Reference recordings on disk, with a JSON index beside them."""
+
+    def __init__(self, root: Path) -> None:
+        """Open (or create) the store rooted at ``root``."""
+        self._root = root
+        self._root.mkdir(parents=True, exist_ok=True)
+        self._index = self._root / INDEX_NAME
+        self._items: dict[str, Reference] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self._index.is_file():
+            return
+        try:
+            raw = json.loads(self._index.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as err:
+            # A corrupt index must not take the whole app down: the audio is
+            # still on disk and can be re-registered by uploading again.
+            _LOGGER.error("reference index unreadable, starting empty: %s", err)
+            return
+        for entry in raw.get("references", []):
+            try:
+                path = self._root / entry["audio_path"]
+                if not path.is_file():
+                    _LOGGER.warning(
+                        "reference %s has no audio file, dropping", entry.get("id")
+                    )
+                    continue
+                self._items[entry["id"]] = Reference(
+                    id=entry["id"],
+                    name=entry["name"],
+                    transcript=entry["transcript"],
+                    raw_transcript=entry.get("raw_transcript", entry["transcript"]),
+                    language=entry.get("language", "zh"),
+                    gender=entry.get("gender", "unknown"),
+                    seconds=float(entry.get("seconds", 0.0)),
+                    created=float(entry.get("created", 0.0)),
+                    audio_path=path,
+                    fingerprint=entry["fingerprint"],
+                )
+            except (KeyError, TypeError, ValueError) as err:
+                _LOGGER.warning("skipping malformed reference entry: %s", err)
+
+    def _save(self) -> None:
+        payload = {"references": [ref.to_json() for ref in self._items.values()]}
+        temp = self._index.with_suffix(".json.tmp")
+        temp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        temp.replace(self._index)
+
+    def list(self) -> list[Reference]:
+        """Return every stored reference, oldest first."""
+        return sorted(self._items.values(), key=lambda r: r.created)
+
+    def get(self, reference_id: str) -> Reference | None:
+        """Return one reference, or ``None`` when it does not exist."""
+        return self._items.get(reference_id)
+
+    def add(
+        self,
+        *,
+        name: str,
+        transcript: str,
+        audio: bytes,
+        language: str = "zh",
+        gender: str = "unknown",
+    ) -> Reference:
+        """Validate and store a reference recording.
+
+        Args:
+            name: Display name; also seeds the voice id.
+            transcript: Exactly what is said in the recording.
+            audio: Encoded audio bytes in any format soundfile can read.
+            language: Base language code.
+            gender: Label shown in the voice picker.
+
+        Returns:
+            The stored reference.
+
+        Raises:
+            ReferenceError: The audio is unreadable, the wrong length, or the
+                transcript is empty.
+        """
+        if not transcript.strip():
+            raise ReferenceError("a reference needs the transcript of what is said")
+
+        samples, sample_rate = _decode(audio)
+        seconds = len(samples) / sample_rate
+        if seconds < MIN_SECONDS:
+            raise ReferenceError(
+                f"reference is {seconds:.1f}s; at least {MIN_SECONDS:.0f}s is needed"
+            )
+        if seconds > MAX_SECONDS:
+            raise ReferenceError(
+                f"reference is {seconds:.1f}s; trim it to {MAX_SECONDS:.0f}s or less "
+                "— longer clips inflate every prompt without improving the clone"
+            )
+
+        reference_id = self._unique_id(slugify(name))
+        audio_path = self._root / f"{reference_id}.wav"
+        sf.write(audio_path, samples, sample_rate, subtype="PCM_16")
+
+        prepared = "".join(prepare(transcript, TextOptions()))
+        fingerprint = _fingerprint(audio_path)
+
+        reference = Reference(
+            id=reference_id,
+            name=name.strip() or reference_id,
+            transcript=prepared,
+            raw_transcript=transcript.strip(),
+            language=language,
+            gender=gender,
+            seconds=round(seconds, 2),
+            created=time.time(),
+            audio_path=audio_path,
+            fingerprint=fingerprint,
+        )
+        self._items[reference_id] = reference
+        self._save()
+        _LOGGER.info(
+            "stored reference %s (%.1fs, %s)", reference_id, seconds, reference.name
+        )
+        return reference
+
+    def update(self, reference_id: str, *, transcript: str) -> Reference:
+        """Replace the transcript of a stored reference.
+
+        The recording is untouched, so the cloned voice keeps its timbre; only
+        the text the model is told the recording contains changes. That text is
+        run through the same pipeline as a fresh upload, because the model
+        needs it in the same script and normalisation as the target text.
+
+        Args:
+            reference_id: Which reference to edit.
+            transcript: Corrected wording of what the recording says.
+
+        Returns:
+            The updated reference.
+
+        Raises:
+            KeyError: No reference with that id.
+            ReferenceError: The transcript is empty.
+        """
+        existing = self._items.get(reference_id)
+        if existing is None:
+            raise KeyError(reference_id)
+        if not transcript.strip():
+            raise ReferenceError("a reference needs the transcript of what is said")
+
+        prepared = "".join(prepare(transcript, TextOptions()))
+        if not prepared:
+            raise ReferenceError("the transcript has no pronounceable content")
+
+        updated = replace(
+            existing, transcript=prepared, raw_transcript=transcript.strip()
+        )
+        self._items[reference_id] = updated
+        self._save()
+        _LOGGER.info("updated transcript for reference %s", reference_id)
+        return updated
+
+    def remove(self, reference_id: str) -> bool:
+        """Delete a reference and its audio. Returns whether it existed."""
+        reference = self._items.pop(reference_id, None)
+        if reference is None:
+            return False
+        reference.audio_path.unlink(missing_ok=True)
+        self._save()
+        _LOGGER.info("removed reference %s", reference_id)
+        return True
+
+    def _unique_id(self, base: str) -> str:
+        if base not in self._items:
+            return base
+        for suffix in range(2, 100):
+            candidate = f"{base}-{suffix}"
+            if candidate not in self._items:
+                return candidate
+        return f"{base}-{int(time.time())}"
+
+
+def _fingerprint(audio_path: Path) -> str:
+    """Identify a stored recording by its bytes."""
+    return hashlib.sha256(audio_path.read_bytes()).hexdigest()[:16]
+
+
+def _decode(audio: bytes) -> tuple[np.ndarray, int]:
+    """Decode uploaded audio to mono float32 at its native rate."""
+    import io
+
+    try:
+        samples, sample_rate = sf.read(io.BytesIO(audio), dtype="float32")
+    except (RuntimeError, sf.LibsndfileError) as err:
+        raise ReferenceError(
+            "could not read the audio — upload a WAV, FLAC or OGG file"
+        ) from err
+    if samples.ndim == 2:
+        samples = samples.mean(axis=1)
+    if samples.size == 0:
+        raise ReferenceError("the audio file is empty")
+    return np.asarray(samples, dtype=np.float32), int(sample_rate)

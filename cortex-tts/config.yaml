@@ -1,0 +1,39 @@
+---
+name: Cortex TTS
+description: On-device text-to-speech in Chinese, English and Japanese — three models, built-in voices or one cloned from a few seconds of audio
+version: "dev"
+slug: cortex_tts
+url: https://github.com/hass-cortex/app-cortex-tts
+arch:
+  - amd64
+startup: services
+init: false
+homeassistant: 2026.3.0
+timeout: 300
+hassio_api: true
+homeassistant_api: true
+ingress: true
+ingress_port: 8771
+panel_icon: mdi:account-voice
+panel_title: Cortex TTS
+discovery:
+  - cortex_tts
+ports:
+  8771/tcp: 8771
+ports_description:
+  8771/tcp: TTS HTTP API and Admin UI
+map:
+  - type: addon_config
+    read_only: false
+  - type: share
+    read_only: false
+# Only what has to be settled before the process starts. Everything else —
+# threads, execution provider, resident models, default model and voice,
+# temperature, preload — is in the app's own UI, where changing it costs
+# neither a restart nor, when the list of choices changes, a rebuild.
+options:
+  log_level: info
+  discovery_api_key: ""
+schema:
+  log_level: list(trace|debug|info|warning|error|fatal)
+  discovery_api_key: password?

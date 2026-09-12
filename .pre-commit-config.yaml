@@ -1,0 +1,88 @@
+---
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^cortex-tts/(src|tests)/
+      - id: ruff-format
+        files: ^cortex-tts/(src|tests)/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+
+  # ─── Mirrors of hassio-addons/workflows app-ci.yaml lint jobs ───
+  # The release deploy chain calls app-ci as a reusable workflow; any of
+  # these failing blocks deploy. Catch them locally so a tag push doesn't
+  # discover Dockerfile / YAML / shell mistakes the hard way.
+
+  # `.yamllint` config in repo root sets the rules.
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+
+  - repo: https://github.com/AleksaC/hadolint-py
+    rev: v2.14.0
+    hooks:
+      - id: hadolint
+        files: ^cortex-tts/Dockerfile(\..+)?$
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: ["-s", "bash"] # matches SHELLCHECK_OPTS in app-ci.yaml
+        # s6-overlay run/finish scripts have no .sh extension and a
+        # `#!/command/with-contenv bashio` shebang, so identify does not call
+        # them shell. `files` alone cannot reach them: the hook's default
+        # `types: [shell]` filters first, which is why CI caught SC2155 that
+        # this hook reported as "no files to check".
+        types: [file]
+        files: |
+          (?x)^(
+            .*\.sh|
+            cortex-tts/rootfs/etc/s6-overlay/s6-rc\.d/[^/]+/(run|finish)
+          )$
+
+  - repo: local
+    hooks:
+      # Mirror the Prettier step in hassio-addons/workflows app-ci.yaml — it
+      # pins prettier and runs --check on the whole repo (minus
+      # .prettierignore). Catch the same issues locally so the release deploy
+      # does not get blocked on whitespace.
+      - id: prettier
+        name: prettier
+        entry: prettier
+        language: node
+        additional_dependencies: ["prettier@3.8.3"]
+        # Everything prettier understands; .prettierignore does the excluding,
+        # exactly as it does for app-ci.
+        types_or: [markdown, yaml, json, javascript, css, html]
+        args: ["--write"]
+
+      - id: pyright
+        name: pyright (type check)
+        entry: bash -c 'cd cortex-tts && uv run --with pyright pyright'
+        language: system
+        stages: [pre-push]
+        files: ^cortex-tts/src/.*\.py$
+        pass_filenames: false
+
+      - id: pytest
+        name: pytest
+        entry: bash -c 'cd cortex-tts && uv run pytest -q'
+        language: system
+        stages: [pre-push]
+        files: ^cortex-tts/(src|tests)/.*\.py$|^cortex-tts/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false

@@ -1,0 +1,217 @@
+"""Request and response bodies for the HTTP API."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from cortex_speech import AudioFormat
+
+
+class HealthResponse(BaseModel):
+    """Unauthenticated liveness probe."""
+
+    status: Literal["ok"] = "ok"
+    version: str
+    server: str = "cortex-tts"
+    loaded_models: int
+    execution_provider: str
+    """What was asked for — `auto`, `cpu` or `cuda`."""
+    providers_in_use: dict[str, str] = {}
+    """What each resident model actually got, keyed by model id.
+
+    Empty until something is loaded, because nothing is known before a session
+    exists. `auto` on a host whose CUDA libraries do not load reports `cpu`
+    here while still reporting `auto` above, and that difference is the whole
+    point of sending both."""
+
+
+class DefaultsResponse(BaseModel):
+    """What the app picks when a request names no model or voice.
+
+    These are the configured names, not a resolved choice: naming a voice the
+    installed models do not offer is allowed, and the caller falls back the
+    same way synthesis does.
+    """
+
+    model: str
+    voice: str
+
+
+class VoiceOut(BaseModel):
+    """A selectable voice."""
+
+    id: str
+    name: str
+    language: str | None
+    gender: str
+    source: str
+    model_id: str
+
+
+class ModelOut(BaseModel):
+    """A catalog entry with its runtime state."""
+
+    id: str
+    name: str
+    description: str
+    builtin_voices: bool
+    cloning: bool
+    chunk_streaming: bool
+    temperature: bool
+    languages: list[str]
+    sample_rate: int
+    size_mb: int
+    rtf_hint: float
+    rss_hint_mb: int
+    recommended: bool
+    downloaded: bool
+    loaded: bool
+    provider: str | None = None
+    """What this model's sessions are actually running on, once loaded.
+
+    Read from the sessions rather than from the setting: a runtime that lists
+    a CUDA provider it cannot load falls back with only a warning, so the two
+    can disagree and only this one is evidence."""
+    missing_files: list[str]
+    disk_bytes: int
+    download_state: str | None = None
+    download_percent: float | None = None
+    download_error: str | None = None
+
+
+class SpeakRequest(BaseModel):
+    """A synthesis request.
+
+    The text switches exist because the pipeline they control is the
+    difference between an intelligible voice and noise on this model; they are
+    exposed so a caller that has already normalised its text can say so, not
+    so they can be turned off casually.
+    """
+
+    text: str = Field(min_length=1, max_length=4000)
+    model: str | None = None
+    voice: str | None = None
+    format: AudioFormat | None = None
+    """Container to answer in. `/api/speak` defaults to wav and
+    `/api/speak/stream` to mp3, because a stream has to be writable
+    without knowing how long the audio will be."""
+    normalize_text: bool = True
+    convert_script: bool = True
+    normalize_level: bool = True
+    temperature: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class SpeakStats(BaseModel):
+    """What a synthesis cost, returned as response headers and in previews."""
+
+    model_id: str
+    voice: str
+    segments: int
+    characters: int
+    audio_seconds: float
+    inference_ms: float
+    rtf: float
+    prepared_text: str
+
+
+class ReferenceOut(BaseModel):
+    """A stored reference recording."""
+
+    id: str
+    name: str
+    transcript: str
+    raw_transcript: str
+    language: str
+    gender: str
+    seconds: float
+    created: float
+
+
+class ReferenceUpdate(BaseModel):
+    """Correct the transcript of a stored reference.
+
+    The audio is not resent — only the text the model is told it contains.
+    """
+
+    transcript: str = Field(min_length=1, max_length=2000)
+
+
+class PreviewRequest(BaseModel):
+    """Dry-run of the text path, with no synthesis."""
+
+    text: str = Field(min_length=1, max_length=4000)
+    normalize_text: bool = True
+    convert_script: bool = True
+
+
+class PreviewResponse(BaseModel):
+    """What the model would actually be asked to say."""
+
+    original: str
+    prepared: str
+    segments: list[str]
+
+
+class ErrorResponse(BaseModel):
+    """Uniform error body."""
+
+    code: str
+    message: str
+
+
+class OpenAISpeechRequest(BaseModel):
+    """OpenAI-compatible speech request.
+
+    Present so existing clients and scripts work unchanged; ``model`` carries
+    a Hojo model id and ``voice`` a voice id from this server.
+    """
+
+    input: str = Field(min_length=1, max_length=4000)
+    model: str | None = None
+    voice: str | None = None
+    response_format: AudioFormat = "wav"
+
+
+class SettingsOut(BaseModel):
+    """How the app behaves, as the user last set it."""
+
+    num_threads: int
+    execution_provider: str
+    max_loaded_models: int
+    default_model: str
+    default_voice: str
+    temperature: float
+    preload: bool
+
+
+class SettingsUpdate(BaseModel):
+    """A partial change. Anything omitted keeps its current value.
+
+    Every field is optional so the UI can send one box rather than the whole
+    form — and so a field this app has not heard of, from a newer UI, is
+    ignored rather than resetting the rest.
+    """
+
+    num_threads: int | None = None
+    execution_provider: str | None = None
+    max_loaded_models: int | None = None
+    default_model: str | None = None
+    default_voice: str | None = None
+    temperature: float | None = None
+    preload: bool | None = None
+
+
+class SettingsSaved(BaseModel):
+    """What was stored, and whether it is speaking yet."""
+
+    settings: SettingsOut
+    reloaded: bool
+    """Whether resident models were dropped to adopt this.
+
+    Thread count, execution provider and how many models stay resident are
+    bound when ONNX Runtime creates a session, so they cannot be adopted by an
+    engine already loaded. True means the next reply pays a rebuild; the rest
+    of the settings are read afresh on every request and are already in force.
+    """

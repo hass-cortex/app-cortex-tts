@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortex TTS</title>
+<script>
+  // Ingress serves this page under a generated prefix, with or without a
+  // trailing slash. Everything relative on the page — the stylesheet, the
+  // module graph, every API call — hangs off this, so it has to be set
+  // before the first relative URL is parsed.
+  const base = document.createElement("base");
+  base.href = `${location.pathname.replace(/\/+$/, "")}/`;
+  document.head.appendChild(base);
+</script>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="js/main.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Cortex TTS</h1>
+  <span class="ver" id="version">…</span>
+  <div class="hdr-right">
+    <div class="status" id="status"></div>
+    <button class="themebtn" id="theme" aria-label="Appearance"></button>
+  </div>
+</header>
+
+<div class="split">
+
+  <section>
+    <h2>Say something</h2>
+    <p class="hint">Pick a line the way Home Assistant would send it, then check
+    the column on the right before you trust the voice.</p>
+    <div class="chips" id="samples"></div>
+    <div class="field">
+      <label for="text">Text</label>
+      <textarea id="text">好的，客廳的燈已經打開了。目前室內溫度是 26.5°C，濕度 68%。</textarea>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="model">Model</label>
+        <select id="model"></select>
+      </div>
+      <div class="field">
+        <label for="voice" id="voiceLabel">Voice</label>
+        <select id="voice"></select>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="speak">Speak</button>
+      <button class="chip" id="norm" aria-pressed="true">normalise numbers</button>
+      <button class="chip" id="conv" aria-pressed="true">to Simplified</button>
+    </div>
+    <div class="msg err" id="speakMsg" hidden></div>
+  </section>
+
+  <section>
+    <h2>What the model is asked to say</h2>
+    <p class="hint" id="preparedHint"></p>
+    <div class="prepared empty" id="prepared">…</div>
+    <div class="ledger" id="ledger"></div>
+    <div class="result" id="result" hidden>
+      <audio id="player" controls></audio>
+      <div class="stats" id="stats"></div>
+    </div>
+  </section>
+
+</div>
+
+<section>
+  <div class="sec-head">
+    <h2>Models</h2>
+    <span class="note">Weights download on demand. Only one model stays in
+    memory at a time by default — the larger two need about 2 GB each.</span>
+  </div>
+  <div class="cards" id="models"></div>
+  <div class="msg" id="modelMsg" hidden></div>
+</section>
+
+<section id="settings">
+  <div class="sec-head">
+    <h2>Settings</h2>
+    <span class="note" id="providerNote"></span>
+  </div>
+  <p class="hint">Saved here, not in the app's configuration — a change takes
+  effect on the next request. The three marked <span class="tag">reload</span>
+  are fixed when a model is loaded, so adopting one drops what is resident and
+  the next reply loads it again.</p>
+  <div class="row">
+    <div class="field">
+      <label for="setModel">Default model</label>
+      <select id="setModel"></select>
+      <p class="sub">Used when a request names none.</p>
+    </div>
+    <div class="field">
+      <label for="setVoice">Default voice</label>
+      <select id="setVoice"></select>
+      <p class="sub">Picking the voice is picking the language; no model takes
+      a language parameter.</p>
+    </div>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="setThreads">Inference threads <span class="tag">reload</span></label>
+      <input id="setThreads" type="number" min="0" max="16" step="1">
+      <p class="sub">0 lets the runtime decide. More is not faster: measured on
+      four cores, 1.17x real time at one thread, 1.05x at two, 1.80x at four.</p>
+    </div>
+    <div class="field">
+      <label for="setProvider">Execution provider <span class="tag">reload</span></label>
+      <select id="setProvider"></select>
+      <p class="sub">MOSS measured 1.025 on a laptop CPU against 0.354 on a
+      GTX 1650. What the sessions actually got is shown on each loaded card.</p>
+    </div>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="setLoaded">Models kept in memory <span class="tag">reload</span></label>
+      <input id="setLoaded" type="number" min="1" max="3" step="1">
+      <p class="sub">The 40M needs about 780 MB, the 80M and MOSS about 2 GB
+      each. At 1 they swap on demand.</p>
+    </div>
+    <div class="field">
+      <label for="setTemp">Sampling temperature</label>
+      <input id="setTemp" type="number" min="0" max="1" step="0.05">
+      <p class="sub">The model stops only when it samples its end-of-speech
+      token, so a high value sometimes appends an invented syllable. 0 is
+      reproducible and never over-runs, at the cost of flatter delivery.</p>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="primary" id="setSave">Save settings</button>
+    <button class="chip" id="setPreload" aria-pressed="true">load the default model at startup</button>
+  </div>
+  <div class="msg" id="setMsg" hidden></div>
+</section>
+
+<section id="clones">
+  <div class="sec-head">
+    <h2>Cloned voices</h2>
+    <span class="pill idle" id="clonesModels">cloning models</span>
+    <span class="note" id="clonesNote"></span>
+  </div>
+  <p class="hint">A reference recording is a voice on every model that can
+  clone, under the same id. Upload about 6 seconds of clean speech that starts
+  talking straight away — that is exactly how much the speaker encoder reads —
+  plus exactly what is said in it, because the transcript is what tells the
+  model which sounds map to which text.</p>
+  <div id="refs" class="refs"></div>
+  <div class="addform">
+    <div class="grow"><label for="refName">Name</label><input id="refName" placeholder="客廳女聲"></div>
+    <div class="fixed"><label for="refLang">Language</label>
+      <select id="refLang"><option value="zh">Chinese</option><option value="en">English</option></select></div>
+    <div class="fixed"><label for="refGender">Gender label</label>
+      <select id="refGender"><option value="female">female</option><option value="male">male</option><option value="unknown">unknown</option></select></div>
+  </div>
+  <div class="field" style="margin-top:12px"><label for="refText">Transcript of the recording</label>
+    <textarea id="refText" placeholder="逐字打出錄音裡說的話"></textarea></div>
+  <div class="addform">
+    <div class="grow"><label for="refFile">Recording (WAV / FLAC / OGG)</label>
+      <input type="file" id="refFile" accept=".wav,.flac,.ogg,audio/*"></div>
+    <button class="primary" id="refAdd">Add voice</button>
+  </div>
+  <div class="msg" id="refMsg" hidden></div>
+</section>
+
+</div>
+</body>
+</html>

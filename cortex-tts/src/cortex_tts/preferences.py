@@ -1,0 +1,170 @@
+"""The settings a user changes while the app is running.
+
+Everything here used to be an addon option, which meant every change went
+through the Supervisor and cost a restart — and a change to the *schema* cost
+a rebuild. None of these need that: what they configure is either read afresh
+on every request or bound when an engine's sessions are created, and the
+registry can drop those on demand.
+
+What stays an addon option is what has to be settled before the process
+starts: the log level, and the key the Supervisor pushes through discovery.
+
+Stored beside the models rather than in `addon_config/`, because it is state
+the app owns and Home Assistant's "remove with data" should sweep up with the
+weights.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from typing import Any, cast
+
+from cortex_speech import BY_ID, EXECUTION_PROVIDERS, ExecutionProvider
+
+_LOGGER = logging.getLogger(__name__)
+
+FILE_NAME = "settings.json"
+
+
+@dataclass(frozen=True)
+class Preferences:
+    """How the app behaves, as the user last set it.
+
+    Attributes:
+        num_threads: ONNX Runtime threads per synthesis; 0 lets ORT decide.
+            More is not faster — the decode loop is Python-bound, and past a
+            couple of threads the runtime spends its time synchronising them.
+        execution_provider: `auto`, `cpu` or `cuda`. `cuda` refuses to fall
+            back, because a host with a GPU quietly on its CPU is the failure
+            nobody notices.
+        max_loaded_models: How many engines may stay resident at once.
+        default_model: Model used when a request names none.
+        default_voice: Voice used when a request names none. Empty takes the
+            first the model offers.
+        temperature: Sampling temperature for engines that have one.
+        preload: Load the default model at startup rather than on first use.
+    """
+
+    num_threads: int = 2
+    execution_provider: ExecutionProvider = "auto"
+    max_loaded_models: int = 1
+    default_model: str = "hojo-40m"
+    default_voice: str = "hojo_zh_f_01"
+    temperature: float = 0.8
+    preload: bool = True
+
+    def merged(self, changes: dict[str, Any]) -> Preferences:
+        """Return a copy with `changes` applied, each one validated.
+
+        A field that fails validation keeps its current value rather than
+        taking a default: a bad number in one box must not silently reset the
+        model someone chose in another.
+        """
+        clean: dict[str, Any] = {}
+        for key, value in changes.items():
+            if key not in _VALIDATORS:
+                continue
+            try:
+                clean[key] = _VALIDATORS[key](value)
+            except (TypeError, ValueError):
+                _LOGGER.warning("ignoring %s=%r: not a usable value", key, value)
+        return replace(self, **clean)
+
+    def rebuild_needed(self, other: Preferences) -> bool:
+        """Whether moving to `other` invalidates the engines already loaded.
+
+        These three are bound when a session is created; the rest are read
+        again on the next request, so changing them needs nothing dropped.
+        """
+        return (
+            self.num_threads != other.num_threads
+            or self.execution_provider != other.execution_provider
+            or self.max_loaded_models != other.max_loaded_models
+        )
+
+
+def _threads(value: Any) -> int:
+    number = int(value)
+    if not 0 <= number <= 16:
+        raise ValueError("threads out of range")
+    return number
+
+
+def _loaded(value: Any) -> int:
+    number = int(value)
+    if not 1 <= number <= 3:
+        raise ValueError("resident models out of range")
+    return number
+
+
+def _provider(value: Any) -> ExecutionProvider:
+    text = str(value).strip().lower()
+    if text not in EXECUTION_PROVIDERS:
+        raise ValueError("unknown execution provider")
+    return cast(ExecutionProvider, text)
+
+
+def _model(value: Any) -> str:
+    text = str(value).strip()
+    if text not in BY_ID:
+        raise ValueError("unknown model")
+    return text
+
+
+def _temperature(value: Any) -> float:
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError("temperature out of range")
+    return number
+
+
+_VALIDATORS: dict[str, Any] = {
+    "num_threads": _threads,
+    "execution_provider": _provider,
+    "max_loaded_models": _loaded,
+    "default_model": _model,
+    # Deliberately unvalidated: a voice only exists once its model is
+    # downloaded, and refusing one that is not there yet would make the field
+    # impossible to set before the first download. A voice the model does not
+    # offer is reported at synthesis, where the model is loaded and knows.
+    "default_voice": lambda value: str(value).strip(),
+    "temperature": _temperature,
+    "preload": lambda value: bool(value),
+}
+
+
+def load(data_dir: Path) -> Preferences:
+    """Read stored settings, falling back to the defaults above.
+
+    A file that cannot be read is logged and ignored rather than fatal: the
+    app starting with defaults is recoverable from the UI, and refusing to
+    start is not.
+    """
+    path = data_dir / FILE_NAME
+    if not path.is_file():
+        return Preferences()
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as err:
+        _LOGGER.error("settings unreadable, starting with defaults: %s", err)
+        return Preferences()
+    return Preferences().merged(stored if isinstance(stored, dict) else {})
+
+
+def save(data_dir: Path, preferences: Preferences) -> None:
+    """Write settings, replacing the file atomically.
+
+    Raises:
+        OSError: The directory is not writable, which the caller reports
+            rather than pretending the change was kept.
+    """
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / FILE_NAME
+    temp = path.with_suffix(".json.tmp")
+    temp.write_text(
+        json.dumps(asdict(preferences), indent=2, sort_keys=True), encoding="utf-8"
+    )
+    temp.replace(path)

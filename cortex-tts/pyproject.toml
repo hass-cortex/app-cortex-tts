@@ -1,0 +1,100 @@
+[project]
+name = "cortex-tts"
+dynamic = ["version"]
+description = "On-device text-to-speech for Home Assistant, with the Chinese text pipeline the models lack"
+requires-python = ">=3.12,<3.14"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.9",
+    "aiohttp>=3.10",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    # MP3 for the streaming endpoint. A WAV stream has to declare a length it
+    # does not know, and a general-purpose player given the maximal one waits
+    # for a file it thinks is six hours long; MP3 is a bare frame sequence
+    # with no length to declare. See docs/adr/0004.
+    "lameenc>=1.7",
+    "scipy>=1.13",
+    "tokenizers>=0.15",
+    "onnxruntime>=1.20",
+    # MOSS-TTS-Nano tokenises with a SentencePiece model.
+    "sentencepiece>=0.2",
+    # Not listed by upstream, but required: the LM and fine-local weights ship
+    # as BF16 and are rewritten to FP32 at load because ORT's CPU provider has
+    # no BF16 kernels for these ops. Without it the session fails to create.
+    "onnx>=1.16",
+    "huggingface-hub>=0.24",
+    # The decisive dependency: this model has no pronunciation for Traditional
+    # Chinese glyphs (32% character error rate against 4% once converted).
+    "opencc-python-reimplemented>=0.1.7",
+]
+
+[project.optional-dependencies]
+# The 80M needs a mel spectrogram of its reference recording, which upstream
+# computes with torch + librosa, and its code is vendored as-is so it keeps
+# them. Named for the model rather than for cloning: MOSS-TTS-Nano clones too
+# and needs none of this, so "the clone extra" would now mislead.
+hojo-80m = [
+    "torch>=2.4",
+    "librosa>=0.10",
+]
+
+[project.scripts]
+cortex-tts = "cortex_tts.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/cortex_tts/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cortex_tts"]
+
+[tool.uv]
+# CPU-only wheels: the addon has no GPU and the CUDA build is a 2 GB download
+# that would never be used.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "SIM", "UP", "N", "ASYNC", "RUF013"]
+ignore = ["E501", "B008", "SIM108"]
+
+[tool.ruff.lint.per-file-ignores]
+# Vendored upstream code is kept diffable against its source, not restyled.
+"src/cortex_speech/vendor/*.py" = ["ALL"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+include = ["src"]
+exclude = ["tests", "src/cortex_speech/vendor", "**/__pycache__"]
+typeCheckingMode = "standard"
+useLibraryCodeForTypes = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

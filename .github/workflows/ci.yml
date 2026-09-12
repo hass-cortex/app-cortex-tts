@@ -1,0 +1,17 @@
+---
+name: CI
+
+# yamllint disable-line rule:truthy
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  python:
+    uses: ./.github/workflows/python-checks.yml
+    permissions:
+      contents: read

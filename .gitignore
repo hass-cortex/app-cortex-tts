@@ -1,0 +1,21 @@
+.venv/
+.devdata/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+.env
+*.log
+
+# Private local instructions (Claude Code)
+CLAUDE.local.md
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.bak
+*.tmp

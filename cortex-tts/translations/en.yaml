@@ -1,0 +1,14 @@
+---
+configuration:
+  log_level:
+    name: Log Level
+    description: Logging verbosity level
+  discovery_api_key:
+    name: Home Assistant discovery API key
+    description: >-
+      API key used by the Cortex TTS integration in Home Assistant. Generated
+      automatically on first start and pushed to the Supervisor via the
+      discovery service. Clear this field and restart the app to rotate the
+      key — the integration picks up the new value automatically.
+network:
+  8771/tcp: TTS HTTP API and Admin UI

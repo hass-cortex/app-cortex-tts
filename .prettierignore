@@ -1,0 +1,18 @@
+# Skip Prettier on the app source. hassio-addons app-ci runs Prettier on the
+# entire repo by default; Prettier is not a formatter we use here (ruff owns
+# the Python), so ignore everything except the markdown and config files it
+# reasonably owns.
+cortex-tts/src/
+cortex-tts/tests/
+cortex-tts/web/
+cortex-tts/uv.lock
+.github/
+
+# Extensionless config files. app-ci runs `prettier .` over a directory, which
+# skips what it cannot parse; handing the same file to prettier by name is an
+# error instead. Ignoring them keeps the local hook and CI in agreement.
+.yamllint
+.mdlrc
+.gitignore
+.prettierignore
+cortex-tts/.dockerignore
