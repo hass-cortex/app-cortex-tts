@@ -11,8 +11,11 @@ performance model behind it.
   never stalls.
 - **Sentence by sentence**: one request per finished sentence, played as each
   arrives.
-- **Coalesced**: the same, but sentences that arrive while a request is in
-  flight are sent together, which removes the pause at each sentence boundary.
+- **Sentences in groups**: the same, but sentences written while a request is
+  in flight are sent together, so there are fewer joins. On a model that emits
+  audio while a request is still rendering (only MOSS-TTS-Nano) that removes
+  the pauses outright; on one that returns each request whole it trades several
+  short waits for fewer longer ones.
 
 Both streamed modes only work if the model renders faster than the audio
 plays. One that does not falls behind a little more with every sentence, and a
@@ -61,12 +64,16 @@ never had a piece that could be late, and reads unknown.
   buffered, where it started. Nothing plays until it is all rendered, so the
   wait is longer, there are no gaps, and repeated text comes back from the
   cache.
-- **Raise the head start** in the same place. It banks opening seconds before
-  playback begins, spending wait to buy margin: at a rendering rate of R, a
-  reply of L seconds needs (R − 1) × L banked, so two seconds covers a
-  44-second reply at 1.045x. It is only charged to replies long enough to need
-  it, and a coalesced reply whose full length is known before the first
-  request is charged only what a reply that long can lose.
+- **Raise the head start** in the same place — but only on MOSS-TTS-Nano. It
+  banks opening seconds before playback begins, spending wait to buy margin:
+  at a rendering rate of R, a reply of L seconds needs (R − 1) × L banked, so
+  two seconds covers a 44-second reply at 1.045x. It is only charged to
+  replies long enough to need it, and a grouped reply whose full length is
+  known before the first request is charged only what a reply that long can
+  lose. The bank fills from the audio it receives, so on a model that returns
+  each request whole it is all or nothing: a bank smaller than the first
+  request is already full the moment that request lands, and a larger one
+  waits for the second request and moves the whole reply back.
 - **Use a faster model**, which usually means the 40M.
 - **Check the threads setting is 2.** Four was measured 70% slower than two on
   a four-core host; more is not better here.
@@ -92,7 +99,7 @@ different sizes, as the fraction by which rendering fell behind playback:
 | ~28 s               | +6.5%           |
 | ~55 s (one request) | +17.8%          |
 
-A valley with a cliff on either side; the integration's coalesced mode sits in
+A valley with a cliff on either side; the integration's grouped mode sits in
 the flat part of it, at about 14 seconds of speech per request.
 
 ## What streaming costs you
