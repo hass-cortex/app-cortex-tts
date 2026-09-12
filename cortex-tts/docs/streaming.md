@@ -37,19 +37,22 @@ briefly busy with something else. Then watch `sensor.<model>_playback_margin`.
 
 ## The sensors that answer it
 
-Each model gets diagnostic sensors in Home Assistant; three of them answer
+Each model gets diagnostic sensors in Home Assistant; two of them answer
 "is it keeping up":
 
-| Sensor                                | Reads                                                         |
-| ------------------------------------- | ------------------------------------------------------------- |
-| `sensor.<model>_real_time_factor`     | What the last synthesis actually cost on **this** host        |
-| `sensor.<model>_playback_margin`      | Seconds of audio banked ahead of the speaker when it finished |
-| `sensor.<model>_longest_delivery_gap` | The worst pause inside the reply                              |
+| Sensor                            | Reads                                                             |
+| --------------------------------- | ----------------------------------------------------------------- |
+| `sensor.<model>_real_time_factor` | What the last synthesis actually cost on **this** host            |
+| `sensor.<model>_playback_margin`  | The least audio the listener still held when a piece arrived late |
 
-**Margin is the one to watch.** Positive means it finished with that much
-audio still to play — it won. Negative, or a growing longest gap, means the
-speaker caught up with the renderer and waited, which is what stuttering is.
-The margin and the gap are only measured on a streamed reply.
+**Margin is the one to watch.** It opens at the head start and falls every
+time a piece of the reply arrives later than the audio already sent covers.
+Positive means the speaker always had something left to play — it won.
+Negative means the speaker caught up with the renderer and waited, which is
+what stuttering is, and the number is how many seconds of silence that was.
+
+It is measured only on a reply that arrived in pieces; one handed over whole
+never had a piece that could be late, and reads unknown.
 
 ## If margin is negative
 
