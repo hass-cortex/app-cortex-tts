@@ -52,6 +52,12 @@ RUN chown -R cortex-tts:cortex-tts /app
 
 COPY rootfs /
 
+# The Supervisor restarts a container whose health check fails; the app's
+# own liveness probe is the check. A long start period covers the first
+# download of the default model.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8771/health || exit 1
+
 ARG BUILD_ARCH
 ARG BUILD_DATE
 ARG BUILD_DESCRIPTION

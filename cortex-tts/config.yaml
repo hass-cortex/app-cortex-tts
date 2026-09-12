@@ -25,7 +25,6 @@ ports:
   8771/tcp: null
 ports_description:
   8771/tcp: TTS HTTP API and Admin UI (optional; bearer key required)
-watchdog: http://[HOST]:[PORT:8771]/health
 ingress_stream: true
 map:
   - type: share
