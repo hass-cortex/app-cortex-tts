@@ -25,9 +25,9 @@ models send each request's audio whole. See [Models](models.md).
 **Every model is buffered until you say otherwise.** Streaming is not switched
 on by the catalog figure, because that figure is one host's: the reference
 4-core Home Assistant VM, where only the 40M outruns playback (0.67) and MOSS
-(1.06) and the 80M (1.42) do not. A faster CPU helps the 40M a great deal and
-MOSS hardly at all, and a GPU changes MOSS's answer entirely — not a constant
-factor, so no figure from elsewhere predicts yours. A model streamed on a host where it
+(1.06) and the 80M (1.42) do not. A faster CPU runs every model two to three
+times faster, a GPU helps beside a weak CPU and hurts beside a strong one —
+not a constant factor, so no figure from elsewhere predicts yours. A model streamed on a host where it
 cannot keep up is the exact failure the setting exists to prevent.
 
 Use a model for a while, read `sensor.<model>_real_time_factor`, and turn

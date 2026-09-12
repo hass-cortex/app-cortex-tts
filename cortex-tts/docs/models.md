@@ -59,20 +59,51 @@ says what to do with it.
 
 ## Hardware, and running it elsewhere
 
-Three placements, in order of effort:
+The same script, the same text, four environments. Every figure is the median
+over the four sentences above; the reference host is the first column.
 
-- **On the Home Assistant host, as is.** Every figure above. Home Assistant OS
-  ships no NVIDIA driver, so on HAOS the models run on the CPU whatever the
-  execution provider is set to, and the 40M is the model to reach for.
-- **On a faster CPU.** The app runs from source on any machine, and the
-  integration is pointed at it by hand. It helps the small model most: the
-  40M's upstream figure on a desktop core is 0.21 against 0.67 here. It does
-  not rescue MOSS — 1.025 on a laptop i7 against 1.06 on the VM — because its
-  decode loop is bound by Python, not by core speed.
-- **On a GPU.** MOSS-TTS-Nano measured RTF 1.025 on a laptop i7 against
-  **0.354** on a GTX 1650 — from cannot-stream to comfortably streaming.
+| Model         | HA VM, 4 vCPU of an i7-9750H, CPU | Ryzen 9 9955HX, CPU | RTX 5070 Ti Laptop, CUDA | GTX 1650, CUDA |
+| ------------- | --------------------------------- | ------------------- | ------------------------ | -------------- |
+| **Hojo 40M**  | 0.67                              | **0.28**            | 0.50                     | 0.31           |
+| **MOSS Nano** | 1.06                              | **0.38**            | 0.58                     | 0.37           |
+| **Hojo 80M**  | 1.42                              | **0.70**            | not loadable             | not loadable   |
 
-Both of the last two are [Running it elsewhere](standalone.md).
+The second and third columns are one machine — the development laptop, a
+16-core AMD Ryzen 9 9955HX with 39 GB and an RTX 5070 Ti Laptop GPU, on
+Windows — measured 2026-09-13 on the CPU at two threads and then on the GPU.
+The
+last column is a second VM on the reference host's own i7-9750H with its
+GTX 1650 passed through (4 vCPU, 11 GB, Ubuntu, driver 575), measured the
+same day; on that VM's CPU alone the figures were 0.54, 1.04 and 1.38, in
+line with the HA VM beside it.
+
+What the table says:
+
+- **Home Assistant OS cannot use a GPU.** It ships no NVIDIA driver, so on
+  HAOS the models run on the CPU whatever the execution provider is set to,
+  and the 40M is the model to reach for.
+- **A faster CPU is the reliable win.** Every model runs two to three times
+  faster on the Ryzen than on the VM, and all three keep ahead of playback
+  there — including MOSS, which the VM cannot stream.
+- **A GPU pays beside a weak CPU and not beside a strong one.** On the
+  i7-9750H VM the GTX 1650 takes the 40M from 0.54 to 0.31 and MOSS from 1.04
+  to 0.37 — from cannot-stream to comfortably streaming. On the Ryzen laptop
+  the RTX 5070 Ti was slower than the same machine's CPU for both, and the
+  reason is measurable: the decode loop is thousands of tiny kernels with a
+  host sync per token, so it is bound by launch latency, not by compute. One
+  small ONNX call costs about 30 µs on either card and 5–20 µs on the Ryzen's
+  CPU; the card only pulls ahead at matrices far larger than these models use
+  (4096², 199 µs against 463). Windows adds a tail on top: p99 123 µs and
+  spikes past 400, against 66 on the native-Linux GTX 1650 host — which is
+  why the laptop's GPU figures wander from run to run (40M 0.36–0.60, MOSS
+  0.50–0.68) while the GTX 1650 host's repeat to the hundredth. Kept busy,
+  the 5070 Ti is 1.8x the 1650; fed one token at a time through a Windows
+  GPU scheduler, it is not.
+- **The 80M does not load on CUDA at all**, on either card: its language
+  model carries a bfloat16 `QuickGelu` fusion that ONNX Runtime 1.22 has no
+  CUDA kernel for.
+
+Both of the last two placements are [Running it elsewhere](standalone.md).
 
 ## Hojo TTS Light 40M
 

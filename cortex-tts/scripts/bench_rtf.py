@@ -36,6 +36,10 @@ MODELS = [
     ("moss-nano", "Yuewen"),
     ("hojo-80m-clone", "ya-ping"),
 ]
+# An optional third argument narrows the run to some model ids, comma-separated.
+if len(sys.argv) > 3:
+    wanted = set(sys.argv[3].split(","))
+    MODELS = [pair for pair in MODELS if pair[0] in wanted]
 
 
 def speak(model: str, voice: str, text: str) -> dict[str, float]:

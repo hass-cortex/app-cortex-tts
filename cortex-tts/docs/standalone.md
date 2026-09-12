@@ -63,18 +63,28 @@ environment and set the execution provider to `cuda` in the admin UI, which
 refuses to fall back rather than run on the CPU behind the label:
 
 ```bash
-uv pip install --python .venv/bin/python "onnxruntime-gpu[cuda,cudnn]"
+uv pip install --python .venv/bin/python "onnxruntime-gpu==1.22.0" \
+  nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 \
+  nvidia-curand-cu12 nvidia-cuda-nvrtc-cu12 nvidia-cudnn-cu12
 ```
 
-The wheel ships its own CUDA and cuDNN libraries and the app loads them
-before creating a session, so only the driver has to be on the host. A driver
-too old for the wheel's CUDA is the usual failure; the app reports it as
+The wheels ship the CUDA and cuDNN libraries and the app loads them before
+creating a session, so only the driver has to be on the host. The version is
+pinned on purpose: the CUDA 13 builds (1.29, 1.30) crashed on session
+creation on the development laptop, and 1.22 is the last CUDA 12 build. A driver too old for
+the wheel's CUDA is the usual failure; the app reports it as
 `PROVIDER_UNAVAILABLE` rather than silently landing on the CPU, and `/health`
 shows what each loaded model actually got beside what was asked for.
 
-The 80M's torch dependency stays on the CPU either way; only the ONNX sessions
-move. Measured once, on a GTX 1650 with MOSS-TTS-Nano; other cards and models
-have not been.
+Measure before you trust it. Beside a 4-vCPU i7-9750H a GTX 1650 took the
+40M from 0.54 to 0.31 and MOSS from 1.04 to 0.37; beside a 16-core Ryzen an
+RTX 5070 Ti on Windows was slower than the CPU for both — the per-token
+loop is bound by kernel launch latency, which a fast CPU beats and a Windows
+GPU scheduler makes jittery. Prefer native
+Linux for a GPU deployment. The 80M does not load on CUDA
+at all (a bfloat16 fusion without a kernel). The numbers are in
+[Models](models.md). The 80M's torch dependency stays on the CPU either way;
+only the ONNX sessions move.
 
 ## Not yet
 
