@@ -16,10 +16,18 @@ cd cortex-tts
 uv sync --frozen
 
 # Run it against a scratch data directory, with auth off.
-API_KEY= PRELOAD=false PORT=8799 \
+API_KEY= PORT=8799 \
   DATA_DIR=/tmp/cortex-data STATIC_DIR="$PWD/web" \
   uv run python -m cortex_tts
 ```
+
+The environment carries only what must be settled before the process starts
+(`HOST`, `PORT`, `DATA_DIR`, `STATIC_DIR`, `API_KEY`). Everything else is a
+stored setting in `<DATA_DIR>/settings.json`, and one of them matters here:
+`preload` defaults to `true`, so a fresh data directory downloads the 241 MB
+40M bundle on first start. To work without weights, write
+`{"preload": false}` into that file before starting (or turn it off in the
+UI once).
 
 The admin UI has **no build step**. `web/` is plain ES modules and CSS served
 by `StaticFiles`; edit a file and reload the page.
@@ -78,16 +86,11 @@ will rot.
 
 1. Fork and branch from `main`.
 2. Make the change.
-3. Ensure the gates pass:
-   ```bash
-   uv run ruff check src tests
-   uv run ruff format --check src tests
-   uv run --with pyright pyright
-   uv run pytest -q
-   ```
-4. Write the PR description against the template: link the issue rather than
-   restating it, say which approach you took and what you rejected, say how you
-   verified it — and say plainly what you did **not** verify.
+3. Ensure the four gates under **Code quality** pass.
+4. Write the PR description against the template — **Issue**, **Approach**,
+   **Verification**, **Not verified**, **Blast radius**: link the issue rather
+   than restating it, say which approach you took and what you rejected, say
+   how you verified it, and say plainly what you did **not** verify.
 5. Request review.
 
 ## Testing
@@ -111,34 +114,40 @@ that runs the ONNX sessions.
 
 ## Architecture
 
-See [`AGENTS.md`](../AGENTS.md) for the module tree, the cross-module
-guarantees and the endpoint reference. [`CONTEXT.md`](CONTEXT.md) defines the
-vocabulary both use — read it before naming anything new, because most nouns in
-this codebase already mean two things.
+[`AGENTS.md`](../AGENTS.md) has the module tree and the cross-module
+guarantees; [`CONTEXT.md`](CONTEXT.md) defines the vocabulary both use — read
+it before naming anything new, because most nouns in this codebase already
+mean two things. The user-facing reference pages are under [`docs/`](docs/).
 
-Top-level modules:
-
-- `src/cortex_tts/text/` — the text path: normalise, convert, split into segments
-- `src/cortex_tts/engine/` — the `Engine` protocol, the two implementations, and
-  the registry that bounds how many stay in memory
-- `src/cortex_tts/catalog.py` + `download.py` — what can be run, and getting it
-  onto disk
-- `src/cortex_tts/refs.py` — reference recordings, which are the 80M's voices
-- `src/cortex_tts/api/` — FastAPI routes; thin shells over the modules above
-- `web/` — the ingress admin UI, one ES module per concern
+Two packages, one dependency direction — `cortex_tts` imports `cortex_speech`
+through its facade and never the reverse; `tests/test_architecture.py` fails
+the build otherwise.
 
 ## Adding a Model
 
-The catalog is hand-written (`src/cortex_tts/catalog.py`): two models, each a
-Hugging Face repo id plus the list of files in its bundle. A new model needs an
-entry there, and an `Engine` implementation unless it fits one of the two that
-exist — `PresetEngine` for fixed voices, `CloneEngine` for reference-derived
-ones.
+The catalog is hand-written (`src/cortex_speech/catalog.py`): three models,
+each one or more Hugging Face repos plus the list of files in its bundle, and
+the capabilities it actually has. A new model is a `ModelSpec` naming an
+existing backend, or a new backend registered with `backends.register` — the
+steps are in [`AGENTS.md`](../AGENTS.md) under **Add an engine**, and nothing
+in the registry, the API layer or the integration needs to change for either.
 
 Mind the cost figures on the entry (`size_mb`, `rtf_hint`, `rss_hint_mb`): the
-admin UI shows them, and the integration reads `rtf_hint` to decide whether a
-model can outrun playback and is therefore safe to stream sentence by sentence.
-A figure invented rather than measured will make that decision wrongly.
+admin UI and the documentation show them so a reader can compare models with
+each other. Nothing decides with `rtf_hint` any more — the integration defaults
+every model to buffered and leaves streaming to someone who has measured their
+own host — but a figure from another machine still misleads whoever is
+choosing. `rtf_hint` is therefore measured, never copied from upstream: run
+`scripts/bench_rtf.py` against the reference host (a 4-core Home Assistant OS
+VM at two threads) with the new model added to its list, and record the median
+it prints, then update the tables in `docs/models.md` and `DOCS.md`.
+
+For a quantised model, name the CPU too. Full-precision weights compute the
+same thing anywhere; a dynamically quantised one picks a kernel per host, and
+the kernels do not always agree — an INT8 export tried here stopped correctly
+on a machine with AVX-512 VNNI and never emitted its stop token on one without,
+which is a wrong answer rather than a slow one. So a single machine says less
+about a quantised model than about any other.
 
 ## Questions?
 

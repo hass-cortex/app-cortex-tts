@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
-from cortex_speech import BY_ID, EXECUTION_PROVIDERS, ExecutionProvider
+from cortex_speech import BY_ID, CATALOG, EXECUTION_PROVIDERS, ExecutionProvider
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,7 +63,12 @@ class Preferences:
         taking a default: a bad number in one box must not silently reset the
         model someone chose in another.
         """
+        return self.validated(changes)[0]
+
+    def validated(self, changes: dict[str, Any]) -> tuple[Preferences, list[str]]:
+        """Like `merged`, and also which fields were refused."""
         clean: dict[str, Any] = {}
+        ignored: list[str] = []
         for key, value in changes.items():
             if key not in _VALIDATORS:
                 continue
@@ -71,18 +76,19 @@ class Preferences:
                 clean[key] = _VALIDATORS[key](value)
             except (TypeError, ValueError):
                 _LOGGER.warning("ignoring %s=%r: not a usable value", key, value)
-        return replace(self, **clean)
+                ignored.append(key)
+        return replace(self, **clean), ignored
 
     def rebuild_needed(self, other: Preferences) -> bool:
         """Whether moving to `other` invalidates the engines already loaded.
 
-        These three are bound when a session is created; the rest are read
+        These two are bound when a session is created; the rest are read
         again on the next request, so changing them needs nothing dropped.
+        A smaller resident bound evicts down to it, which is not a rebuild.
         """
         return (
             self.num_threads != other.num_threads
             or self.execution_provider != other.execution_provider
-            or self.max_loaded_models != other.max_loaded_models
         )
 
 
@@ -94,8 +100,11 @@ def _threads(value: Any) -> int:
 
 
 def _loaded(value: Any) -> int:
+    # The ceiling is the catalog size rather than a number: a limit below it
+    # makes some pair of models unable to be resident together, and the two
+    # drifted apart the first time the catalog grew.
     number = int(value)
-    if not 1 <= number <= 3:
+    if not 1 <= number <= len(CATALOG):
         raise ValueError("resident models out of range")
     return number
 
@@ -121,6 +130,15 @@ def _temperature(value: Any) -> float:
     return number
 
 
+def _flag(value: Any) -> bool:
+    """Read a boolean, including the strings a hand-edited file may hold."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"not a boolean: {value!r}")
+
+
 _VALIDATORS: dict[str, Any] = {
     "num_threads": _threads,
     "execution_provider": _provider,
@@ -132,7 +150,7 @@ _VALIDATORS: dict[str, Any] = {
     # offer is reported at synthesis, where the model is loaded and knows.
     "default_voice": lambda value: str(value).strip(),
     "temperature": _temperature,
-    "preload": lambda value: bool(value),
+    "preload": _flag,
 }
 
 
@@ -148,7 +166,8 @@ def load(data_dir: Path) -> Preferences:
         return Preferences()
     try:
         stored = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as err:
+    except (OSError, ValueError) as err:
+        # ValueError covers a malformed file and one that is not UTF-8.
         _LOGGER.error("settings unreadable, starting with defaults: %s", err)
         return Preferences()
     return Preferences().merged(stored if isinstance(stored, dict) else {})

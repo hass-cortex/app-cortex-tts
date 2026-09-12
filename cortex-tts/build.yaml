@@ -4,6 +4,6 @@ build_from:
 
 labels:
   org.opencontainers.image.title: Cortex TTS
-  org.opencontainers.image.description: On-device text-to-speech with fifteen built-in Chinese and English voices, or clone one from a few seconds of audio
+  org.opencontainers.image.description: On-device text-to-speech for Home Assistant — three ONNX models with built-in Chinese, English and Japanese voices, voice cloning from a short recording, and the Chinese text pipeline they lack
   org.opencontainers.image.source: https://github.com/hass-cortex/app-cortex-tts
   org.opencontainers.image.licenses: MIT

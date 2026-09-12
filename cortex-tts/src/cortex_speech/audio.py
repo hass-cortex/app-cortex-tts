@@ -73,7 +73,7 @@ def encode(
 # reference's loudness monotonically, and references hotter than about
 # -16 dBFS RMS made the model generate hard-clipped audio (peaks of 1.05 to
 # 1.13 on a float waveform). Levelling the set to this value dropped the worst
-# peak to 0.905. See docs/adr/0002.
+# peak to 0.905.
 REFERENCE_RMS_DBFS = -21.0
 
 # Never let levelling push a peak above this, however quiet the recording's
@@ -247,7 +247,6 @@ class WavStream:
     Kept because it costs nothing and some consumers want exactly this, but
     it is not the default: the maximal length it has to declare is read by a
     general-purpose player as a six-hour file, which it then waits to buffer.
-    See docs/adr/0004.
     """
 
     content_type = "audio/wav"

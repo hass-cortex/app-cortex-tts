@@ -8,10 +8,12 @@ hand the model before spending a synthesis on it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
+from functools import partial
 from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
@@ -21,12 +23,14 @@ from fastapi.responses import StreamingResponse
 from cortex_speech import (
     CATALOG,
     CONTENT_TYPES,
+    MAX_REFERENCE_SECONDS,
     STREAM_ENCODERS,
     AudioFormat,
     EngineError,
     ModelNotReadyError,
     ModelSpec,
     NoAudioError,
+    ProviderUnavailableError,
     Reference,
     ReferenceError,
     StreamGain,
@@ -35,6 +39,7 @@ from cortex_speech import (
     UnknownVoiceError,
     encode,
     prepare,
+    prepared_text,
 )
 
 from ..events import fire_models_changed
@@ -59,6 +64,11 @@ from .schemas import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# A 20 s reference at 48 kHz 24-bit stereo is under 6 MB; this leaves room
+# for a lossless container without spooling an arbitrary upload to disk.
+MAX_REFERENCE_UPLOAD_BYTES = 32 * 1_000_000
+
 
 public = APIRouter()
 api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
@@ -113,7 +123,7 @@ async def write_settings(
 
     These used to be addon options, where every change cost a restart and a
     change to their schema cost a rebuild. Nothing here needs that: most are
-    read afresh on the next request, and the three that are bound when a
+    read afresh on the next request, and the two that are bound when a
     session is created are adopted by dropping what is resident — the next
     reply pays a rebuild instead of the user paying a restart.
 
@@ -121,7 +131,7 @@ async def write_settings(
     rejecting the whole form, so one bad number cannot discard the model
     someone chose in another box. What comes back is what is now in force.
     """
-    updated = state.preferences.merged(body.model_dump(exclude_none=True))
+    updated, ignored = state.preferences.validated(body.model_dump(exclude_none=True))
     try:
         save_preferences(state.preferences_path, updated)
     except OSError as err:
@@ -131,20 +141,20 @@ async def write_settings(
             f"could not store the settings: {err}",
         ) from err
 
-    reloaded = False
-    if state.preferences.rebuild_needed(updated):
-        reloaded = await state.registry.reconfigure(
-            num_threads=updated.num_threads,
-            max_loaded=updated.max_loaded_models,
-            temperature=updated.temperature,
-            execution_provider=updated.execution_provider,
-        )
-    else:
-        await state.registry.reconfigure(temperature=updated.temperature)
+    # The registry knows which of these a resident engine can adopt and
+    # drops only for the ones it cannot.
+    reloaded = await state.registry.reconfigure(
+        num_threads=updated.num_threads,
+        max_loaded=updated.max_loaded_models,
+        temperature=updated.temperature,
+        execution_provider=updated.execution_provider,
+    )
 
     state.preferences = updated
     _LOGGER.info("settings changed%s", " (models unloaded)" if reloaded else "")
-    return SettingsSaved(settings=SettingsOut(**asdict(updated)), reloaded=reloaded)
+    return SettingsSaved(
+        settings=SettingsOut(**asdict(updated)), reloaded=reloaded, ignored=ignored
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +210,17 @@ async def download_model(
 async def delete_model(model_id: str, state: AppState = Depends(get_state)) -> ModelOut:
     """Unload a model and delete its bundle from disk."""
     spec = _spec_or_404(state, model_id)
+    if state.downloads.is_running(model_id):
+        # The worker would keep writing into the directory being removed and
+        # a half bundle would reappear behind the delete.
+        raise _http(
+            http_status.HTTP_409_CONFLICT,
+            "DOWNLOAD_RUNNING",
+            f"{spec.name} is still downloading; wait for it to finish",
+        )
     await state.registry.unload(model_id)
-    state.speech.delete_model(spec)
+    # Up to two gigabytes of files; not on the event loop.
+    await asyncio.to_thread(state.speech.delete_model, spec)
     await fire_models_changed(f"deleted:{model_id}")
     return _model_out(state, spec)
 
@@ -250,7 +269,9 @@ async def list_voices(
             continue
         try:
             voices = await state.registry.voices(spec.id)
-        except EngineError as err:
+        except Exception as err:  # noqa: BLE001 - one broken bundle must not empty the list
+            # A truncated bundle raises whatever its reader trips over; the
+            # other models' voices are still worth answering with.
             _LOGGER.warning("could not list voices for %s: %s", spec.id, err)
             continue
         out.extend(
@@ -280,7 +301,7 @@ async def preview_text(body: PreviewRequest) -> PreviewResponse:
     )
     segments = prepare(body.text, options)
     return PreviewResponse(
-        original=body.text, prepared="".join(segments), segments=segments
+        original=body.text, prepared=prepared_text(segments), segments=segments
     )
 
 
@@ -343,8 +364,8 @@ async def _resolve(
             "nothing to say once punctuation was stripped",
         )
 
-    # Resolving the default voice loads the model, so it fails the same way a
-    # synthesis would and has to be guarded the same way.
+    # Resolving the default voice reads the bundle off disk, so a model that
+    # is not downloaded fails here, the same way a synthesis would.
     with _engine_errors():
         voice_id = voice or await _default_voice(state, model_id)
 
@@ -357,8 +378,8 @@ async def _resolve(
 
     # A named voice is checked here, not left to the engine. The engine raises
     # when it resolves the voice, which on the streaming path happens after the
-    # WAV header has gone out — the caller then gets a 200, a headerful of
-    # silence and no error at all. Voice ids are case-sensitive, so `yuewen`
+    # first frame has gone out — the caller then gets a 200, a header with
+    # nothing behind it and no error at all. Voice ids are case-sensitive, so `yuewen`
     # for `Yuewen` is the easy way to hit that.
     if voice:
         with _engine_errors():
@@ -411,7 +432,7 @@ async def _synthesize(
         audio_seconds=round(seconds, 3),
         inference_ms=round(result.inference_ms, 1),
         rtf=round(result.inference_ms / 1000 / seconds, 3) if seconds else 0.0,
-        prepared_text="".join(segments),
+        prepared_text=prepared_text(segments),
     )
     _LOGGER.info(
         "spoke %d chars as %s/%s -> %.2fs audio in %.0fms (RTF %.2f)",
@@ -473,7 +494,7 @@ async def speak_stream(
     frames and needs nothing declared; WAV has to declare a length it cannot
     know, and a general-purpose player given the maximal one waits for a file
     it believes is six hours long. `wav` is still available for a consumer
-    that wants raw PCM. See docs/adr/0004. Measured on MOSS-TTS-Nano: 143-178
+    that wants raw PCM. Measured on MOSS-TTS-Nano: 143-178
     ms to the first chunk against 1.8 s for the whole utterance.
 
     Every model works here. One that cannot emit mid-utterance sends its whole
@@ -516,6 +537,12 @@ async def speak_stream(
         convert_script=body.convert_script,
         temperature=body.temperature,
     )
+
+    # Loading is the last thing that can fail, and it must fail here: once the
+    # generator below has yielded the first frame the status is 200. Resolving
+    # the voice read the bundle off disk but built nothing.
+    with _engine_errors():
+        await state.registry.acquire(spec.id)
 
     async def frames() -> AsyncIterator[bytes]:
         gain = StreamGain()
@@ -598,14 +625,27 @@ async def add_reference(
     state: AppState = Depends(get_state),
 ) -> ReferenceOut:
     """Store a reference recording and make it available as a cloned voice."""
+    if audio.size is not None and audio.size > MAX_REFERENCE_UPLOAD_BYTES:
+        raise _http(
+            http_status.HTTP_413_CONTENT_TOO_LARGE,
+            "BAD_REFERENCE",
+            f"upload is {audio.size / 1_000_000:.0f} MB; a reference is at most "
+            f"{MAX_REFERENCE_SECONDS:.0f} s of audio, well under "
+            f"{MAX_REFERENCE_UPLOAD_BYTES // 1_000_000} MB",
+        )
     payload = await audio.read()
     try:
-        reference = state.references.add(
-            name=name,
-            transcript=transcript,
-            audio=payload,
-            language=language,
-            gender=gender,
+        # Decoding, writing and hashing the recording is real work; a stream
+        # on another connection must not stall behind it.
+        reference = await asyncio.to_thread(
+            partial(
+                state.references.add,
+                name=name,
+                transcript=transcript,
+                audio=payload,
+                language=language,
+                gender=gender,
+            )
         )
     except ReferenceError as err:
         raise _http(
@@ -664,7 +704,7 @@ async def reference_audio(
     if reference is None:
         raise _no_reference(reference_id)
     return Response(
-        content=reference.audio_path.read_bytes(),
+        content=await asyncio.to_thread(reference.audio_path.read_bytes),
         media_type="audio/wav",
         headers={"Cache-Control": "no-store"},
     )
@@ -681,6 +721,11 @@ _WIRE_ERRORS: tuple[tuple[type[Exception], int, str], ...] = (
     (ModelNotReadyError, http_status.HTTP_409_CONFLICT, "MODEL_NOT_READY"),
     (UnknownVoiceError, http_status.HTTP_404_NOT_FOUND, "UNKNOWN_VOICE"),
     (NoAudioError, http_status.HTTP_422_UNPROCESSABLE_CONTENT, "NO_AUDIO"),
+    (
+        ProviderUnavailableError,
+        http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        "PROVIDER_UNAVAILABLE",
+    ),
     (EngineError, http_status.HTTP_500_INTERNAL_SERVER_ERROR, "ENGINE_ERROR"),
 )
 

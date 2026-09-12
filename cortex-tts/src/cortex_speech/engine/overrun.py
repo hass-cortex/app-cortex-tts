@@ -12,11 +12,16 @@ from collections.abc import Callable
 
 import numpy as np
 
+from ..text.pipeline import is_chinese
+
 _LOGGER = logging.getLogger(__name__)
 
-# Rough Mandarin speaking rate. Only used to notice a generation that stopped
-# far short of the text — never to predict a duration.
+# Rough speaking rates, characters per second, by the script the text reads
+# as. Only used to notice a generation that stopped far short of the text or
+# ran far past it — never to predict a duration. A Latin sentence has about
+# three times as many characters per second of speech as a Mandarin one.
 CHARS_PER_SECOND = 4.5
+LATIN_CHARS_PER_SECOND = 14.0
 
 # Below this fraction of the expected duration, the model almost certainly
 # emitted end-of-speech early rather than genuinely finishing.
@@ -31,7 +36,13 @@ MIN_JUDGEABLE_CHARS = 20
 RETRY_SEEDS = (42, 7, 1234)
 
 
-def looks_truncated(characters: int, seconds: float) -> bool:
+def expected_seconds(text: str) -> float:
+    """Roughly how long the text takes to say, by the script it reads as."""
+    rate = CHARS_PER_SECOND if is_chinese(text) else LATIN_CHARS_PER_SECOND
+    return len(text) / rate
+
+
+def looks_truncated(text: str, seconds: float) -> bool:
     """Whether a generation stopped far short of the text it was given.
 
     The model can emit its end-of-speech token early, which yields a clean but
@@ -39,9 +50,9 @@ def looks_truncated(characters: int, seconds: float) -> bool:
     is no signal for it in the output, so the length of the text is the only
     thing left to compare against.
     """
-    if characters < MIN_JUDGEABLE_CHARS:
+    if len(text) < MIN_JUDGEABLE_CHARS:
         return False
-    return seconds < (characters / CHARS_PER_SECOND) * TRUNCATION_RATIO
+    return seconds < expected_seconds(text) * TRUNCATION_RATIO
 
 
 # A gap this long inside one segment separates utterances rather than words.
@@ -94,9 +105,7 @@ def _speech_runs(audio: np.ndarray, sample_rate: int) -> list[tuple[int, int]]:
     return runs
 
 
-def trim_trailing_babble(
-    audio: np.ndarray, sample_rate: int, characters: int
-) -> np.ndarray:
+def trim_trailing_babble(audio: np.ndarray, sample_rate: int, text: str) -> np.ndarray:
     """Drop invented speech the model appended after finishing the text.
 
     On very short input the model often fails to emit end-of-speech promptly
@@ -106,8 +115,8 @@ def trim_trailing_babble(
     sentence is never cut.
     """
     seconds = len(audio) / sample_rate
-    expected = characters / CHARS_PER_SECOND
-    if characters == 0 or seconds <= expected * OVERRUN_RATIO:
+    expected = expected_seconds(text)
+    if not text or seconds <= expected * OVERRUN_RATIO:
         return audio
 
     runs = _speech_runs(audio, sample_rate)
@@ -139,8 +148,8 @@ def render_with_retries(
     for attempt, seed in enumerate(RETRY_SEEDS):
         wave = generate(seed)
         seconds = len(wave) / sample_rate
-        if not looks_truncated(len(text), seconds):
-            return trim_trailing_babble(wave, sample_rate, len(text))
+        if not looks_truncated(text, seconds):
+            return trim_trailing_babble(wave, sample_rate, text)
         _LOGGER.warning(
             "generation for %d chars stopped at %.1fs (seed %d, attempt %d/%d)",
             len(text),

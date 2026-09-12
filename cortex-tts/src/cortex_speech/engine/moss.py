@@ -4,8 +4,7 @@ The first model here that has both. `voice` is resolved against the bundle's
 own table first and the reference store second, which is why the protocol's
 opaque voice id needed no widening to accommodate it.
 
-Two facts drive the implementation, both with the measurements behind them in
-docs/adr/0002:
+Two facts drive the implementation:
 
 - Conditioning is cached. The runtime's own API takes a *path* and re-encodes
   the recording on every call.
@@ -20,7 +19,7 @@ import logging
 import queue
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +50,14 @@ _GENDER_HINTS = {"female": "female", "male": "male"}
 # Chunks the render may run ahead by. The codec emits roughly 8 frames at a
 # time at 12.5 Hz, so this is a few seconds of audio.
 _STREAM_QUEUE_CHUNKS = 8
+
+# A chunk arrives every few hundred milliseconds, so an abandoned worker
+# notices within one chunk; this only bounds a decode that never returns.
+_STREAM_JOIN_SECONDS = 5.0
+
+
+class _StreamAbandonedError(Exception):
+    """Raised inside the runtime's decode loop once the consumer is gone."""
 
 
 def _describe(entry: dict[str, Any]) -> Voice:
@@ -222,11 +229,10 @@ class MossEngine:
 
     def synthesize_stream(
         self, segments: list[str], voice: str
-    ) -> Iterator[np.ndarray]:
+    ) -> Generator[np.ndarray, None, None]:
         """Yield audio as the codec produces it, rather than per segment.
 
-        This is what the `chunk_streaming` capability means; docs/adr/0001
-        carries the measurement.
+        This is what the `chunk_streaming` capability means.
 
         The runtime calls back synchronously from inside its decode loop, so
         the synthesis runs on a worker thread and the chunks travel through a
@@ -248,24 +254,44 @@ class MossEngine:
         chunks: queue.Queue[np.ndarray | None | BaseException] = queue.Queue(
             maxsize=_STREAM_QUEUE_CHUNKS
         )
+        # Set when the consumer goes away. The worker is inside the runtime's
+        # decode loop and can only notice between chunks, so every put polls
+        # it: a put that blocked forever would keep the thread, and the
+        # runtime's per-stream state, alive under the next request.
+        abandoned = threading.Event()
+
+        def offer(item: np.ndarray | None | BaseException) -> bool:
+            while not abandoned.is_set():
+                try:
+                    chunks.put(item, timeout=0.1)
+                except queue.Full:
+                    continue
+                return True
+            return False
+
+        def deliver(chunk: np.ndarray) -> None:
+            if not offer(chunk):
+                raise _StreamAbandonedError
 
         def render() -> None:
             try:
                 for index, text in enumerate(segments):
-                    if index:
-                        # The engine no longer joins, so the pause between
-                        # sentences has to be emitted rather than added after.
-                        chunks.put(gap)
+                    # The engine no longer joins, so the pause between
+                    # sentences has to be emitted rather than added after.
+                    if index and not offer(gap):
+                        return
                     self._runtime.synthesize_single_chunk(
                         text=text,
                         prompt_audio_codes=codes,
                         streaming=True,
-                        on_audio_chunk=chunks.put,
+                        on_audio_chunk=deliver,
                     )
-            except BaseException as err:  # noqa: BLE001 - re-raised on the consumer
-                chunks.put(err)
+            except _StreamAbandonedError:
+                return
+            except Exception as err:  # noqa: BLE001 - re-raised on the consumer
+                offer(err)
             finally:
-                chunks.put(None)
+                offer(None)
 
         worker = threading.Thread(target=render, name="moss-stream", daemon=True)
         worker.start()
@@ -289,7 +315,18 @@ class MossEngine:
                 produced = True
                 yield mono
         finally:
-            worker.join(timeout=30)
+            abandoned.set()
+            # Free a put in flight so the worker can see the flag.
+            while not chunks.empty():
+                try:
+                    chunks.get_nowait()
+                except queue.Empty:
+                    break
+            worker.join(timeout=_STREAM_JOIN_SECONDS)
+            if worker.is_alive():
+                _LOGGER.warning(
+                    "moss stream worker did not stop within %ss", _STREAM_JOIN_SECONDS
+                )
 
         if not produced:
             raise NoAudioError(f"model produced no audio for {segments!r}")

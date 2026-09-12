@@ -88,12 +88,14 @@ is the runtime holding ~780 MB or ~2 GB of it
 
 **Resident**:
 Loaded into memory. The registry keeps at most `max_loaded_models` engines and
-evicts the least recently used, because both bundles at once cost about 2.8 GB.
+evicts the least recently used: the 40M beside either 2 GB model costs about
+2.8 GB, the 80M and MOSS together about 4 GB.
 _Avoid_: "cached" (eviction is about memory, not staleness)
 
 **Voice**:
 A selectable speaker, always belonging to exactly one model. On the 40M a
-built-in slot (`hojo_zh_f_01`); on the 80M a **Reference recording**. The voice
+built-in slot (`hojo_zh_f_01`); on the 80M a **Reference recording**; on MOSS
+either (`Yuewen`, or a reference). The voice
 is also the only place a language is declared — the model takes no language
 parameter, so picking the voice is picking the language.
 _Avoid_: "speaker" (that is the embedding slot inside the model)
@@ -128,8 +130,8 @@ _Avoid_: "streaming" unqualified (see Flagged ambiguities)
 An engine emitting audio before a whole segment is finished. A `ModelSpec`
 capability and a separate `StreamingEngine` protocol, both true only for
 MOSS-TTS-Nano. `/api/speak/stream` carries it over HTTP as chunked MP3, and
-the integration consumes it inside each sentence. Measurements are in
-docs/adr/0001, once.
+the integration consumes it inside each sentence. The measurement is in the
+`/api/speak/stream` docstring.
 Distinct from **Streamed synthesis**, which is per _sentence_ and needs no
 engine support at all.
 
@@ -160,9 +162,10 @@ happens and a place that no longer has it.
 **Setting**:
 A field the app stores itself, in `settings.json` beside the models, changed in
 the admin UI and over `PUT /api/settings`. Read afresh on the next request —
-except the three ONNX Runtime binds when it creates a session (threads,
-execution provider, resident count), which are adopted by dropping whatever is
-resident.
+except the two ONNX Runtime binds when it creates a session (threads,
+execution provider), which are adopted by dropping whatever is resident. The
+thread count is only half of that: its BLAS/OpenMP side is fixed at import and
+waits for a restart.
 
 ## Relationships
 
@@ -172,7 +175,8 @@ resident.
 - A **Voice** belongs to exactly one model. Where it comes from is the model's
   `builtin_voices` and `cloning` capabilities, which are independent: the 40M
   has only bundled voices, the 80M only reference recordings, and MOSS has
-  both, so its voice list is the two concatenated.
+  both, so its voice list is the two concatenated. `chunk_streaming` and
+  `temperature` are the other two capabilities, equally independent.
 - The **Text path** runs before any engine is touched, so `/api/preview`
   answers without loading a model at all — which is what makes the admin UI's
   right-hand column free.
@@ -207,7 +211,7 @@ resident.
 - **"streaming" is four things.** Home Assistant's _streaming input_ (the
   conversation agent feeding text in as it is written), our **Streamed
   synthesis** (one `/api/speak` per sentence), **Chunk streaming** (an engine
-  emitting audio mid-segment, which only MOSS can do and nothing yet consumes),
+  emitting audio mid-segment, which only MOSS can do),
   and HTTP chunked responses, which `/api/speak/stream` does and `/api/speak`
   does not. A sensor that
   measured the first of these was removed precisely because the name promised

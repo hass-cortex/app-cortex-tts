@@ -147,8 +147,9 @@ audio{width:100%}
 .addform .grow{flex:1 1 180px;min-width:0}
 .addform .fixed{flex:0 0 132px}
 /* Cloned voices only feed the cloning model; when it is not the one selected
-   the panel stays readable but stops competing for attention. */
-#clones.idle{opacity:.55}
+   the panel stops competing for attention. .8 is the floor that keeps the
+   hint text above 4.5:1 in both themes. */
+#clones.idle{opacity:.8}
 @media (max-width:560px){
   button,.chip{min-height:44px}
   .themebtn{width:44px;height:44px}
@@ -157,10 +158,16 @@ audio{width:100%}
 /* A field's own note: what the setting does, and the measurement behind the
    value it ships with. These were the addon options' descriptions. */
 .sub{margin:6px 0 0;font-size:12px;line-height:1.5;color:var(--ink-3);max-width:46ch}
-/* Marks a setting ONNX Runtime binds when it creates a session, so changing
-   it costs whatever is resident. */
+/* Marks a setting not adopted on the next request: bound when ONNX Runtime
+   creates a session (reload), or when the process starts (restart). */
 .tag{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;
   letter-spacing:.04em;padding:1px 5px;border-radius:3px;
   background:var(--warn-soft);color:var(--warn)}
 #settings .row{align-items:start}
 #settings .field{flex:1 1 300px}
+
+/* Shown only when the API answers 401: the page is on a published port
+   rather than behind ingress, and needs the app's key once. */
+.keyform{display:flex;gap:6px;align-items:center}
+.keyform label{font-size:12px;color:var(--ink-3)}
+.keyform input{width:16ch}

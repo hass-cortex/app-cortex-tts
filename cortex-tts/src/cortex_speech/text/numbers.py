@@ -69,19 +69,19 @@ def cardinal(value: int) -> str:
         remaining //= 10000
 
     parts: list[str] = []
+    skipped = False
     for index in range(len(groups) - 1, -1, -1):
         group = groups[index]
         if group == 0:
-            # A wholly empty group still needs a zero when a lower group
-            # follows, so 100000001 reads 一億零一 rather than 一億一.
-            if parts and any(groups[:index]):
-                parts.append(DIGITS[0])
+            skipped = bool(parts)
             continue
         rendered = _below_10000(group)
-        # A group under 1000 that follows a higher group keeps its leading
-        # zero: 1_0026 is 一萬零二十六.
-        if parts and group < 1000:
+        # One 零 marks any gap before a lower group, whether the gap is a
+        # wholly empty group (100000001 is 一億零一) or a leading zero inside
+        # this one (1_0026 is 一萬零二十六) — and never two in a row.
+        if parts and (skipped or group < 1000):
             rendered = DIGITS[0] + rendered
+        skipped = False
         parts.append(rendered + GROUPS[index])
 
     text = "".join(parts)

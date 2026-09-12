@@ -124,7 +124,7 @@ def test_every_module_parses(package: str) -> None:
     assert _parsed(package), f"no modules found for {package}"
 
 
-# The surface ADR 0003 promises: a service, the config it takes, and the value
+# The surface the facade promises: a service, the config it takes, and the value
 # types that cross the boundary. Listed rather than derived, so widening it is
 # a deliberate edit to this list and shows up in review — the import rule above
 # cannot see a flat re-export, which is how the surface grew to 35 names
@@ -146,6 +146,7 @@ FACADE = {
     # references
     "Reference",
     "ReferenceStore",
+    "MAX_REFERENCE_SECONDS",
     # downloads
     "DownloadManager",
     "DownloadProgress",
@@ -153,6 +154,7 @@ FACADE = {
     "TextOptions",
     "NormalizeOptions",
     "prepare",
+    "prepared_text",
     # audio encoding for the HTTP layer
     "AudioFormat",
     "CONTENT_TYPES",
@@ -193,7 +195,7 @@ def test_the_facade_exports_exactly_what_it_promises() -> None:
     assert actual == FACADE, (
         "facade surface changed — added: "
         f"{sorted(actual - FACADE)}, removed: {sorted(FACADE - actual)}. "
-        "Widening it is a decision (ADR 0003), so update this list on purpose."
+        "Widening it is a decision, so update this list on purpose."
     )
 
 

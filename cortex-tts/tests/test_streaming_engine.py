@@ -11,7 +11,7 @@ and what is worth pinning here is the contract, not the model.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 
 import numpy as np
 
@@ -25,7 +25,7 @@ class _Streaming:
 
     def synthesize_stream(
         self, segments: list[str], voice: str
-    ) -> Iterator[np.ndarray]:
+    ) -> Generator[np.ndarray, None, None]:
         del segments, voice
         for value in (0.1, 0.2, 0.3):
             time.sleep(0.01)

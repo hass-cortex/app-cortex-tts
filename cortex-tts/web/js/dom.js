@@ -13,6 +13,10 @@ export function esc(value) {
 
 export const pressed = (el) => el.getAttribute("aria-pressed") === "true";
 
+/** The one way a voice is written into a picker, whichever panel asks. */
+export const voiceOption = (v) =>
+  `<option value="${esc(v.id)}">${esc(v.name)}${v.language ? ` · ${esc(v.language)}` : ""}</option>`;
+
 /**
  * Put a message in a slot. Every failure in this UI lands in one of these,
  * next to the control that failed — never in a dialog the panel cannot style
@@ -27,6 +31,20 @@ export function msg(el, text, kind = "") {
   // A slot with its own base class reserves space in its layout, so it stays
   // put when it has nothing to say.
   el.hidden = !text && base === "msg";
+}
+
+/**
+ * The two-step delete, for the same reason a message is never a dialog: the
+ * first click arms the button, a second within a few seconds confirms, and
+ * nothing happens if it never comes. `armed` is the caller's set of armed
+ * ids and `render` redraws from it, so a re-render in between loses nothing.
+ */
+export function confirmStep(armed, id, render, ms = 4000) {
+  if (armed.delete(id)) return true;
+  armed.add(id);
+  render();
+  setTimeout(() => { if (armed.delete(id)) render(); }, ms);
+  return false;
 }
 
 /**

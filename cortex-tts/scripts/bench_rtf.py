@@ -1,0 +1,89 @@
+"""Measure every model's real-time factor on one host with one text set.
+
+This is where `ModelSpec.rtf_hint` comes from. The reference host is written
+down in docs/models.md ("The reference host"): a Home Assistant OS VM with
+4 vCPU of an Intel Core i7-9750H and 8 GB, the app at two threads on the CPU, and the figure is the
+median over the four sentence lengths below. Run it against any app instance:
+
+    CORTEX_TTS_KEY=... uv run python scripts/bench_rtf.py http://host:8771 out.json
+
+Sequential, one model at a time (the host keeps one model resident), a warm-up
+run discarded so model load and reference conditioning are not counted, then
+three runs per sentence; the server's own X-Cortex-* headers are what is
+recorded.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import statistics
+import sys
+import time
+import urllib.request
+
+HOST = sys.argv[1].rstrip("/")
+KEY = os.environ.get("CORTEX_TTS_KEY", "")
+RUNS = 3
+SENTENCES = {
+    "short": "客廳的燈已經打開了。",
+    "medium": "目前室內溫度 26.5°C，濕度 68%，冷氣設定在二十四度。",
+    "long": "洗衣機洗好了。今天天氣多雲，最高溫 31°C，傍晚有 40% 的降雨機率，出門記得帶傘。",
+    "story": "從前有一座山，山上有一間小廟，廟裡住著一位老和尚和一位小和尚。每天早上，老和尚都會帶著小和尚到山下的溪邊打水，然後一起回到廟裡念經。日子過得很平靜，直到有一天，山下來了一位陌生的旅人。",
+}
+MODELS = [
+    ("hojo-40m", "hojo_zh_f_01"),
+    ("moss-nano", "Yuewen"),
+    ("hojo-80m-clone", "ya-ping"),
+]
+
+
+def speak(model: str, voice: str, text: str) -> dict[str, float]:
+    body = json.dumps(
+        {"text": text, "model": model, "voice": voice, "format": "wav"}
+    ).encode()
+    req = urllib.request.Request(
+        f"{HOST}/api/speak",
+        data=body,
+        method="POST",
+        headers={"Authorization": f"Bearer {KEY}", "content-type": "application/json"},
+    )
+    t0 = time.perf_counter()
+    with urllib.request.urlopen(req, timeout=600) as r:  # noqa: S310 - our own host
+        r.read()
+        h = r.headers
+        return {
+            "rtf": float(h["X-Cortex-Rtf"]),
+            "inference_ms": float(h["X-Cortex-Inference-Ms"]),
+            "audio_s": float(h["X-Cortex-Audio-Seconds"]),
+            "wall_s": time.perf_counter() - t0,
+        }
+
+
+results: dict[str, dict[str, dict[str, float]]] = {}
+for model, voice in MODELS:
+    results[model] = {}
+    warm = speak(model, voice, SENTENCES["short"])  # load + conditioning, discarded
+    print(f"{model}: warm-up {warm['wall_s']:.1f}s wall", flush=True)
+    for name, text in SENTENCES.items():
+        runs = [speak(model, voice, text) for _ in range(RUNS)]
+        rtfs = [r["rtf"] for r in runs]
+        results[model][name] = {
+            "chars": len(text),
+            "audio_s": statistics.median(r["audio_s"] for r in runs),
+            "rtf_median": statistics.median(rtfs),
+            "rtf_min": min(rtfs),
+            "rtf_max": max(rtfs),
+            "inference_ms_median": statistics.median(r["inference_ms"] for r in runs),
+        }
+        print(
+            f"  {name:6s} chars={len(text):3d} "
+            f"audio={results[model][name]['audio_s']:.1f}s rtf={rtfs}",
+            flush=True,
+        )
+    medians = [row["rtf_median"] for row in results[model].values()]
+    print(f"  => rtf_hint {statistics.median(medians):.2f}", flush=True)
+
+with open(sys.argv[2], "w", encoding="utf-8") as out:
+    json.dump(results, out, indent=2, ensure_ascii=False)
+print("done")

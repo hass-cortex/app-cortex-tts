@@ -2,7 +2,7 @@
 // the model and voice lists: everything else asks it.
 
 import { call, json } from "./api.js";
-import { $, esc, fillPicker, msg } from "./dom.js";
+import { $, confirmStep, esc, fillPicker, msg, voiceOption } from "./dom.js";
 
 let models = [];
 let voices = [];
@@ -10,6 +10,11 @@ let voices = [];
 // nothing to prefer and falls back to the first entry.
 let defaults = { model: "", voice: "" };
 let pollTimer = null;
+// Models with an action in flight, and those whose Delete awaits its second
+// click. Both are read at render time: the download poll redraws every card,
+// and would otherwise re-enable a button mid-request.
+const busy = new Set();
+const armed = new Set();
 let onVoiceChange = () => {};
 let onCatalogChange = () => {};
 
@@ -29,6 +34,9 @@ export const catalog = () => models;
 
 /** Every voice across downloaded models, as last fetched. */
 export const knownVoices = () => voices;
+
+/** Whether the chosen model offers a voice to speak with. */
+export const hasVoice = () => voices.some((v) => v.model_id === $("model").value);
 
 /** The language declared by the chosen voice, or "" when there is none. */
 export function selectedVoiceLanguage() {
@@ -60,13 +68,11 @@ function detail(m) {
 
 function actions(m) {
   if (m.download_state === "running") return "";
-  if (!m.downloaded) {
-    return `<button class="sm" data-act="download" data-id="${esc(m.id)}">Download</button>`;
-  }
-  const load = m.loaded
-    ? `<button class="sm" data-act="unload" data-id="${esc(m.id)}">Unload</button>`
-    : `<button class="sm" data-act="load" data-id="${esc(m.id)}">Load</button>`;
-  return `${load} <button class="sm danger" data-act="delete" data-id="${esc(m.id)}">Delete</button>`;
+  const button = (act, label, cls = "sm") =>
+    `<button class="${cls}" data-act="${act}" data-id="${esc(m.id)}"${busy.has(m.id) ? " disabled" : ""}>${label}</button>`;
+  if (!m.downloaded) return button("download", "Download");
+  const load = m.loaded ? button("unload", "Unload") : button("load", "Load");
+  return `${load} ${button("delete", armed.has(m.id) ? "Confirm delete" : "Delete", "sm danger")}`;
 }
 
 function voiceCount(m) {
@@ -98,9 +104,8 @@ function renderCards() {
       <div class="actions">${actions(m)}</div>
     </div>`).join("");
 
-  const anyRunning = models.some((m) => m.download_state === "running");
-  if (anyRunning && !pollTimer) pollTimer = setInterval(refreshModels, 1500);
-  if (!anyRunning && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (running().length && !pollTimer) pollTimer = setInterval(poll, 1500);
+  if (!running().length && pollTimer) stopPoll();
 
   // The pill names which models clone, rather than naming one of them.
   const cloners = models.filter((m) => m.cloning).map((m) => shortName(m));
@@ -111,6 +116,27 @@ function renderCards() {
   $("status").innerHTML = loaded.length
     ? loaded.map((m) => `<span class="pill ok">${esc(shortName(m))} loaded</span>`).join("")
     : '<span class="pill idle">no model resident</span>';
+}
+
+const running = () => models.filter((m) => m.download_state === "running").map((m) => m.id);
+
+function stopPoll() {
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+// A download that ends may have added voices, which only /voices knows. A
+// fetch that fails ends the poll rather than failing again every tick.
+async function poll() {
+  const before = running();
+  try {
+    await refreshModels();
+    const after = running();
+    if (before.some((id) => !after.includes(id))) await refreshVoices();
+  } catch (err) {
+    msg($("modelMsg"), err.message, "err");
+    stopPoll();
+  }
 }
 
 function selectedModel() {
@@ -124,13 +150,13 @@ function renderVoicePicker() {
   fillPicker(
     $("voice"),
     mine.length
-      ? mine.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}${v.language ? ` · ${esc(v.language)}` : ""}</option>`).join("")
+      ? mine.map(voiceOption).join("")
       : `<option value="">— ${cloning ? "upload a recording below" : "no voices"} —</option>`,
     (id) => mine.some((v) => v.id === id),
     defaults.voice,
   );
 
-  // Capabilities are independent (ADR 0001): a model may have bundled voices
+  // Capabilities are independent: a model may have bundled voices
   // AND clone. Reading either one as a kind mislabels the model that has both.
   const kinds = [];
   if (model && model.builtin_voices) kinds.push("built in");
@@ -138,7 +164,6 @@ function renderVoicePicker() {
   $("voiceLabel").textContent = kinds.length
     ? `Voice — ${kinds.join(" + ")}${mine.length ? ` (${mine.length})` : ""}`
     : "Voice";
-  $("speak").disabled = mine.length === 0;
   onVoiceChange();
 
   $("clones").classList.toggle("idle", !cloning);
@@ -194,8 +219,10 @@ export function init() {
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
     const { act, id } = btn.dataset;
-    if (act === "delete" && !confirm("Delete this model's files from disk?")) return;
-    btn.disabled = true;
+    if (busy.has(id)) return;
+    if (act === "delete" && !confirmStep(armed, id, renderCards)) return;
+    busy.add(id);
+    renderCards();
     msg($("modelMsg"), "");
     try {
       await call(...ENDPOINTS[act](id));
@@ -204,7 +231,8 @@ export function init() {
     } catch (err) {
       msg($("modelMsg"), err.message, "err");
     } finally {
-      btn.disabled = false;
+      busy.delete(id);
+      renderCards();
     }
   });
 }

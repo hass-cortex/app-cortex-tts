@@ -3,9 +3,17 @@
 import { call } from "./api.js";
 import { $, msg, pressed } from "./dom.js";
 import { play, showStats } from "./player.js";
-import { refreshModels } from "./models.js";
+import { hasVoice, refreshModels } from "./models.js";
+
+let inFlight = false;
+
+/** Speak is offered when the chosen model has a voice and nothing is in flight. */
+export function syncButton() {
+  if (!inFlight) $("speak").disabled = !hasVoice();
+}
 
 async function speak() {
+  inFlight = true;
   $("speak").disabled = true;
   msg($("speakMsg"), "");
   try {
@@ -35,7 +43,8 @@ async function speak() {
   } catch (err) {
     msg($("speakMsg"), err.message, "err");
   } finally {
-    $("speak").disabled = false;
+    inFlight = false;
+    syncButton();
   }
 }
 

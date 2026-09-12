@@ -11,22 +11,31 @@ DEV_DIR="/share/.dev/cortex-tts"
 # them up in seconds. Only source is swapped — the virtualenv is baked into the
 # image, so adding a dependency still needs `--init` and a rebuild.
 #
+# Only a local-source install (version "dev") reads the override. /share is
+# writable by anything that can reach it, so a released image executing
+# whatever is dropped there would be remote code execution with the
+# Supervisor token.
+#
 # Both packages are swapped together. Syncing only one leaves the other at the
 # image's version, which loads without complaint and behaves like the deploy
 # silently did nothing.
-for pkg in cortex_speech cortex_tts; do
-    if [ -d "${DEV_DIR}/src/${pkg}" ]; then
-        bashio::log.warning "[DEV MODE] Loading ${pkg} from ${DEV_DIR}"
-        rm -rf "/app/src/${pkg}"
-        mkdir -p /app/src
-        cp -r "${DEV_DIR}/src/${pkg}" "/app/src/${pkg}"
-    fi
-done
+if [ "$(bashio::addon.version 2>/dev/null || echo unknown)" = "dev" ]; then
+    for pkg in cortex_speech cortex_tts; do
+        if [ -d "${DEV_DIR}/src/${pkg}" ]; then
+            bashio::log.warning "[DEV MODE] Loading ${pkg} from ${DEV_DIR}"
+            rm -rf "/app/src/${pkg}"
+            mkdir -p /app/src
+            cp -r "${DEV_DIR}/src/${pkg}" "/app/src/${pkg}"
+        fi
+    done
 
-if [ -d "${DEV_DIR}/web" ]; then
-    bashio::log.warning "[DEV MODE] Loading web UI from ${DEV_DIR}"
-    rm -rf /app/web
-    cp -r "${DEV_DIR}/web" /app/web
+    if [ -d "${DEV_DIR}/web" ]; then
+        bashio::log.warning "[DEV MODE] Loading web UI from ${DEV_DIR}"
+        rm -rf /app/web
+        cp -r "${DEV_DIR}/web" /app/web
+    fi
+elif [ -d "${DEV_DIR}" ]; then
+    bashio::log.info "Ignoring ${DEV_DIR}: dev override only applies to version dev"
 fi
 
 # Model bundles and reference recordings live under /data so Home Assistant's

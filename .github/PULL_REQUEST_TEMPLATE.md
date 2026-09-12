@@ -1,32 +1,28 @@
-## Summary
+## Issue
 
-<!-- Brief description of the changes -->
+<!-- Link it; do not restate it. "Closes #123" or "No issue: <one line>". -->
 
-## Changes
+## Approach
 
--
+<!-- What this change does about it, and why this way. Name the alternatives
+you tried or considered and what rejected them, with the evidence. -->
 
-## Type
+## Verification
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Enhancement
-- [ ] Refactoring
-- [ ] Documentation
-- [ ] CI/CD
-- [ ] Dependencies
-
-## Testing
-
-- [ ] `uv run pytest` passes
 - [ ] `uv run ruff check src tests` clean
 - [ ] `uv run ruff format --check src tests` clean
-- [ ] Manual testing (describe below)
+- [ ] `uv run --with pyright pyright` clean
+- [ ] `uv run pytest -q` passes
 
-<!-- Describe manual testing performed, if any -->
+<!-- Anything beyond the gates: which model, which host, what you listened to
+or measured. Numbers beat adjectives. -->
 
-## Breaking Changes
+## Not verified
 
-<!-- List any breaking changes, or write "None" -->
+<!-- Say plainly what you did not run or could not measure — a model you do
+not have, a host you do not own, a path only ingress exercises. -->
 
-None
+## Blast radius
+
+<!-- Shared code touched, behaviour that changes for existing users, the wire
+(`api_version`), anything a maintainer must judge. "None" is an answer. -->

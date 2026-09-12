@@ -7,7 +7,8 @@ removing a dependency this app does not want in the image:
    call, `torchaudio.load()` in `_load_reference_audio`, and that import alone
    costs ~214 MB resident on a model that is already the heaviest in the
    catalog. It now calls `cortex_speech.audio.decode_reference`, which also
-   levels the recording — see docs/adr/0002 for why that matters here.
+   levels the recording (a hot reference makes this model clip; see
+   `cortex_speech.audio.REFERENCE_RMS_DBFS`).
 2. `text_normalization_pipeline` is gone. It pulls WeTextProcessing and pynini
    to do Traditional-to-Simplified conversion and numeral expansion, which is
    what this app's own `text/` pipeline exists to do. Running both would be two
@@ -543,7 +544,7 @@ class OnnxTtsRuntime(OrtCpuRuntime):
         # this module would import torch. The shared decoder resamples and
         # downmixes the same way, and additionally levels the recording — a
         # reference much hotter than -21 dBFS RMS makes this model generate
-        # hard-clipped audio (docs/adr/0002).
+        # hard-clipped audio.
         target_sample_rate = int(self.codec_meta["codec_config"]["sample_rate"])
         target_channels = int(self.codec_meta["codec_config"]["channels"])
         decoded = decode_reference(

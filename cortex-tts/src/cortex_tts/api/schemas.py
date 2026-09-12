@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field
 
 from cortex_speech import AudioFormat
 
+API_VERSION = 1
+"""Bumped when a route, field or header the integration reads changes shape.
+
+The app's release version says nothing about the wire; this does, and it is
+what a client compares before trusting anything else it reads."""
+
 
 class HealthResponse(BaseModel):
     """Unauthenticated liveness probe."""
@@ -15,6 +21,7 @@ class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     version: str
     server: str = "cortex-tts"
+    api_version: int = API_VERSION
     loaded_models: int
     execution_provider: str
     """What was asked for — `auto`, `cpu` or `cuda`."""
@@ -210,8 +217,14 @@ class SettingsSaved(BaseModel):
     reloaded: bool
     """Whether resident models were dropped to adopt this.
 
-    Thread count, execution provider and how many models stay resident are
-    bound when ONNX Runtime creates a session, so they cannot be adopted by an
-    engine already loaded. True means the next reply pays a rebuild; the rest
-    of the settings are read afresh on every request and are already in force.
+    Thread count and execution provider are bound when ONNX Runtime creates a
+    session, so they cannot be adopted by an engine already loaded. True means
+    the next reply pays a rebuild; the rest of the settings are read afresh on
+    every request and are already in force.
     """
+    ignored: list[str] = []
+    """Fields whose value was not usable and kept what they had.
+
+    One bad number must not discard the model someone chose in another box,
+    so the save goes through — but a caller told "saved" with nothing to say
+    which field was refused has no way to notice. This is that list."""

@@ -1,14 +1,14 @@
 # app-cortex-tts / cortex-tts
 
-On-device text-to-speech for Home Assistant over three ONNX models — the
-[Hojo TTS Light](https://github.com/HojoAI/Hojo-TTS-Light) 40M with fifteen
-built-in voices, its 80M that clones a voice from a few seconds of reference
-audio, and [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano), which
-does both and outputs 48 kHz — served by a FastAPI app with an ingress admin
-UI. The
-models ship no text front-end, so the app carries one: Traditional-to-Simplified
+On-device text-to-speech for Home Assistant, served by a FastAPI app with an
+ingress admin UI. Which models it offers is `catalog.py`, and the README's
+**Models** table is the copy written for people; both are edited in one place
+when the line-up changes, which is the point.
+
+The models ship no text front-end, so the app carries one: Traditional-to-Simplified
 glyph conversion and numeral/unit/date normalisation. That pipeline is the
-product, not a detail (32% character error rate against 4%; see `DOCS.md`).
+product, not a detail (32% character error rate against 4%; see
+[`docs/text-pipeline.md`](cortex-tts/docs/text-pipeline.md)).
 
 The outer directory is the HA app shell + repo metadata; the inner `cortex-tts/`
 subdir is the Python backend, the static admin UI, the Dockerfile and the
@@ -18,12 +18,22 @@ rootfs.
 
 - **Domain vocabulary**: [`cortex-tts/CONTEXT.md`](cortex-tts/CONTEXT.md) — what is
   _Prepared text_? _Segment_ vs _Sentence_? Why is "normalise" two unrelated
-  operations in one request? Which of the three meanings of "streaming"?
+  operations in one request? Which of the four meanings of "streaming"?
 - **Contributor guide**: [`cortex-tts/CONTRIBUTING.md`](cortex-tts/CONTRIBUTING.md)
   — dev setup, gates, PR flow.
 - **User documentation**: [`cortex-tts/DOCS.md`](cortex-tts/DOCS.md) — the HA App
-  Store page: install, configure, troubleshoot.
-- **Release runbook**: workspace-level [`docs/release/`](../docs/release/README.md).
+  Store page: install, configure, troubleshoot. It links out (absolute URLs,
+  because the App Store renders it alone) to the reference pages under
+  [`cortex-tts/docs/`](cortex-tts/docs/): [models](cortex-tts/docs/models.md),
+  [the text pipeline](cortex-tts/docs/text-pipeline.md),
+  [cloned voices](cortex-tts/docs/cloning.md),
+  [keeping up](cortex-tts/docs/streaming.md),
+  [running it elsewhere](cortex-tts/docs/standalone.md) and the
+  [HTTP API](cortex-tts/docs/api.md). The integration's README points at the
+  same pages rather than restating them: model facts live here, once.
+- **Release runbook**: `docs/release/` at the root of the hass-cortex workspace —
+  not in this repo. The catalog it publishes to is
+  [`hass-cortex/repository`](https://github.com/hass-cortex/repository).
 - **Primary consumer**: the [`cortex-tts`](https://github.com/hass-cortex/cortex-tts)
   HACS integration (HA TTS platform). It is required — without it Home
   Assistant has no Cortex TTS platform and the discovery record goes nowhere.
@@ -45,10 +55,12 @@ rootfs.
 ├── images/                    README screenshots
 ├── LICENSE.md                 MIT
 └── cortex-tts/                  ── APP / SOURCE SUBDIR ──
-    ├── config.yaml            HA app metadata (slug=cortex_tts, port=8771, ingress)
+    ├── config.yaml            HA app metadata (slug=cortex_tts, ingress; port 8771 unpublished)
     ├── build.yaml             base image: hassio-addons/debian-base (amd64 only)
     ├── Dockerfile             uv-installed venv baked in; source copied on top
     ├── DOCS.md                HA App Store documentation page
+    ├── docs/                  reference pages DOCS.md and the integration link to
+    ├── scripts/bench_rtf.py   where every rtf_hint comes from (one host, one text set)
     ├── README.md              Supervisor reads this as `long_description`
     ├── CONTEXT.md             domain vocabulary
     ├── CONTRIBUTING.md
@@ -56,7 +68,6 @@ rootfs.
     ├── translations/en.yaml   app configuration-UI translations
     ├── rootfs/                s6-overlay services (init oneshot + cortex-tts main)
     ├── pyproject.toml/uv.lock ruff + pyright + pytest config live here too
-    ├── docs/adr/              architecture decisions (boundary, capabilities)
     ├── src/cortex_speech/     the speech library (see Architecture)
     ├── src/cortex_tts/        the Home Assistant app
     ├── tests/                 pytest; no model weights needed
@@ -68,8 +79,7 @@ rootfs.
 Two packages, one dependency direction. `cortex_speech` is the library and
 knows nothing about Home Assistant, the Supervisor or HTTP; `cortex_tts` is the
 app that serves it and depends on the library through its facade only.
-`tests/test_architecture.py` fails the build if either rule is broken — see
-[`docs/adr/0003`](cortex-tts/docs/adr/0003-speech-library-and-ha-shell-are-separate-packages.md).
+`tests/test_architecture.py` fails the build if either rule is broken.
 
 ```
 src/cortex_tts/       ── THE HOME ASSISTANT APP ──
@@ -131,7 +141,8 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   per-token loop, so the registry serialises calls; concurrency would corrupt
   state, not just slow things down.
 - **At most `max_loaded_models` engines are resident**, least-recently-used
-  evicted. Both bundles at once cost about 2.8 GB.
+  evicted. The 40M beside either 2 GB model costs about 2.8 GB; the 80M and
+  MOSS together about 4 GB.
 - **A bundle may span repositories.** `ModelSpec.sources` is a list;
   MOSS publishes weights and audio codec separately and needs both, and
   `catalog.inspect` reports half a bundle as not downloaded.
@@ -140,21 +151,28 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   by reference id and drops it when the recording's fingerprint changes or
   `forget()` says so. An engine that kept its own would be a second
   invalidation rule, and the first one to diverge is silent — it still produces
-  audio, in the previous voice. See [`docs/adr/0002`](cortex-tts/docs/adr/0002-shared-seams-for-reference-conditioning.md).
+  audio, in the previous voice.
 - **A reference is audio _and_ transcript.** Neither alone defines a voice, and
   a wrong transcript degrades the clone with no error — so it is validated on
   the way in (2–20 s, non-empty, pronounceable).
 - **An addon option is what a restart is the only way to change.** `config.yaml`
   carries the log level and the discovery key, and nothing else; everything a
   user tunes is a stored setting in `preferences.py`, changed in the admin UI
-  and over `PUT /api/settings`. Most take effect on the next request; the three
-  ONNX Runtime binds when it creates a session are adopted by dropping what is
-  resident. The one exception is `num_threads`, whose effect on BLAS and
-  OpenMP is fixed at import and so waits for a restart — which is why
-  `__main__.py` reads the stored settings before anything numeric loads.
-- **Ingress bypasses the API key.** `require_api_key` returns early when the
-  Supervisor's `X-Ingress-Path` header is present; an empty configured key
-  disables the check entirely, which is only sane behind ingress.
+  and over `PUT /api/settings`. Most take effect on the next request — the
+  default temperature travels with every synthesis call, and a smaller
+  resident bound evicts down to it. The two ONNX Runtime binds when it
+  creates a session (threads, execution provider) are adopted by dropping
+  what is resident, and only when they actually changed; `EngineRegistry.reconfigure`
+  decides, not the route. `num_threads` is also only half-adopted that way:
+  its effect on BLAS and OpenMP is fixed at import and waits for a restart —
+  which is why `__main__.py` reads the stored settings before anything
+  numeric loads.
+- **Ingress bypasses the API key, and only ingress.** `deps.is_ingress`
+  requires both the Supervisor's `X-Ingress-Path` header and the Supervisor's
+  peer address (`172.30.32.2`); the header alone is forgeable by anything that
+  can reach the port. The port is not published by default (`ports: null`),
+  and an empty configured key disables the check entirely, which is only sane
+  while it stays that way.
 - **The UI is served with `cache-control: no-cache`.** A hot-deploy swaps files
   under URLs that never change; without revalidation the browser keeps the old
   panel and the deploy looks like it did nothing.
@@ -165,9 +183,9 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   via `notifications.py`; `cortex_tts/events.py` is what turns that into an
   event on the HA bus. Enforced by `tests/test_architecture.py`.
 - **A model declares capabilities, not a category.** `builtin_voices`,
-  `cloning` and `chunk_streaming` are independent, so a model can have bundled
-  voices _and_ clone. `Registry.voices` concatenates both sources rather than
-  choosing. See [`docs/adr/0001`](cortex-tts/docs/adr/0001-capabilities-not-engine-kind.md).
+  `cloning`, `chunk_streaming` and `temperature` are independent, so a model
+  can have bundled voices _and_ clone. `EngineRegistry.voices` concatenates
+  both sources rather than choosing.
 - **A stream has its own level control.** `encode` peak-normalises a finished
   waveform; a stream has none, so `StreamGain` holds a gain that only ever
   falls, far enough to keep each chunk under the same ceiling. Scaling a chunk
@@ -178,8 +196,7 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   header has to declare is read by a general-purpose player as a six-hour file
   it then waits to buffer. FLAC and OGG are refused. `X-Cortex-Bitrate` is sent
   because it is the one measurement that exists before the first sample, and it
-  is what turns a byte count into a duration downstream. See
-  [`docs/adr/0004`](cortex-tts/docs/adr/0004-a-stream-must-not-declare-a-length.md).
+  is what turns a byte count into a duration downstream.
 - **Everything that can fail must fail before the first byte.** Once a header
   is out the status is 200 and an error can only truncate the audio, so
   `/api/speak/stream` resolves the model, the text and the voice up front.
@@ -191,6 +208,10 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   pins them to each other. Disagreeing is silent in the direction that matters:
   a spec claiming the capability without the method makes `/api/speak/stream`
   answer `X-Cortex-Chunk-Streaming: 1` while whole utterances are rendered.
+- **A quantised model is not automatically a fast one.** Check the op types
+  before believing a small INT8 export is fast: a dynamically quantised
+  per-token loop does not scale with threads, and the codec can cost as much
+  as the model. What quantisation reliably buys is memory, not time.
 - **The execution provider is verified, never assumed.** `auto` takes a GPU
   when one answers and the CPU when none does; `cuda` refuses to fall back.
   `onnxruntime.get_available_providers()` is a claim about the build, not a
@@ -215,42 +236,30 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 
 ## Model behaviour worth knowing
 
-**The model stops only when it samples an end-of-speech token**, so stopping
-is a probabilistic event rather than a decision. When the sample goes the other
-way it has to emit something, and invents a syllable. Two things make that far
-more likely:
+The measurements are in [`docs/models.md`](cortex-tts/docs/models.md); what
+matters to the code is:
 
-- **No sentence-final punctuation.** Measured: `客廳的燈已經打開了` produced a
-  stray 「哈」; the same text with a full stop did not. This is why
-  `text/pipeline.py` terminates every segment — the guarantee above is not
-  cosmetic.
-- **A high temperature.** Across five seeds on one phrase, `0.8` produced
-  1.96–2.32 s and a stray sound; `0.0` produced exactly 2.02 s every time and
-  none. Greedy decoding is reproducible and never over-runs, at the cost of
-  flatter delivery. `/api/speak` takes a per-request `temperature` so the two
-  can be compared without touching the app's configuration.
-
-**The model pronounces no Arabic numeral and no symbol at all** — an
-unexpanded digit is not read wrong, it is silent or replaced by an unrelated
-word (`80` came out as "a bay"). This is why normalisation belongs on for every
-language and why the integration must not gate it on the language tag. Reported
-upstream as [Hojo-TTS-Light#7](https://github.com/HojoAI/Hojo-TTS-Light/issues/7).
-
-**Cloning fidelity is capped by the speaker representation, not by the input.**
-`SPEAKER_EMB_SECONDS = 6.0`: `_encode_speaker` reads the first six seconds of a
-reference, pads a shorter clip with silence and discards the rest of a longer
-one, and compresses it to one 2048-value vector. A clone carries the character
-of a voice but not its timbre, and better source audio does not move it.
-`_encode_ref_codes`, by contrast, encodes the _whole_ reference into codec
-tokens that join the prompt for every sentence — so audio past six seconds
-costs time on every synthesis and buys nothing. Not measured against the
-model's own speaker encoder; the conclusion rests on the representation size,
-on our path matching upstream's `generate` step for step, and on references
-that measure clean.
-
-**Neither model takes a language parameter.** The prompt is the text plus a
-speaker slot, so pronunciation comes entirely from the voice. Picking the voice
-is picking the language, and no switch can make an English voice read Chinese.
+- **The model stops only when it samples an end-of-speech token.** Stopping is
+  probabilistic, so `text/pipeline.py` terminates every segment (without a stop
+  the model invented a syllable, measured) and `engine/overrun.py` judges and
+  trims what came back. A high temperature makes over-runs likelier; `0` is
+  greedy and reproducible, which is why `/api/speak` takes a per-request
+  `temperature`.
+- **The model pronounces no Arabic numeral and no symbol at all** — an
+  unexpanded digit is silent or replaced by an unrelated word. Normalisation
+  therefore belongs on for every language, and the integration must not gate
+  it on the language tag. Reported upstream as
+  [Hojo-TTS-Light#7](https://github.com/HojoAI/Hojo-TTS-Light/issues/7).
+- **The 80M's cloning fidelity is capped by its speaker representation.**
+  `SPEAKER_EMB_SECONDS = 6.0`: `_encode_speaker` reads the first six seconds
+  into one 2048-value vector, while `_encode_ref_codes` encodes the whole
+  reference into prompt codes — so audio past six seconds costs time on every
+  synthesis and buys nothing. MOSS has no speaker encoder and conditions on the
+  whole recording. Not measured against the model's own encoder; the
+  conclusion rests on the representation size and on our path matching
+  upstream's `generate` step for step.
+- **No model takes a language parameter.** The prompt is the text plus a
+  speaker slot; picking the voice is picking the language.
 
 ## Build
 
@@ -271,7 +280,7 @@ by `StaticFiles`. Edit and reload.
 ## Testing
 
 ```bash
-uv run pytest -q          # 247 tests, no model weights needed
+uv run pytest -q          # 357 tests, no model weights needed
 ```
 
 `tests/test_text.py` and `tests/test_english.py` pin the text path — the part
@@ -285,35 +294,16 @@ by hand against real bundles.
 
 ## API Endpoints
 
-Everything under `/api` requires the key unless the request came through
-ingress. `/health` never does.
+The endpoint table, request fields, headers and every error code are in
+[`docs/api.md`](cortex-tts/docs/api.md), which is the reference; `/api/docs`
+serves the OpenAPI. Two things the code guarantees and the reference relies on:
 
-| Method | Path                         | Purpose                                                |
-| ------ | ---------------------------- | ------------------------------------------------------ |
-| GET    | `/health`                    | liveness; version + resident model count               |
-| GET    | `/api/defaults`              | the configured default model and voice                 |
-| GET    | `/api/settings`              | every stored setting, as it is now in force            |
-| PUT    | `/api/settings`              | change some of them; omitted fields keep their value   |
-| GET    | `/api/models`                | catalog + per-model state (downloaded/loaded/progress) |
-| POST   | `/api/models/{id}/download`  | start a download; poll `/api/models`                   |
-| DELETE | `/api/models/{id}`           | remove the bundle from disk                            |
-| POST   | `/api/models/{id}/load`      | make it resident                                       |
-| POST   | `/api/models/{id}/unload`    | evict it                                               |
-| GET    | `/api/voices`                | voices across downloaded models, or one model's        |
-| POST   | `/api/preview`               | run the text path only; no model is loaded             |
-| POST   | `/api/speak`                 | synthesise; returns WAV with `X-Cortex-*` headers      |
-| POST   | `/api/speak/stream`          | the same, sent as it is produced (chunked MP3)         |
-| POST   | `/v1/audio/speech`           | the same, OpenAI-shaped                                |
-| GET    | `/api/references`            | cloned-voice reference recordings                      |
-| POST   | `/api/references`            | add one (multipart: audio + transcript + metadata)     |
-| PATCH  | `/api/references/{id}`       | correct a transcript                                   |
-| DELETE | `/api/references/{id}`       | remove it, and the voice it defined                    |
-| GET    | `/api/references/{id}/audio` | play the recording back                                |
-
-`/api/speak` answers with the synthesis measurements in headers —
-`X-Cortex-Audio-Seconds`, `X-Cortex-Inference-Ms`, `X-Cortex-Rtf`, `X-Cortex-Segments`
-— which is what the integration's diagnostic sensors report. Full OpenAPI at
-`/api/docs`.
+- **Every error body is `{"code", "message"}`** — what a route raised, what the
+  router could not match (404 on an unknown path) and what pydantic refused
+  (422). `app.py` installs both handlers so a client parses one shape.
+- **`/health` carries `api_version`**, bumped when a route, field or header the
+  integration reads changes shape; the release version says nothing about the
+  wire. The integration refuses to set up on a mismatch.
 
 ## Home Assistant Discovery
 
@@ -326,13 +316,18 @@ runs with an empty key and no discovery.
 
 ## Live voice sync (HA event)
 
-Downloading a model or adding, editing or deleting a reference recording
-changes which voices exist. The library calls `notifications.notify_models_changed`;
-the app subscribes at startup and `events.fire_models_changed` puts one event on
-the HA bus, and the integration adds or removes entities in place — so a voice
-uploaded in the admin UI is selectable in a pipeline seconds later without a
-config-entry reload or a restart. The split matters: the library states the
-fact, the app decides that Home Assistant is who hears it.
+Downloading or deleting a model and adding or deleting a reference recording
+change which voices exist, and each ends in `events.fire_models_changed`
+putting one event on the HA bus; the integration adds or removes entities in
+place, so a voice uploaded in the admin UI is selectable in a pipeline seconds
+later without a config-entry reload or a restart. Two paths reach that event.
+Download completion is the library's: `download.py` calls
+`notifications.notify_models_changed` and the app subscribes at startup. The
+three routes — reference add, reference delete, model delete — call
+`fire_models_changed` from the app directly. `PATCH /api/references/{id}` fires
+nothing: a corrected transcript changes no voice id. The split still matters
+where it exists: the library states a fact, the app decides that Home Assistant
+is who hears it.
 
 ## How To
 
@@ -382,7 +377,8 @@ amd64 only, matching the published ONNX Runtime builds — and dispatches an
 update to the catalog. Stable is
 [`hass-cortex/repository`](https://github.com/hass-cortex/repository); beta is
 `repository-beta`, and a semver pre-release tag (`0.2.0-beta.1`) routes there
-only. See [`docs/release/`](../docs/release/README.md).
+only. The runbook is `docs/release/` at the root of the hass-cortex workspace,
+outside this repo.
 
 ### Release tags
 

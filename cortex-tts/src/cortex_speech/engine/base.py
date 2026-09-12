@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -102,8 +102,11 @@ class StreamingEngine(Protocol):
 
     def synthesize_stream(
         self, segments: list[str], voice: str
-    ) -> Iterator[np.ndarray]:
+    ) -> Generator[np.ndarray, None, None]:
         """Yield mono float32 chunks in playback order.
+
+        A generator rather than a plain iterator: the registry closes it when
+        the consumer stops early, and the engine must stop rendering then.
 
         Chunks are not padded or aligned to segment boundaries; a consumer that
         needs whole segments should use `Engine.synthesize` instead. The caller

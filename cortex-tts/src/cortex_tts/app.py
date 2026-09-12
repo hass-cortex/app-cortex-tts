@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from cortex_speech import (
     BY_ID,
@@ -125,14 +128,21 @@ async def lifespan(app: FastAPI):
         )
 
     await discovery.announce(port=settings.port, api_key=settings.api_key)
+    preload: asyncio.Task[None] | None = None
     if prefs.preload:
         # Off the critical path: the port should accept connections while a
         # multi-hundred-megabyte bundle is still being mapped into memory.
-        asyncio.create_task(_preload(state))
+        # Held, so the loop cannot collect it half-way, and cancelled at
+        # shutdown so it cannot load into a registry being emptied.
+        preload = asyncio.create_task(_preload(state))
 
     yield
 
     unsubscribe()
+    if preload is not None and not preload.done():
+        preload.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await preload
     for model_id in list(state.registry.loaded_ids):
         await state.registry.unload(model_id)
 
@@ -149,15 +159,30 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json",
     )
 
-    @app.exception_handler(HTTPException)
-    async def _http_error(_: Request, exc: HTTPException) -> JSONResponse:
-        """Render errors in one shape whether raised with a dict or a string."""
+    # Every error the API sends is `{"code", "message"}`: what a route raised,
+    # what the router could not match, and what pydantic refused. A client
+    # parses one shape or it parses none of them.
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:
         detail = exc.detail
         if isinstance(detail, dict) and "code" in detail:
             body = detail
         else:
             body = {"code": "ERROR", "message": str(detail)}
         return JSONResponse(status_code=exc.status_code, content=body)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(
+        _: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in err.get('loc', ()) if part != 'body')}: "
+            f"{err.get('msg', 'invalid')}"
+            for err in exc.errors()
+        )
+        return JSONResponse(
+            status_code=422, content={"code": "VALIDATION", "message": problems}
+        )
 
     app.include_router(public)
     app.include_router(api)

@@ -221,7 +221,14 @@ class EngineRegistry:
             slot.last_used = time.monotonic()
             engine = slot.engine
             if not isinstance(engine, StreamingEngine):
-                synthesis = await asyncio.to_thread(engine.synthesize, segments, voice)
+                synthesis = await asyncio.to_thread(
+                    partial(
+                        engine.synthesize,
+                        segments,
+                        voice,
+                        temperature=self._temperature,
+                    )
+                )
                 yield synthesis.audio
                 return
 
@@ -234,8 +241,14 @@ class EngineRegistry:
             def pull() -> np.ndarray | None:
                 return next(chunks, None)
 
-            while (chunk := await asyncio.to_thread(pull)) is not None:
-                yield chunk
+            try:
+                while (chunk := await asyncio.to_thread(pull)) is not None:
+                    yield chunk
+            finally:
+                # A consumer that stops early (a closed connection) must
+                # stop the engine's render too, and its cleanup joins a
+                # thread, so it does not belong on the event loop.
+                await asyncio.to_thread(chunks.close)
 
     async def synthesize(
         self,
@@ -245,8 +258,14 @@ class EngineRegistry:
         *,
         temperature: float | None = None,
     ) -> Synthesis:
-        """Render text with a model, loading and serialising as needed."""
+        """Render text with a model, loading and serialising as needed.
+
+        The registry's default temperature is passed explicitly, so a resident
+        engine adopts a changed default without being rebuilt.
+        """
         slot = await self.acquire(model_id)
+        if temperature is None:
+            temperature = self._temperature
         async with slot.lock:
             slot.last_used = time.monotonic()
             return await asyncio.to_thread(
@@ -268,29 +287,41 @@ class EngineRegistry:
         temperature: float | None = None,
         execution_provider: ExecutionProvider | None = None,
     ) -> bool:
-        """Change what the next engine is built with, and drop what is loaded.
+        """Change the settings, dropping only what cannot adopt them.
 
         Thread count and execution provider are bound when ONNX Runtime
-        creates a session, so a resident engine cannot adopt them. Rather than
-        pretend otherwise — or make the user restart — the resident engines are
-        unloaded and the next request pays a rebuild.
+        creates a session, so when either changes every resident engine is
+        unloaded and the next request pays a rebuild. The default temperature
+        travels with each call and needs nothing dropped; a smaller resident
+        bound evicts the least recently used down to it.
 
         Returns:
             Whether anything was unloaded, which is what the caller reports as
             "this takes effect on the next reply" rather than "now".
         """
-        if num_threads is not None:
+        rebuild = False
+        if num_threads is not None and num_threads != self._num_threads:
             self._num_threads = num_threads
+            rebuild = True
+        if (
+            execution_provider is not None
+            and execution_provider != self._execution_provider
+        ):
+            self._execution_provider = execution_provider
+            rebuild = True
         if max_loaded is not None:
             self._max_loaded = max(1, max_loaded)
         if temperature is not None:
             self._temperature = temperature
-        if execution_provider is not None:
-            self._execution_provider = execution_provider
 
         dropped = False
-        for model_id in list(self._slots):
-            dropped |= await self.unload(model_id)
+        if rebuild:
+            for model_id in list(self._slots):
+                dropped |= await self.unload(model_id)
+            return dropped
+        while len(self._slots) > self._max_loaded:
+            victim_id = min(self._slots, key=lambda k: self._slots[k].last_used)
+            dropped |= await self.unload(victim_id)
         return dropped
 
     @property

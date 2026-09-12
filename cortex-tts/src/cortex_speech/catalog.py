@@ -64,9 +64,13 @@ class ModelSpec:
         size_mb: Approximate on-disk size once downloaded.
         languages: Base language codes the model was trained on.
         sample_rate: Output sample rate in Hz.
-        rtf_hint: Measured real-time factor on a modern desktop core, shown
-            in the UI so the cost difference between models is visible before
-            downloading rather than after.
+        rtf_hint: Real-time factor measured on the project's reference host
+            — a 4-core Home Assistant OS VM (KVM), two threads, CPU — with the
+            one Chinese text set in `scripts/bench_rtf.py`, so the figures are
+            comparable with each other. The median over four sentence lengths.
+            Shown in the UI so the cost difference between models is visible
+            before downloading; a user's own host is read from the
+            integration's sensor, never from this.
         rss_hint_mb: Approximate resident memory once loaded.
     """
 
@@ -116,7 +120,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         languages=("zh", "en"),
         builtin_voices=True,
         temperature=True,
-        rtf_hint=0.21,
+        rtf_hint=0.67,
         rss_hint_mb=780,
         recommended=True,
     ),
@@ -143,7 +147,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         languages=("zh", "en"),
         cloning=True,
         temperature=True,
-        rtf_hint=0.79,
+        rtf_hint=1.42,
         rss_hint_mb=2050,
     ),
     ModelSpec(
@@ -192,9 +196,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         cloning=True,
         chunk_streaming=True,
         sample_rate=48000,
-        # Measured at two threads on a desktop core, then scaled by the ratio
-        # that the 40M's own production figure gives against the same machine.
-        rtf_hint=0.35,
+        rtf_hint=1.06,
         rss_hint_mb=1990,
     ),
 )

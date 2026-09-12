@@ -5,26 +5,40 @@
 [![GitHub License](https://img.shields.io/github/license/hass-cortex/app-cortex-tts)](https://github.com/hass-cortex/app-cortex-tts/blob/main/LICENSE.md)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hass-cortex/app-cortex-tts)
 
-Home Assistant app providing on-device text-to-speech on the
-[Hojo TTS Light](https://github.com/HojoAI/Hojo-TTS-Light) ONNX models — the
-40M with fifteen built-in voices, and the 80M that clones a voice from a few
-seconds of reference audio. CPU only; no cloud, no per-character bill.
+Home Assistant app providing on-device text-to-speech: three ONNX models on
+CPU, with built-in voices or one cloned from a short recording, and the
+Chinese text front-end none of the models ship. No cloud, no per-character
+bill.
 
 ## Features
 
-- **Runs on your hardware** — CPU only, no cloud, no API key, no
-  per-character bill.
-- **Fifteen built-in voices** on the 40M, Chinese and English, or clone one on
-  the 80M from a few seconds of reference audio.
+- **Runs on your hardware** — inference happens locally, on the CPU or on a
+  GPU where one answers. No cloud, no API key, no per-character bill.
+- **Built-in voices, or your own** — two of the three models clone a voice
+  from a short reference recording, and a recording is the same voice on every
+  model that can.
 - **The text pipeline the models lack** — Traditional-to-Simplified conversion
-  and number, unit, date and clock expansion, without which this model is
+  and number, unit, date and clock expansion, without which they are
   unintelligible for Chinese.
 - **An admin UI that shows its work** — the prepared text and a ledger of
   every rewrite, beside the composer.
-- **Speaks sentence by sentence**, so a long reply starts playing after its
-  first sentence rather than its last.
+- **Streaming is per model, and off until you ask** — one fast enough to
+  outrun the speaker can start on the opening sentences; a slower one is
+  buffered on purpose, because a stream that falls behind stutters.
 - **Discovered by Home Assistant** through the Supervisor, so the companion
   integration needs no address or key typed in.
+
+## Models
+
+| Model                                                          | Voices                            | Languages  |
+| -------------------------------------------------------------- | --------------------------------- | ---------- |
+| [Hojo TTS Light 40M](https://github.com/HojoAI/Hojo-TTS-Light) | 15 built in (2 zh, 13 en)         | zh, en     |
+| [Hojo TTS Light 80M](https://github.com/HojoAI/Hojo-TTS-Light) | clones only                       | zh, en     |
+| [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano)     | 18 built in (6 zh) **and** clones | zh, en, ja |
+
+Nothing is baked into the image; each is downloaded from the app's own UI on
+first use. What each costs, how each clones and which to pick is
+[docs/models.md](cortex-tts/docs/models.md).
 
 ## Admin UI
 
@@ -53,60 +67,33 @@ image.
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hass-cortex&repository=cortex-tts&category=integration)
 
-It lives in [hass-cortex/cortex-tts][integration] and Home Assistant has no Hojo
-TTS platform without it: no integration, no discovery card, and no voices in
+It lives in [hass-cortex/cortex-tts][integration] and Home Assistant has no
+Cortex TTS platform without it: no integration, no discovery card, and no voices in
 the pipeline picker. Restart Home Assistant after adding it, and the running
 app is then discovered by itself.
 
-See [cortex-tts/DOCS.md](cortex-tts/DOCS.md) for the rest — configuration,
-cloned voices and troubleshooting.
+The App Store page, [cortex-tts/DOCS.md](cortex-tts/DOCS.md), has the rest:
+configuration, settings and troubleshooting.
 
 [integration]: https://github.com/hass-cortex/cortex-tts
 
-## The text pipeline is the point
+## Documentation
 
-The models ship no text handling, and for Chinese that is the difference
-between a voice and noise. Measured on this app's own test set: Traditional
-glyphs sent straight to the model score a 32% character error rate against 4%
-once converted to Simplified, and unnormalised sensor text — `26.5°C`,
-`14:35`, `68%` — lands between 36% and 50%.
-
-So the app carries what the models lack:
-
-- **Traditional → Simplified** glyph conversion (`t2s`, glyph-only, so
-  Taiwanese wording survives).
-- **Normalisation** of numbers, units, dates and clock literals into spoken
-  Chinese: `26.5°C` becomes `攝氏二十六點五度`.
-
-Both run before synthesis, in that order — normalisation emits Traditional
-number words, so it has to precede the pass that makes them pronounceable.
-
-Each is a request flag: the caller decides _whether_ a pass runs, and the
-Home Assistant integration, which knows the language, sets the defaults. What
-the app does infer is narrower — which script to spell numbers in, from the
-dominant script of the text itself, because "48" has to become "forty-eight"
-in an English sentence and 四十八 in a Chinese one and no flag carries that.
-
-## Contributing
-
-Issues and pull requests are welcome.
-
-- [`cortex-tts/CONTRIBUTING.md`](cortex-tts/CONTRIBUTING.md) — dev setup, the four
-  gates, and the commit convention.
-- [`AGENTS.md`](AGENTS.md) — the module tree, the cross-module guarantees, and
-  the endpoint reference.
-- [`cortex-tts/CONTEXT.md`](cortex-tts/CONTEXT.md) — the domain vocabulary both of
-  those use. Worth reading before naming anything: most nouns here already
-  mean two things.
+| Page                                                  | What it covers                                                   |
+| ----------------------------------------------------- | ---------------------------------------------------------------- |
+| [Models](cortex-tts/docs/models.md)                   | The line-up, what each costs, how each clones, which to pick     |
+| [The text pipeline](cortex-tts/docs/text-pipeline.md) | Why Traditional Chinese and numbers are rewritten, and into what |
+| [Cloned voices](cortex-tts/docs/cloning.md)           | The recording, the transcript, the name                          |
+| [Keeping up](cortex-tts/docs/streaming.md)            | Buffered, streamed, and the sensors that decide it               |
+| [Running it elsewhere](cortex-tts/docs/standalone.md) | A faster CPU or a GPU outside Home Assistant OS                  |
+| [HTTP API](cortex-tts/docs/api.md)                    | Using the app without the integration                            |
+| [App Store page](cortex-tts/DOCS.md)                  | Install, configure, troubleshoot                                 |
 
 ## Acknowledgements
 
-- [Hojo TTS Light](https://github.com/HojoAI/Hojo-TTS-Light) — the ONNX
-  models this app serves.
-- [OpenCC](https://github.com/BYVoid/OpenCC) — the Traditional/Simplified
-  conversion.
-- [sentence-stream](https://github.com/OHF-Voice/sentence-stream) — the
-  sentence splitter Home Assistant's own streaming engines use.
+- [Hojo TTS Light](https://github.com/HojoAI/Hojo-TTS-Light) and
+  [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) — the ONNX models
+  this app serves.
 
 ## License
 

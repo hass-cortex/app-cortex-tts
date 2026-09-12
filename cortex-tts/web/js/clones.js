@@ -1,8 +1,8 @@
-// Cloned voices: the recordings the 80M model speaks with, and the
+// Cloned voices: the recordings every cloning model speaks with, and the
 // transcripts that tell it which sounds map to which text.
 
-import { api, call, json } from "./api.js";
-import { $, esc, msg } from "./dom.js";
+import { call, json } from "./api.js";
+import { $, confirmStep, esc, msg } from "./dom.js";
 import { play } from "./player.js";
 import { refreshVoices } from "./models.js";
 
@@ -16,6 +16,10 @@ function autoGrow(box) {
 // What each transcript looked like when it was rendered, so Save only lights
 // up on a real change and a failed save can be retried.
 const saved = new Map();
+// Voices whose Delete awaits its second click.
+const armed = new Set();
+
+const deleteLabel = (id) => (armed.has(id) ? "Confirm delete" : "Delete");
 
 const row = (r) => `
   <div class="ref">
@@ -25,12 +29,12 @@ const row = (r) => `
       <span class="ref-meta">${Number(r.seconds).toFixed(1)}s · ${esc(r.language)}</span>
     </div>
     <textarea class="tr-edit" data-ref-tr="${esc(r.id)}" rows="1"
-      spellcheck="false">${esc(r.raw_transcript)}</textarea>
-    <div class="tr-hint" data-base="tr-hint" data-ref-hint="${esc(r.id)}"></div>
+      aria-label="Transcript of ${esc(r.name)}" spellcheck="false">${esc(r.raw_transcript)}</textarea>
+    <div class="tr-hint" data-base="tr-hint" data-ref-hint="${esc(r.id)}" aria-live="polite"></div>
     <div class="actions">
       <button class="sm" data-ref-play="${esc(r.id)}">Play</button>
       <button class="sm" data-ref-save="${esc(r.id)}" disabled>Save transcript</button>
-      <button class="sm danger" data-ref-del="${esc(r.id)}">Delete</button>
+      <button class="sm danger" data-ref-del="${esc(r.id)}">${deleteLabel(r.id)}</button>
     </div>
   </div>`;
 
@@ -46,6 +50,7 @@ export async function refresh() {
 
 const hintFor = (id) => $("refs").querySelector(`[data-ref-hint="${id}"]`);
 const boxFor = (id) => $("refs").querySelector(`textarea[data-ref-tr="${id}"]`);
+const deleteFor = (id) => $("refs").querySelector(`button[data-ref-del="${id}"]`);
 
 async function saveTranscript(button) {
   const id = button.dataset.refSave;
@@ -66,6 +71,22 @@ async function saveTranscript(button) {
     msg(hintFor(id), `Saved. The model is told: ${body.transcript}`, "ok");
   } catch (err) {
     msg(hintFor(id), err.message, "err");
+    button.disabled = false;
+  }
+}
+
+async function remove(button) {
+  const id = button.dataset.refDel;
+  const relabel = () => { const b = deleteFor(id); if (b) b.textContent = deleteLabel(id); };
+  if (!confirmStep(armed, id, relabel)) return;
+  relabel();
+  button.disabled = true;
+  try {
+    await call(`/references/${id}`, { method: "DELETE" });
+    await refresh();
+    await refreshVoices();
+  } catch (err) {
+    msg($("refMsg"), err.message, "err");
     button.disabled = false;
   }
 }
@@ -109,10 +130,14 @@ export function init() {
     msg(hintFor(id), "");
   });
 
-  $("refs").addEventListener("click", async (e) => {
+  $("refs").addEventListener("click", (e) => {
     const playBtn = e.target.closest("button[data-ref-play]");
     if (playBtn) {
-      play(api(`/references/${playBtn.dataset.refPlay}/audio`));
+      // Fetched rather than handed to <audio> as a URL, so the key travels.
+      call(`/references/${playBtn.dataset.refPlay}/audio`)
+        .then((res) => res.blob())
+        .then((blob) => play(URL.createObjectURL(blob), { revokable: true }))
+        .catch((err) => msg($("refMsg"), err.message, "err"));
       $("stats").textContent = "";
       return;
     }
@@ -121,14 +146,7 @@ export function init() {
     if (save) return saveTranscript(save);
 
     const del = e.target.closest("button[data-ref-del]");
-    if (!del || !confirm("Delete this cloned voice?")) return;
-    try {
-      await call(`/references/${del.dataset.refDel}`, { method: "DELETE" });
-      await refresh();
-      await refreshVoices();
-    } catch (err) {
-      msg($("refMsg"), err.message, "err");
-    }
+    if (del && !del.disabled) return remove(del);
   });
 
   $("refAdd").addEventListener("click", add);

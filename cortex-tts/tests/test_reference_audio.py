@@ -2,7 +2,7 @@
 
 A hot reference makes a cloning model generate clipped speech, and the clipping
 is baked into the samples the model produces — the output stage cannot undo it.
-So the level is fixed on the way in. See docs/adr/0002.
+So the level is fixed on the way in.
 """
 
 from __future__ import annotations

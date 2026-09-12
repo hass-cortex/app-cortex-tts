@@ -50,9 +50,16 @@ from .providers import (
     ExecutionProvider,
     ProviderUnavailableError,
 )
-from .references import Reference, ReferenceError, ReferenceStore
+from .references import (
+    MAX_SECONDS as MAX_REFERENCE_SECONDS,
+)
+from .references import (
+    Reference,
+    ReferenceError,
+    ReferenceStore,
+)
 from .text.options import NormalizeOptions
-from .text.pipeline import TextOptions, prepare
+from .text.pipeline import TextOptions, prepare, prepared_text
 
 __all__ = [
     "SpeechConfig",
@@ -70,6 +77,7 @@ __all__ = [
     # references
     "Reference",
     "ReferenceStore",
+    "MAX_REFERENCE_SECONDS",
     # downloads
     "DownloadManager",
     "DownloadProgress",
@@ -87,6 +95,7 @@ __all__ = [
     "TextOptions",
     "NormalizeOptions",
     "prepare",
+    "prepared_text",
     # notifications
     "EXECUTION_PROVIDERS",
     "ExecutionProvider",

@@ -21,7 +21,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from .text.pipeline import TextOptions, prepare
+from .text.pipeline import TextOptions, prepare, prepared_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -177,6 +177,11 @@ class ReferenceStore:
         """
         if not transcript.strip():
             raise ReferenceError("a reference needs the transcript of what is said")
+        # Validated before anything is written: a wrong transcript degrades
+        # the clone with no error, and a rejected upload must leave no file.
+        prepared = prepared_text(prepare(transcript, TextOptions()))
+        if not prepared:
+            raise ReferenceError("the transcript has no pronounceable content")
 
         samples, sample_rate = _decode(audio)
         seconds = len(samples) / sample_rate
@@ -193,8 +198,6 @@ class ReferenceStore:
         reference_id = self._unique_id(slugify(name))
         audio_path = self._root / f"{reference_id}.wav"
         sf.write(audio_path, samples, sample_rate, subtype="PCM_16")
-
-        prepared = "".join(prepare(transcript, TextOptions()))
         fingerprint = _fingerprint(audio_path)
 
         reference = Reference(
@@ -241,7 +244,7 @@ class ReferenceStore:
         if not transcript.strip():
             raise ReferenceError("a reference needs the transcript of what is said")
 
-        prepared = "".join(prepare(transcript, TextOptions()))
+        prepared = prepared_text(prepare(transcript, TextOptions()))
         if not prepared:
             raise ReferenceError("the transcript has no pronounceable content")
 

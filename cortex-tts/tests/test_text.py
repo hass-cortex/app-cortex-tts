@@ -10,10 +10,21 @@ from __future__ import annotations
 
 import pytest
 
-from cortex_speech.engine.overrun import trim_trailing_babble
+from cortex_speech.engine.overrun import (
+    expected_seconds,
+    looks_truncated,
+    trim_trailing_babble,
+)
 from cortex_speech.text.normalize import NormalizeOptions, normalize
 from cortex_speech.text.numbers import cardinal, decimal, digit_string
-from cortex_speech.text.pipeline import TextOptions, prepare, segment, to_simplified
+from cortex_speech.text.pipeline import (
+    TextOptions,
+    is_chinese,
+    prepare,
+    prepared_text,
+    segment,
+    to_simplified,
+)
 
 
 class TestNumbers:
@@ -295,14 +306,14 @@ class TestTrailingBabble:
     def test_invented_tail_is_dropped(self) -> None:
         # The measured shape of the "好了" failure.
         audio = self._clip([(0.1, 0.75), (1.0, 1.55)], 2.06)
-        trimmed = trim_trailing_babble(audio, self.SR, characters=2)
+        trimmed = trim_trailing_babble(audio, self.SR, "好" * 2)
 
         assert len(trimmed) / self.SR < 1.0
 
     def test_speech_matching_the_text_is_untouched(self) -> None:
         # 8 chars needs ~1.8 s; this clip delivers it in one run.
         audio = self._clip([(0.05, 1.8)], 1.9)
-        trimmed = trim_trailing_babble(audio, self.SR, characters=8)
+        trimmed = trim_trailing_babble(audio, self.SR, "好" * 8)
 
         assert len(trimmed) == len(audio)
 
@@ -310,7 +321,7 @@ class TestTrailingBabble:
         # 60 chars needs ~13 s. Three clauses with real pauses between them
         # must all be kept — the clip does not overrun, so nothing is cut.
         audio = self._clip([(0.1, 4.5), (4.9, 9.0), (9.4, 13.5)], 13.8)
-        trimmed = trim_trailing_babble(audio, self.SR, characters=60)
+        trimmed = trim_trailing_babble(audio, self.SR, "好" * 60)
 
         assert len(trimmed) == len(audio)
 
@@ -318,7 +329,7 @@ class TestTrailingBabble:
         # Even wildly over-long, what is kept still covers the bulk of the
         # text — the estimate is loose, so the floor is only a backstop.
         audio = self._clip([(0.1, 2.5), (3.0, 4.0), (4.5, 6.0)], 6.2)
-        trimmed = trim_trailing_babble(audio, self.SR, characters=10)
+        trimmed = trim_trailing_babble(audio, self.SR, "好" * 10)
 
         assert len(trimmed) / self.SR >= (10 / 4.5) * 0.7
 
@@ -327,9 +338,35 @@ class TestTrailingBabble:
         # estimate — then a 0.34 s pause and an invented syllable. Anchoring
         # the floor on the estimate itself would have kept the tail.
         audio = self._clip([(0.14, 1.04), (1.38, 1.66)], 1.74)
-        trimmed = trim_trailing_babble(audio, self.SR, characters=5)
+        trimmed = trim_trailing_babble(audio, self.SR, "好" * 5)
 
         assert len(trimmed) / self.SR < 1.2
+
+
+class TestTruncationJudge:
+    """The judge measures against the script's speaking rate, not Mandarin's.
+
+    A 61-character English sentence takes about 4.4 s; judged at the Mandarin
+    rate it would need 8.1 s and every English segment would be rendered
+    three times and returned from the last seed.
+    """
+
+    ENGLISH = "The living room lights are on and the thermostat is set to warm."
+
+    def test_english_at_its_own_pace_is_not_truncated(self) -> None:
+        assert len(self.ENGLISH) > 20
+        assert not looks_truncated(self.ENGLISH, 4.4)
+
+    def test_english_that_stopped_early_still_is(self) -> None:
+        assert looks_truncated(self.ENGLISH, 1.5)
+
+    def test_chinese_keeps_the_mandarin_rate(self) -> None:
+        text = "客廳的燈已經打開了，恆溫器也設定為暖房模式，晚安。"
+        assert expected_seconds(text) == len(text) / 4.5
+        assert looks_truncated(text, 2.0)
+
+    def test_short_text_is_never_judged(self) -> None:
+        assert not looks_truncated("好了。", 0.1)
 
 
 class TestSentenceTermination:
@@ -391,3 +428,94 @@ class TestSentenceTermination:
             "Turn on the lights",
             TextOptions(normalize_text=False, convert_script=False),
         ) == ["Turn on the lights."]
+
+
+class TestNumbersNextToChinese:
+    """Home Assistant emits 現在是14:35, not 現在是 14:35.
+
+    `\\b` is not a boundary between a CJK character and a digit (both are
+    word characters to `re`), so every construct has to find its edges
+    without it.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("現在是14:35", "現在是十四點三十五分"),
+            ("日期2026-09-12", "日期二零二六年九月十二日"),
+            ("用了3.5kWh", "用了三點五度電"),
+            ("電壓12V的電池", "電壓十二伏特的電池"),
+            ("速度30km/h的風", "速度三十公里每小時的風"),
+            ("版本2.3", "版本二點三"),
+            ("v2.3", "v二點三"),
+            ("下午3:05分", "下午三點零五分"),
+        ],
+    )
+    def test_constructs_touching_chinese(self, raw: str, expected: str) -> None:
+        assert normalize(raw) == expected
+
+    def test_a_word_ending_in_v_is_not_a_version_lead(self) -> None:
+        assert normalize("電視TV 12台") == "電視TV 十二台"
+
+
+class TestRanges:
+    """A dash between two numbers is a span, and the unit covers both."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("25-30°C", "攝氏二十五到三十度"),
+            ("10-20%", "百分之十到二十"),
+            ("1-2kWh", "一到二度電"),
+            ("25 ~ 30度", "二十五到三十度"),
+            ("-5°C", "攝氏負五度"),
+        ],
+    )
+    def test_range_with_unit(self, raw: str, expected: str) -> None:
+        assert normalize(raw) == expected
+
+
+class TestSeparatorsAndSeconds:
+    def test_thousands_separator_is_not_a_pause(self) -> None:
+        assert normalize("用了1,234度電") == "用了一千二百三十四度電"
+
+    def test_a_whole_hour_with_seconds_says_its_minutes(self) -> None:
+        assert normalize("14:00:30") == "十四點零分三十秒"
+
+    def test_an_impossible_clock_is_left_alone(self) -> None:
+        assert "點" not in normalize("99:99")
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (100000001, "一億零一"),
+            (10026, "一萬零二十六"),
+            (1000000000001, "一兆零一"),
+        ],
+    )
+    def test_one_zero_per_gap(self, value: int, expected: str) -> None:
+        assert cardinal(value) == expected
+
+
+class TestPreparedText:
+    def test_latin_segments_get_their_space_back(self) -> None:
+        assert prepared_text(["One sentence.", "Two."]) == "One sentence. Two."
+
+    def test_cjk_segments_join_bare(self) -> None:
+        assert prepared_text(["第一句。", "第二句。"]) == "第一句。第二句。"
+
+
+class TestDominantScript:
+    """漢字 and kana vote; punctuation only breaks a tie."""
+
+    def test_a_latin_word_beside_a_chinese_stop_is_latin(self) -> None:
+        assert not is_chinese("Done。")
+        assert not is_chinese("14:35")
+
+    def test_a_bare_reading_follows_its_stop(self) -> None:
+        assert is_chinese("123。")
+        assert prepare("80%。") == ["百分之八十。"]
+        assert prepare("80%.") == ["eighty percent."]
+
+    def test_kana_counts(self) -> None:
+        assert is_chinese("はい、元気です。")

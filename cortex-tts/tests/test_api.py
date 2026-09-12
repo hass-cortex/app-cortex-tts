@@ -53,12 +53,34 @@ class TestAuth:
             == 200
         )
 
-    def test_ingress_requests_skip_the_key(self, client: TestClient) -> None:
+    def test_ingress_requests_skip_the_key(self, ingress_client: TestClient) -> None:
         # Behind ingress the Supervisor has already authenticated the user.
-        response = client.get(
+        response = ingress_client.get(
             "/api/models", headers={"X-Ingress-Path": "/api/hassio_ingress/x"}
         )
         assert response.status_code == 200
+
+    def test_ingress_header_from_another_peer_is_not_ingress(
+        self, client: TestClient
+    ) -> None:
+        """The header is free to forge; the Supervisor's address is not."""
+        response = client.get(
+            "/api/models", headers={"X-Ingress-Path": "/api/hassio_ingress/x"}
+        )
+        assert response.status_code == 401
+
+    def test_supervisor_peer_without_the_header_still_needs_the_key(
+        self, ingress_client: TestClient
+    ) -> None:
+        assert ingress_client.get("/api/models").status_code == 401
+
+    def test_non_ascii_token_is_rejected_not_a_server_error(
+        self, client: TestClient
+    ) -> None:
+        response = client.get(
+            "/api/models", headers={"Authorization": "Bearer kéy".encode("latin-1")}
+        )
+        assert response.status_code == 401
 
 
 class TestDefaults:
@@ -310,3 +332,82 @@ class TestSettingsEndpoint:
     def test_it_needs_auth(self, client: TestClient) -> None:
         assert client.get("/api/settings").status_code == 401
         assert client.put("/api/settings", json={}).status_code == 401
+
+
+class TestErrorShape:
+    """Every error is `{"code", "message"}`, whoever raised it."""
+
+    def test_validation_errors_use_the_shape(self, client: TestClient) -> None:
+        response = client.post("/api/speak", headers=AUTH, json={"text": ""})
+        assert response.status_code == 422
+        body = response.json()
+        assert body["code"] == "VALIDATION"
+        assert "text" in body["message"]
+
+    def test_unknown_routes_use_the_shape(self, client: TestClient) -> None:
+        response = client.get("/api/nope", headers=AUTH)
+        assert response.status_code == 404
+        assert set(response.json()) == {"code", "message"}
+
+
+class TestHealthContract:
+    def test_health_carries_the_api_version(self, client: TestClient) -> None:
+        assert client.get("/health").json()["api_version"] == 1
+
+
+class TestSettingsReporting:
+    def test_a_refused_field_is_named(self, client: TestClient) -> None:
+        response = client.put(
+            "/api/settings",
+            headers=AUTH,
+            json={"execution_provider": "tpu", "temperature": 0.5},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ignored"] == ["execution_provider"]
+        assert body["settings"]["execution_provider"] == "auto"
+        assert body["settings"]["temperature"] == 0.5
+
+
+class TestDeletingAModel:
+    def test_refused_while_its_download_runs(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state = client.app.state.cortex  # type: ignore[attr-defined]
+        monkeypatch.setattr(state.downloads, "is_running", lambda model_id: True)
+        response = client.delete("/api/models/hojo-40m", headers=AUTH)
+        assert response.status_code == 409
+        assert response.json()["code"] == "DOWNLOAD_RUNNING"
+
+    def test_an_absent_bundle_deletes_cleanly(self, client: TestClient) -> None:
+        response = client.delete("/api/models/hojo-40m", headers=AUTH)
+        assert response.status_code == 200
+        assert response.json()["downloaded"] is False
+
+
+class TestReferenceValidation:
+    def test_an_unpronounceable_transcript_is_refused_and_nothing_is_stored(
+        self, client: TestClient, reference_wav: bytes, tmp_path: Path
+    ) -> None:
+        response = client.post(
+            "/api/references",
+            headers=AUTH,
+            data={"name": "dots", "transcript": "。。。"},
+            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "BAD_REFERENCE"
+        assert not list((tmp_path / "references").glob("*.wav"))
+
+    def test_a_long_latin_transcript_keeps_its_spaces(
+        self, client: TestClient, reference_wav: bytes
+    ) -> None:
+        transcript = ("This is a sentence about the reference recording. " * 6).strip()
+        response = client.post(
+            "/api/references",
+            headers=AUTH,
+            data={"name": "long", "transcript": transcript, "language": "en"},
+            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
+        )
+        assert response.status_code == 201, response.text
+        assert "recording.This" not in response.json()["transcript"]

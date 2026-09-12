@@ -289,7 +289,7 @@ class TestAnUnknownVoice:
     """A named voice is checked before the response starts.
 
     The engine raises when it resolves the voice, which on the streaming path
-    is after the WAV header has gone out. The caller then sees 200, a header
+    is after the first frame has gone out. The caller then sees 200, a header
     with no samples behind it, and no error — reported from production as
     "why is there no reaction".
     """
@@ -313,3 +313,43 @@ class TestAnUnknownVoice:
         )
         assert response.status_code != 200
         assert response.json()["code"] in {"UNKNOWN_VOICE", "MODEL_NOT_READY"}
+
+
+class TestACloneOnlyModel:
+    """A stored reference makes a voice exist before the model is downloaded.
+
+    Listing voices reads the reference store, not the bundle, so resolving the
+    voice succeeds; the load is what fails, and it has to fail before the
+    response starts rather than inside the body generator.
+    """
+
+    @pytest.fixture
+    def with_reference(self, client: TestClient, reference_wav: bytes) -> TestClient:
+        response = client.post(
+            "/api/references",
+            headers=AUTH,
+            data={"name": "Tester", "transcript": "這是一段測試錄音。"},
+            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
+        )
+        assert response.status_code == 201, response.text
+        return client
+
+    def test_the_stream_is_a_conflict_before_any_frame(
+        self, with_reference: TestClient
+    ) -> None:
+        response = with_reference.post(
+            "/api/speak/stream",
+            headers=AUTH,
+            json={"text": "你好。", "model": "hojo-80m-clone"},
+        )
+        assert response.status_code == 409
+        assert response.json()["code"] == "MODEL_NOT_READY"
+
+    def test_the_file_endpoint_agrees(self, with_reference: TestClient) -> None:
+        response = with_reference.post(
+            "/api/speak",
+            headers=AUTH,
+            json={"text": "你好。", "model": "hojo-80m-clone"},
+        )
+        assert response.status_code == 409
+        assert response.json()["code"] == "MODEL_NOT_READY"

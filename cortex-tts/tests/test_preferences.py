@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from cortex_speech import CATALOG
 from cortex_tts.preferences import FILE_NAME, Preferences, load, save
 
 
@@ -55,9 +56,16 @@ class TestValidation:
     def test_threads_outside_the_range_are_refused(self, value: int) -> None:
         assert Preferences().merged({"num_threads": value}).num_threads == 2
 
-    @pytest.mark.parametrize("value", [0, 4])
-    def test_resident_models_outside_the_range_are_refused(self, value: int) -> None:
+    @pytest.mark.parametrize("offset", [-1, 1])
+    def test_resident_models_outside_the_range_are_refused(self, offset: int) -> None:
+        """The range is 1..catalog size, so the bounds move when it grows."""
+        value = 1 + offset if offset < 0 else len(CATALOG) + offset
         assert Preferences().merged({"max_loaded_models": value}).max_loaded_models == 1
+
+    def test_every_model_may_be_resident_at_once(self) -> None:
+        assert Preferences().merged(
+            {"max_loaded_models": len(CATALOG)}
+        ).max_loaded_models == len(CATALOG)
 
     def test_an_unknown_model_is_refused(self) -> None:
         """It would leave the app defaulting to something that cannot exist."""
@@ -90,10 +98,9 @@ class TestValidation:
 class TestWhatNeedsARebuild:
     """Which changes a loaded engine cannot adopt.
 
-    Thread count, execution provider and how many models stay resident are all
-    bound when ONNX Runtime creates a session. The rest are read again on the
-    next request, so dropping engines for them would be a rebuild nobody asked
-    for.
+    Thread count and execution provider are bound when ONNX Runtime creates
+    a session. The rest are read again on the next request, so dropping
+    engines for them would be a rebuild nobody asked for.
     """
 
     @pytest.mark.parametrize(
@@ -101,7 +108,6 @@ class TestWhatNeedsARebuild:
         [
             {"num_threads": 4},
             {"execution_provider": "cuda"},
-            {"max_loaded_models": 2},
         ],
     )
     def test_session_bound_settings_need_one(self, change: dict[str, object]) -> None:
@@ -115,6 +121,7 @@ class TestWhatNeedsARebuild:
             {"default_voice": "Yuewen"},
             {"temperature": 0.0},
             {"preload": False},
+            {"max_loaded_models": 2},
         ],
     )
     def test_the_rest_take_effect_on_the_next_request(
@@ -126,3 +133,24 @@ class TestWhatNeedsARebuild:
     def test_changing_nothing_needs_nothing(self) -> None:
         base = Preferences()
         assert not base.rebuild_needed(base.merged({}))
+
+
+class TestHandEditedFiles:
+    """settings.json is a file people open in an editor."""
+
+    def test_a_non_utf8_file_starts_with_defaults(self, tmp_path: Path) -> None:
+        (tmp_path / FILE_NAME).write_bytes(b"\xff\xfe{}")
+        assert load(tmp_path) == Preferences()
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"), [("false", False), ("true", True), (False, False)]
+    )
+    def test_preload_reads_the_strings_an_editor_leaves(
+        self, raw: object, expected: bool
+    ) -> None:
+        assert Preferences().merged({"preload": raw}).preload is expected
+
+    def test_a_word_that_is_not_a_boolean_is_refused(self) -> None:
+        prefs, ignored = Preferences().validated({"preload": "maybe"})
+        assert prefs.preload is True
+        assert ignored == ["preload"]

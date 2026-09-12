@@ -45,13 +45,24 @@ _SPEAKABLE = re.compile(r"[0-9A-Za-z㐀-䶿一-鿿぀-ヿ]")
 _TERMINATORS = "。！？；.!?;…"
 _TRAILING_COMMA = "，、,"
 _HAS_CJK = re.compile(rf"[{_CJK}]")
+# What votes for Chinese: 漢字 and kana. `_CJK` also spans fullwidth
+# punctuation, which must not count — "26.5°C。" is a reading, not a script.
+_HAN_OR_KANA = re.compile(r"[㐀-䶿一-鿿豈-﫿぀-ヿ]")
 # Words, not letters: one 漢字 carries about as much text as one Latin word.
 _LATIN_WORD = re.compile(r"[A-Za-z]+")
 
 
-def _is_chinese(text: str) -> bool:
-    """Return whether the text reads as Chinese rather than Latin."""
-    return len(_HAS_CJK.findall(text)) > len(_LATIN_WORD.findall(text))
+def is_chinese(text: str) -> bool:
+    """Return whether the text reads as Chinese rather than Latin.
+
+    With no word of either kind to count, a Chinese stop is the only hint
+    left: "80%。" was written in a Chinese sentence.
+    """
+    han = len(_HAN_OR_KANA.findall(text))
+    latin = len(_LATIN_WORD.findall(text))
+    if han or latin:
+        return han > latin
+    return _HAS_CJK.search(text) is not None
 
 
 def _terminate(segment: str) -> str:
@@ -62,7 +73,7 @@ def _terminate(segment: str) -> str:
     """
     if segment.endswith(tuple(_TERMINATORS)):
         return segment
-    stop = "。" if _is_chinese(segment) else "."
+    stop = "。" if is_chinese(segment) else "."
     if segment.endswith(tuple(_TRAILING_COMMA)):
         return segment[:-1] + stop
     return segment + stop
@@ -151,6 +162,19 @@ def _joiner(buffer: str, sentence: str) -> str:
     return " "
 
 
+def prepared_text(segments: list[str]) -> str:
+    """Join prepared segments back into one string, for display and storage.
+
+    Segments arrive stripped, so two Latin ones need their space back; a
+    space beside CJK would be read as a pause, so those are joined bare —
+    the same rule `segment` used to split them.
+    """
+    out = ""
+    for piece in segments:
+        out += _joiner(out, piece) + piece
+    return out
+
+
 def segment(text: str, limit: int = MAX_CHARS_PER_SEGMENT) -> list[str]:
     """Split text into synthesis-sized segments on sentence boundaries.
 
@@ -197,7 +221,7 @@ def prepare(text: str, options: TextOptions = DEFAULT_TEXT_OPTIONS) -> list[str]
     if options.normalize_text:
         # The caller sends flags, never a language, so the dominant script picks
         # which language the numbers are spelled in.
-        if _is_chinese(prepared):
+        if is_chinese(prepared):
             prepared = normalize(prepared, options.normalize_options)
             # Only Chinese wants the gap closed; Latin spaces are word gaps.
             prepared = _CJK_GAP.sub("", prepared)

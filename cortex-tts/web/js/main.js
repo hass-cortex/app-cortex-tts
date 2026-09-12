@@ -37,31 +37,43 @@ function wire() {
     settings.syncChoices(models.catalog(), models.knownVoices()));
 
   // Changing the default model or voice moves where the composer's pickers
-  // open, which is the same fact read through a different endpoint.
-  settings.whenSaved(() => models.loadDefaults());
+  // open, and a smaller resident bound or a rebound session evicts what is
+  // loaded — the same facts read through different endpoints.
+  settings.whenSaved(() =>
+    models.loadDefaults()
+      .then(() => models.refreshModels())
+      .catch((err) => msg($("modelMsg"), err.message, "err")));
 
   // The voice is the only place a language is declared, so the picker is what
-  // moves the passes.
-  models.whenVoiceChanges(() => preview.syncPassesToVoice(models.selectedVoiceLanguage()));
+  // moves the passes — and whether there is one is what makes Speak available.
+  models.whenVoiceChanges(() => {
+    speak.syncButton();
+    preview.syncPassesToVoice(models.selectedVoiceLanguage());
+  });
 }
 
 async function load() {
   try {
     const health = await (await fetch(url("/health"))).json();
     $("version").textContent = `v${health.version}`;
-    settings.showProviders(health);
+    settings.showProviders(Object.values(health.providers_in_use || {}));
   } catch { $("version").textContent = "offline"; }
 
-  try {
-    await settings.load();
-    await models.loadDefaults();
-    await models.refreshModels();
-    await models.refreshVoices();
-    await clones.refresh();
-    await preview.refresh();
-  } catch (err) {
-    msg($("speakMsg"), err.message, "err");
-  }
+  // The pickers prefer the configured defaults, so those are read before the
+  // lists they apply to. Every other section stands on its own: one failing
+  // must not blank the rest, and each says so in its own slot.
+  const sections = [
+    ["setMsg", settings.load()],
+    ["modelMsg", models.loadDefaults()
+      .then(() => models.refreshModels())
+      .then(() => models.refreshVoices())],
+    ["refMsg", clones.refresh()],
+    ["speakMsg", preview.refresh()],
+  ];
+  const results = await Promise.allSettled(sections.map(([, task]) => task));
+  results.forEach((result, i) => {
+    if (result.status === "rejected") msg($(sections[i][0]), result.reason.message, "err");
+  });
 }
 
 wire();

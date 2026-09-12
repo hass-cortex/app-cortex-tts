@@ -3,7 +3,7 @@
 // this is where they are changed.
 
 import { call, json } from "./api.js";
-import { $, esc, fillPicker, msg, pressed } from "./dom.js";
+import { $, esc, fillPicker, msg, pressed, voiceOption } from "./dom.js";
 
 let current = null;
 let models = [];
@@ -19,18 +19,30 @@ const PROVIDERS = [
   ["cuda", "cuda — fail rather than fall back"],
 ];
 
-/** Voices the chosen default model offers, plus the stored one if it is not among them. */
+// What each field is called on the page, for naming one the server refused.
+const LABELS = {
+  default_model: "Default model",
+  default_voice: "Default voice",
+  num_threads: "Inference threads",
+  execution_provider: "Execution provider",
+  max_loaded_models: "Models kept in memory",
+  temperature: "Sampling temperature",
+  preload: "Load the default model at startup",
+};
+
+/** Voices the chosen default model offers, plus the stored one if nothing downloaded offers it. */
 function voiceOptions() {
-  const offered = voices.filter((v) => v.model_id === $("setModel").value);
+  const model = $("setModel").value;
+  const offered = voices.filter((v) => v.model_id === model);
   const ids = offered.map((v) => v.id);
-  const options = offered.map(
-    (v) => `<option value="${esc(v.id)}">${esc(v.name)}${v.language ? ` · ${esc(v.language)}` : ""}</option>`,
-  );
+  const options = offered.map(voiceOption);
   // A voice only exists once its model is downloaded, so the stored one may
-  // name nothing this list knows. Dropping it would rewrite the setting just
-  // by opening the page.
+  // name nothing this page knows. Dropping it would rewrite the setting just
+  // by opening the page — but only while the stored model is still the one
+  // chosen; picking another model is picking one of its voices.
   const stored = current ? current.default_voice : "";
-  if (stored && !ids.includes(stored)) {
+  const known = voices.some((v) => v.id === stored);
+  if (stored && !known && model === current.default_model) {
     ids.unshift(stored);
     options.unshift(`<option value="${esc(stored)}">${esc(stored)} · not downloaded</option>`);
   }
@@ -61,6 +73,10 @@ function render() {
       `<option value="${id}"${id === current.execution_provider ? " selected" : ""}>${label}</option>`,
   ).join("");
   $("setPreload").setAttribute("aria-pressed", String(current.preload));
+  // What is stored is the truth here — just read, or just saved — so the
+  // pickers are rebuilt rather than kept on whatever they were showing.
+  $("setModel").innerHTML = "";
+  $("setVoice").innerHTML = "";
   renderPickers();
 }
 
@@ -68,17 +84,23 @@ function render() {
 export function syncChoices(nextModels, nextVoices) {
   models = nextModels;
   voices = nextVoices;
+  // The bound counts catalog entries, so the catalog says how high it goes.
+  if (models.length) $("setLoaded").max = models.length;
   renderPickers();
+  showProviders(models.filter((m) => m.provider).map((m) => m.provider));
 }
 
-/** Report which provider each resident model actually got. */
-export function showProviders(health) {
-  const inUse = Object.values(health.providers_in_use || {});
+/** Report which providers the resident models actually got. */
+export function showProviders(inUse) {
   const distinct = [...new Set(inUse)];
   $("providerNote").textContent = distinct.length
     ? `running on ${distinct.join(", ")}`
     : "nothing resident";
 }
+
+// An empty box is a field not being sent, never a zero or an empty name.
+const numberOrOmit = (id) => ($(id).value.trim() === "" ? undefined : Number($(id).value));
+const textOrOmit = (id) => $(id).value || undefined;
 
 async function save() {
   const btn = $("setSave");
@@ -89,12 +111,12 @@ async function save() {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        default_model: $("setModel").value,
-        default_voice: $("setVoice").value,
-        num_threads: Number($("setThreads").value),
+        default_model: textOrOmit("setModel"),
+        default_voice: textOrOmit("setVoice"),
+        num_threads: numberOrOmit("setThreads"),
         execution_provider: $("setProvider").value,
-        max_loaded_models: Number($("setLoaded").value),
-        temperature: Number($("setTemp").value),
+        max_loaded_models: numberOrOmit("setLoaded"),
+        temperature: numberOrOmit("setTemp"),
         preload: pressed($("setPreload")),
       }),
     });
@@ -103,14 +125,13 @@ async function save() {
     render();
     onSaved();
     // What came back is what is in force, which is not always what was typed:
-    // a value out of range keeps its old one rather than rejecting the form.
-    msg(
-      $("setMsg"),
-      body.reloaded
-        ? "Saved. Resident models were dropped — the next reply loads them again."
-        : "Saved.",
-      "ok",
-    );
+    // a value out of range keeps its old one rather than rejecting the form,
+    // and the server names which fields it did that to.
+    const kept = (body.ignored || []).map((field) => LABELS[field] || field);
+    let text = "Saved.";
+    if (body.reloaded) text += " Resident models were dropped — the next reply loads them again.";
+    if (kept.length) text += ` Kept previous value for: ${kept.join(", ")}.`;
+    msg($("setMsg"), text, kept.length ? "warn" : "ok");
   } catch (err) {
     msg($("setMsg"), err.message, "err");
   } finally {

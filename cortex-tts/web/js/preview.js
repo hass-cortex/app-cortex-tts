@@ -6,7 +6,8 @@ import { $, esc, pressed } from "./dom.js";
 import { diffSpans, joinSpans } from "./diff.js";
 import { ARROW } from "./icons.js";
 
-const HAS_CJK = /[㐀-䶿一-鿿぀-ヿ]/;
+// Han only: the warning is about Traditional glyphs, which kana never are.
+const HAS_HAN = /[㐀-䶿一-鿿]/;
 
 // One line per combination: claiming numerals are rewritten while the number
 // pass is off is the same lie the panel was built to stop telling.
@@ -90,7 +91,7 @@ function renderLedger(parts) {
   if (!rows.length) {
     // Only dangerous for Chinese; on English it is the normal state, and a
     // warning that fires when nothing is wrong is one people learn to ignore.
-    const risky = parts.bothOff && HAS_CJK.test($("text").value);
+    const risky = parts.bothOff && HAS_HAN.test($("text").value);
     $("ledger").innerHTML = risky
       ? '<div class="msg warn">Both passes are off — the model will be handed Traditional glyphs it cannot pronounce.</div>'
       : '<div class="cap ledger-empty">Nothing to rewrite</div>';
@@ -127,6 +128,9 @@ let sequence = 0;
 
 /** Recompute the column for whatever is in the composer right now. */
 export async function refresh() {
+  // Bumped before the empty case too, so a reply still in flight cannot
+  // refill a column that was just cleared.
+  const seq = (sequence += 1);
   if (!$("text").value.trim()) {
     fill("…", true);
     $("ledger").innerHTML = "";
@@ -134,14 +138,16 @@ export async function refresh() {
   }
   const normalize = pressed($("norm"));
   const convert = pressed($("conv"));
-  const seq = (sequence += 1);
   try {
     syncHint();
-    const full = await prepared(normalize, convert);
     // With both passes on, the converter never saw the raw text — ask for the
-    // stage between them so each row is measured against its own input.
-    const mid = normalize && convert ? (await prepared(true, false)).prepared : null;
+    // stage between them as well, so each row is measured against its own input.
+    const [full, between] = await Promise.all([
+      prepared(normalize, convert),
+      normalize && convert ? prepared(true, false) : null,
+    ]);
     if (seq !== sequence) return; // a newer keystroke already won
+    const mid = between ? between.prepared : null;
     fill(full.prepared, false);
     renderLedger({
       numberPair: normalize ? [full.original, mid ?? full.prepared] : null,

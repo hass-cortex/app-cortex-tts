@@ -23,6 +23,11 @@
   <h1>Cortex TTS</h1>
   <span class="ver" id="version">…</span>
   <div class="hdr-right">
+    <form class="keyform" id="keyForm" hidden>
+      <label for="keyInput">API key</label>
+      <input id="keyInput" type="password" autocomplete="off" placeholder="discovery_api_key">
+      <button class="sm" type="submit">Use key</button>
+    </form>
     <div class="status" id="status"></div>
     <button class="themebtn" id="theme" aria-label="Appearance"></button>
   </div>
@@ -50,11 +55,11 @@
       </div>
     </div>
     <div class="actions">
-      <button class="primary" id="speak">Speak</button>
+      <button class="primary" id="speak" disabled>Speak</button>
       <button class="chip" id="norm" aria-pressed="true">normalise numbers</button>
       <button class="chip" id="conv" aria-pressed="true">to Simplified</button>
     </div>
-    <div class="msg err" id="speakMsg" hidden></div>
+    <div class="msg err" id="speakMsg" aria-live="polite" hidden></div>
   </section>
 
   <section>
@@ -77,7 +82,7 @@
     memory at a time by default — the larger two need about 2 GB each.</span>
   </div>
   <div class="cards" id="models"></div>
-  <div class="msg" id="modelMsg" hidden></div>
+  <div class="msg" id="modelMsg" aria-live="polite" hidden></div>
 </section>
 
 <section id="settings">
@@ -86,9 +91,11 @@
     <span class="note" id="providerNote"></span>
   </div>
   <p class="hint">Saved here, not in the app's configuration — a change takes
-  effect on the next request. The three marked <span class="tag">reload</span>
+  effect on the next request. Those marked <span class="tag">reload</span>
   are fixed when a model is loaded, so adopting one drops what is resident and
-  the next reply loads it again.</p>
+  the next reply loads it again. The one marked <span class="tag">restart</span>
+  also sizes the maths libraries' thread pools when the app starts, so its
+  full effect needs an app restart.</p>
   <div class="row">
     <div class="field">
       <label for="setModel">Default model</label>
@@ -104,10 +111,12 @@
   </div>
   <div class="row">
     <div class="field">
-      <label for="setThreads">Inference threads <span class="tag">reload</span></label>
+      <label for="setThreads">Inference threads <span class="tag">restart</span></label>
       <input id="setThreads" type="number" min="0" max="16" step="1">
-      <p class="sub">0 lets the runtime decide. More is not faster: measured on
-      four cores, 1.17x real time at one thread, 1.05x at two, 1.80x at four.</p>
+      <p class="sub">0 lets the runtime decide. Resident models adopt it on
+      their next load; BLAS and OpenMP only on an app restart. More is not
+      faster: measured on four cores, 1.17x real time at one thread, 1.05x at
+      two, 1.80x at four.</p>
     </div>
     <div class="field">
       <label for="setProvider">Execution provider <span class="tag">reload</span></label>
@@ -118,10 +127,11 @@
   </div>
   <div class="row">
     <div class="field">
-      <label for="setLoaded">Models kept in memory <span class="tag">reload</span></label>
-      <input id="setLoaded" type="number" min="1" max="3" step="1">
+      <label for="setLoaded">Models kept in memory</label>
+      <input id="setLoaded" type="number" min="1" step="1">
       <p class="sub">The 40M needs about 780 MB, the 80M and MOSS about 2 GB
-      each. At 1 they swap on demand.</p>
+      each. At 1 they swap on demand; lowering it evicts the least recently
+      used at once.</p>
     </div>
     <div class="field">
       <label for="setTemp">Sampling temperature</label>
@@ -135,7 +145,7 @@
     <button class="primary" id="setSave">Save settings</button>
     <button class="chip" id="setPreload" aria-pressed="true">load the default model at startup</button>
   </div>
-  <div class="msg" id="setMsg" hidden></div>
+  <div class="msg" id="setMsg" aria-live="polite" hidden></div>
 </section>
 
 <section id="clones">
@@ -145,15 +155,16 @@
     <span class="note" id="clonesNote"></span>
   </div>
   <p class="hint">A reference recording is a voice on every model that can
-  clone, under the same id. Upload about 6 seconds of clean speech that starts
-  talking straight away — that is exactly how much the speaker encoder reads —
-  plus exactly what is said in it, because the transcript is what tells the
-  model which sounds map to which text.</p>
+  clone, under the same id. Upload 6–20 seconds of clean speech that starts
+  talking straight away — the 80M reads only the first six seconds, MOSS
+  uses the whole recording, so keep it clean rather than long — plus exactly
+  what is said in it, because the transcript is what tells the model which
+  sounds map to which text.</p>
   <div id="refs" class="refs"></div>
   <div class="addform">
     <div class="grow"><label for="refName">Name</label><input id="refName" placeholder="客廳女聲"></div>
     <div class="fixed"><label for="refLang">Language</label>
-      <select id="refLang"><option value="zh">Chinese</option><option value="en">English</option></select></div>
+      <select id="refLang"><option value="zh">Chinese</option><option value="en">English</option><option value="ja">Japanese</option></select></div>
     <div class="fixed"><label for="refGender">Gender label</label>
       <select id="refGender"><option value="female">female</option><option value="male">male</option><option value="unknown">unknown</option></select></div>
   </div>
@@ -164,7 +175,7 @@
       <input type="file" id="refFile" accept=".wav,.flac,.ogg,audio/*"></div>
     <button class="primary" id="refAdd">Add voice</button>
   </div>
-  <div class="msg" id="refMsg" hidden></div>
+  <div class="msg" id="refMsg" aria-live="polite" hidden></div>
 </section>
 
 </div>

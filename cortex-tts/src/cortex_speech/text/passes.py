@@ -17,15 +17,38 @@ from dataclasses import dataclass
 
 from .options import NormalizeOptions
 
-NUMBER = r"[+-]?\d+(?:\.\d+)?"
+# A sign only counts when nothing numeric precedes it; otherwise the dash in
+# "25-30" would be read as minus thirty.
+NUMBER = r"(?:(?<!\d)[+-])?\d+(?:\.\d+)?"
 
-DATE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
-CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b")
-PERCENT = re.compile(rf"({NUMBER})\s*[%％]")
-TEMPERATURE = re.compile(rf"({NUMBER})\s*(°C|℃|°F|℉)")
-DEGREE = re.compile(rf"({NUMBER})\s*°")
-VERSION = re.compile(r"\b\d+(?:\.\d+){2,}\b")
-RANGE = re.compile(r"(?<=\d)\s*[-~～–—]\s*(?=\d)")
+# `\b` treats every CJK character as a word character, so it is not a
+# boundary between 現在是 and 14. These are: a digit or Latin letter on either
+# side is what makes a run part of something else.
+LEAD = r"(?<![0-9A-Za-z])"
+TAIL = r"(?![0-9A-Za-z])"
+
+DASH = r"\s*[-~～–—]\s*"
+
+THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+DATE = re.compile(rf"{LEAD}(\d{{4}})-(\d{{1,2}})-(\d{{1,2}}){TAIL}")
+CLOCK = re.compile(rf"{LEAD}(\d{{1,2}}):(\d{{2}})(?::(\d{{2}}))?{TAIL}")
+VERSION = re.compile(rf"{LEAD}\d+(?:\.\d+){{2,}}{TAIL}")
+RANGE = re.compile(rf"(?<=\d){DASH}(?=\d)")
+
+
+def quantity(unit: str) -> re.Pattern[str]:
+    """A number, or a range of two, followed by a unit.
+
+    Groups: the first number, the second number of a range or None, and the
+    unit. A range is claimed together with its unit so that "25-30°C" reads
+    as one temperature span, not as a number and a negative temperature.
+    """
+    return re.compile(rf"({NUMBER})(?:{DASH}({NUMBER}))?\s*({unit})")
+
+
+PERCENT = quantity(r"[%％]")
+TEMPERATURE = quantity(r"°C|℃|°F|℉")
+DEGREE = quantity(r"°")
 
 Render = Callable[[re.Match[str], NormalizeOptions], str]
 
@@ -43,6 +66,11 @@ class Pass:
     pattern: re.Pattern[str]
     render: Render
     gate: str | None = None
+
+
+def drop(match: re.Match[str], options: NormalizeOptions) -> str:
+    """Remove the match; what the thousands separator pass does."""
+    return ""
 
 
 def _bind(render: Render, options: NormalizeOptions) -> Callable[[re.Match[str]], str]:

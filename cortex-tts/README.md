@@ -2,13 +2,17 @@
 
 ![Supports amd64 Architecture][amd64-shield] ![Supports aarch64 Architecture][aarch64-shield] ![Supports armv7 Architecture][armv7-shield]
 
-On-device text-to-speech for Home Assistant, built on the
-[Hojo TTS Light](https://github.com/HojoAI/Hojo-TTS-Light) and
-[MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) ONNX models.
+Text-to-speech that runs on your own hardware, for Home Assistant's Assist
+pipelines and `tts.speak`. Three ONNX models to choose between — a small
+one with fifteen built-in voices that keeps up on a Home Assistant box, and two
+larger ones that clone a voice from a short recording, one of them with
+Japanese — downloaded from the app's own UI on first use.
 
-Runs on CPU. Ships the Chinese text pipeline the model does not have:
-Traditional-to-Simplified glyph conversion and number/unit/time normalisation.
-Both are required, not cosmetic — the **Documentation** tab explains why.
+Pair it with the [Cortex TTS integration](https://github.com/hass-cortex/cortex-tts)
+from HACS, which discovers the app by itself and puts every voice in the
+pipeline picker. The **Documentation** tab covers installation, settings and
+which model to pick; a machine with a faster CPU or a GPU can run the app
+outside Home Assistant OS, which cannot use a GPU.
 
 [amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg
 [aarch64-shield]: https://img.shields.io/badge/aarch64-no-red.svg

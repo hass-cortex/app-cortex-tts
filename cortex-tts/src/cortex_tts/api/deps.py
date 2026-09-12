@@ -64,6 +64,22 @@ def get_state(request: Request) -> AppState:
     return request.app.state.cortex
 
 
+INGRESS_PEER = "172.30.32.2"
+"""The Supervisor's address on the hassio network, the only source of ingress."""
+
+
+def is_ingress(request: Request) -> bool:
+    """Whether the Supervisor's ingress proxy sent this request.
+
+    The `X-Ingress-Path` header alone proves nothing — any client on a
+    published port can add it — so the peer address must be the Supervisor's
+    as well. The ingress proxy is the only thing that connects from there.
+    """
+    if request.headers.get("X-Ingress-Path") is None:
+        return False
+    return request.client is not None and request.client.host == INGRESS_PEER
+
+
 async def require_api_key(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -71,16 +87,16 @@ async def require_api_key(
 ) -> None:
     """Reject requests without the configured bearer token.
 
-    An empty configured key disables the check, which is the sane default
-    behind Home Assistant ingress where the Supervisor has already
-    authenticated the user. Ingress requests are recognised by the header the
-    Supervisor adds and skip the check regardless.
+    An empty configured key disables the check, which is only sane when the
+    port is not published. Ingress requests skip the check because the
+    Supervisor has already authenticated the user; see `is_ingress` for what
+    counts as one.
     """
     state: AppState = request.app.state.cortex
     expected = state.settings.api_key
     if not expected:
         return
-    if request.headers.get("X-Ingress-Path") is not None:
+    if is_ingress(request):
         return
 
     supplied = ""
@@ -89,8 +105,11 @@ async def require_api_key(
     elif x_api_key:
         supplied = x_api_key.strip()
 
-    # Constant-time compare so a wrong key cannot be narrowed by timing.
-    if not supplied or not hmac.compare_digest(supplied, expected):
+    # Constant-time compare so a wrong key cannot be narrowed by timing. Bytes,
+    # because the str form raises on a non-ASCII token instead of rejecting it.
+    if not supplied or not hmac.compare_digest(
+        supplied.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_REQUIRED", "message": "authentication required"},

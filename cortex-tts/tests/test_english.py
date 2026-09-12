@@ -102,3 +102,18 @@ class TestPipelineChoosesByScript:
     def test_a_short_acronym_does_not_outvote_three_chinese_words(self) -> None:
         # Counting letters made this a 3-3 tie and picked the ASCII stop.
         assert prepare("請檢查 CPU") == ["请检查 CPU。"]
+
+
+class TestRangesAndSeparators:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("25-30°C", "twenty-five to thirty degrees Celsius"),
+            ("between 25-30%", "between twenty-five to thirty percent"),
+            ("-5°F", "minus five degrees Fahrenheit"),
+            ("1,000", "one thousand"),
+            ("v2.3 is out", "v two point three is out"),
+        ],
+    )
+    def test_reading(self, raw: str, expected: str) -> None:
+        assert english.normalize(raw) == expected

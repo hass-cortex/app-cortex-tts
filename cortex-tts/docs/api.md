@@ -1,0 +1,141 @@
+# HTTP API
+
+The app is usable on its own, not only through the Home Assistant integration.
+Full OpenAPI, with every endpoint and an in-browser console, is served at
+`/api/docs`.
+
+## Reaching it
+
+The port is **not published by default**: the integration reaches the app over
+the Supervisor's internal network as `http://local-cortex-tts:8771`, and the
+admin UI comes through ingress. To call it from elsewhere on your network,
+publish port 8771 under the app's **Network** settings; the address is then
+`http://<home-assistant-host>:8771`.
+
+## Authentication
+
+Everything under `/api` and `/v1` takes the key from the app's
+`discovery_api_key` option, as `Authorization: Bearer <key>` or an `X-API-Key`
+header. Requests arriving through ingress are already authenticated by Home
+Assistant and skip the check; ingress is recognised by the Supervisor's
+`X-Ingress-Path` header **from the Supervisor's own address**, so the header
+alone, from anywhere else, proves nothing. `/health` never needs a key. An
+empty configured key disables the check, which is only sane while the port
+stays unpublished.
+
+## Endpoints
+
+| Method | Path                         | Purpose                                                            |
+| ------ | ---------------------------- | ------------------------------------------------------------------ |
+| GET    | `/health`                    | liveness; version, `api_version`, resident count, provider         |
+| GET    | `/api/defaults`              | the configured default model and voice                             |
+| GET    | `/api/settings`              | every stored setting, as it is now in force                        |
+| PUT    | `/api/settings`              | change some of them; omitted fields keep their value               |
+| GET    | `/api/models`                | catalog + per-model state (downloaded/loaded/progress)             |
+| POST   | `/api/models/{id}/download`  | start a download; poll `/api/models`                               |
+| DELETE | `/api/models/{id}`           | remove the bundle from disk; 409 while it is downloading           |
+| POST   | `/api/models/{id}/load`      | make it resident                                                   |
+| POST   | `/api/models/{id}/unload`    | evict it                                                           |
+| GET    | `/api/voices`                | voices across downloaded models, or one model's (`?model=`)        |
+| POST   | `/api/preview`               | run the text path only; no model is loaded                         |
+| POST   | `/api/speak`                 | synthesise; the requested format (wav/flac/ogg/mp3) + `X-Cortex-*` |
+| POST   | `/api/speak/stream`          | the same, sent as it is produced (chunked MP3)                     |
+| POST   | `/v1/audio/speech`           | the same, OpenAI-shaped                                            |
+| GET    | `/api/references`            | cloned-voice reference recordings                                  |
+| POST   | `/api/references`            | add one (multipart: audio + transcript + metadata)                 |
+| PATCH  | `/api/references/{id}`       | correct a transcript                                               |
+| DELETE | `/api/references/{id}`       | remove it, and the voice it defined                                |
+| GET    | `/api/references/{id}/audio` | play the recording back                                            |
+
+## Speaking
+
+`POST /api/speak` takes JSON:
+
+| Field             | Default     | Meaning                                                                   |
+| ----------------- | ----------- | ------------------------------------------------------------------------- |
+| `text`            | required    | Up to 4000 characters, in whatever script you write                       |
+| `model`           | the default | A model id from `/api/models`                                             |
+| `voice`           | the default | A voice id the model offers; the first available when it does not         |
+| `format`          | `wav`       | `wav`, `flac`, `ogg` or `mp3`                                             |
+| `normalize_text`  | `true`      | Expand numbers, units, dates and clock literals ([why](text-pipeline.md)) |
+| `convert_script`  | `true`      | Traditional → Simplified glyph conversion                                 |
+| `normalize_level` | `true`      | Peak-normalise the finished waveform                                      |
+| `temperature`     | the setting | Sampling temperature 0–1, for models that have one                        |
+
+The response is the audio, with the measurements in headers:
+`X-Cortex-Model`, `X-Cortex-Voice`, `X-Cortex-Inference-Ms`,
+`X-Cortex-Audio-Seconds`, `X-Cortex-Rtf`, `X-Cortex-Segments`. These are what
+the integration's diagnostic sensors report for a buffered reply.
+
+`POST /api/speak/stream` takes the same body and answers chunked audio as it is
+produced — `mp3` by default, `wav` on request, `flac` and `ogg` refused because
+a stream cannot declare a length ([why](streaming.md#why-a-stream-is-mp3)).
+The headers are `X-Cortex-Model`, `X-Cortex-Voice`, `X-Cortex-Bitrate` (bits
+per second, constant, so a byte count converts to a duration) and
+`X-Cortex-Chunk-Streaming` (`1` when the model emits mid-sentence, `0` when
+each request arrives whole). Everything that can fail — an unknown model or
+voice, a model not downloaded, a model that will not load — fails before the
+first byte; once the response has started the status is 200 and a failure can
+only truncate the audio. Closing the connection early stops the rendering
+behind it within a chunk. `normalize_level` is accepted and ignored: a stream
+has no finished waveform to scale, and holds its chunks under one ceiling
+instead.
+
+`POST /v1/audio/speech` is the OpenAI shape — `input`, `model`, `voice`,
+`response_format` — so existing clients work unchanged. `response_format`
+defaults to `wav` and accepts the same four formats; `opus`, `aac` and `pcm`
+are refused.
+
+`POST /api/preview` takes `text`, `normalize_text` and `convert_script` and
+returns `original`, `prepared` and `segments` without touching a model.
+
+## Errors
+
+Every error, whatever raised it, is a JSON body of `{"code", "message"}` —
+a route's own refusal, an unknown path, and a request body pydantic rejected
+(422) alike.
+
+| Status | Code                   | When                                                            |
+| ------ | ---------------------- | --------------------------------------------------------------- |
+| 400    | `EMPTY_TEXT`           | Nothing left to say once punctuation was stripped               |
+| 400    | `NO_TEMPERATURE`       | A temperature for a model that has none (MOSS)                  |
+| 400    | `UNSUPPORTED_FORMAT`   | `flac` or `ogg` asked of the stream                             |
+| 400    | `BAD_REFERENCE`        | Unreadable audio, wrong length, or an empty transcript          |
+| 401    | `AUTH_REQUIRED`        | No key, or the wrong one                                        |
+| 404    | `UNKNOWN_MODEL`        | No such model id                                                |
+| 404    | `UNKNOWN_VOICE`        | The model does not offer that voice (ids are case-sensitive)    |
+| 404    | `UNKNOWN_REFERENCE`    | No such reference id                                            |
+| 409    | `MODEL_NOT_READY`      | The model is not downloaded                                     |
+| 409    | `NO_VOICE`             | The model has no voices yet — upload a reference                |
+| 409    | `DOWNLOAD_RUNNING`     | Delete refused while the bundle is still arriving               |
+| 413    | `BAD_REFERENCE`        | An upload larger than any legal reference                       |
+| 422    | `VALIDATION`           | The request body failed validation; the message names the field |
+| 422    | `NO_AUDIO`             | The model produced nothing for that text                        |
+| 500    | `ENGINE_ERROR`         | The model failed in a way not listed above                      |
+| 500    | `SETTINGS_NOT_WRITTEN` | The settings file could not be stored                           |
+| 503    | `PROVIDER_UNAVAILABLE` | `cuda` was required and did not answer                          |
+
+## Settings over the API
+
+`GET /api/settings` returns the seven stored settings as they are in force.
+`PUT /api/settings` takes any subset; a field that fails validation keeps its
+previous value rather than rejecting the form, and the reply names it under
+`ignored` beside `reloaded`, which says whether resident models were dropped
+to adopt a thread count or execution provider. See the App Store page for what
+each setting does.
+
+## Versioning
+
+`GET /health` reports `api_version`, bumped when a route, field or header a
+client reads changes shape; the app's release `version`, reported beside it,
+says nothing about the wire. A client compares the number before trusting
+anything else it reads. `api_version` is 1.
+
+## For integration authors
+
+On Home Assistant OS the app announces itself through Supervisor discovery
+with `{host, port, api_key}` under the service `cortex_tts`; the key is
+generated on first start. Whenever the set of voices changes — a model
+downloaded or deleted, a reference added or removed — the app fires
+`cortex_tts_models_changed` on the Home Assistant event bus, which is how the
+integration adds and removes entities without a reload.

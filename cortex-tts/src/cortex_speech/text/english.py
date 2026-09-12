@@ -165,17 +165,24 @@ def _clock(match: re.Match[str], options: NormalizeOptions) -> str:
     return clock(hour, minute, second)
 
 
+def _span(match: re.Match[str]) -> str:
+    """Read the number, or both numbers of a range joined by "to"."""
+    first = decimal(match.group(1))
+    second = match.group(2)
+    return first if second is None else f"{first} to {decimal(second)}"
+
+
 def _percent(match: re.Match[str], options: NormalizeOptions) -> str:
-    return f"{decimal(match.group(1))} percent"
+    return f"{_span(match)} percent"
 
 
 def _temperature(match: re.Match[str], options: NormalizeOptions) -> str:
-    scale = "Celsius" if match.group(2) in ("°C", "℃") else "Fahrenheit"
-    return f"{decimal(match.group(1))} degrees {scale}"
+    scale = "Celsius" if match.group(3) in ("°C", "℃") else "Fahrenheit"
+    return f"{_span(match)} degrees {scale}"
 
 
 def _degree(match: re.Match[str], options: NormalizeOptions) -> str:
-    return f"{decimal(match.group(1))} degrees"
+    return f"{_span(match)} degrees"
 
 
 def _version(match: re.Match[str], options: NormalizeOptions) -> str:
@@ -216,6 +223,7 @@ def _welded(match: re.Match[str], options: NormalizeOptions) -> str:
 
 
 _PASSES: tuple[Pass, ...] = (
+    Pass(passes.THOUSANDS, passes.drop),
     Pass(passes.DATE, _date, "expand_dates"),
     Pass(passes.CLOCK, _clock, "expand_time"),
     Pass(passes.PERCENT, _percent),

@@ -2,8 +2,7 @@
 
 Encoding a reference recording is the dominant cost of a cloned utterance —
 960 ms for a 125-frame MOSS prompt, paid again for every sentence by a runtime
-that takes a file path rather than the codes it derives from it. The
-measurements are in docs/adr/0002.
+that takes a file path rather than the codes it derives from it.
 
 The cache lives here rather than inside each engine so that invalidation has
 one definition. Two engines had two rules: one compared the recording's

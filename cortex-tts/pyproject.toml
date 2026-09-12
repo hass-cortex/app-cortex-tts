@@ -14,7 +14,7 @@ dependencies = [
     # MP3 for the streaming endpoint. A WAV stream has to declare a length it
     # does not know, and a general-purpose player given the maximal one waits
     # for a file it thinks is six hours long; MP3 is a bare frame sequence
-    # with no length to declare. See docs/adr/0004.
+    # with no length to declare.
     "lameenc>=1.7",
     "scipy>=1.13",
     "tokenizers>=0.15",
@@ -84,7 +84,7 @@ ignore = ["E501", "B008", "SIM108"]
 
 [tool.ruff.lint.per-file-ignores]
 # Vendored upstream code is kept diffable against its source, not restyled.
-"src/cortex_speech/vendor/*.py" = ["ALL"]
+"src/cortex_speech/vendor/**/*.py" = ["ALL"]
 
 [tool.pyright]
 pythonVersion = "3.12"

@@ -1,6 +1,6 @@
 // The one audio element on the page, and the only thing that drives it.
 
-import { $, esc, show } from "./dom.js";
+import { $, esc, msg, show } from "./dom.js";
 
 /** Play a URL, replacing whatever was loaded before. */
 export function play(src, { revokable = false } = {}) {
@@ -13,7 +13,11 @@ export function play(src, { revokable = false } = {}) {
   if (revokable) player.dataset.url = src;
   player.src = src;
   show($("result"));
-  player.play();
+  player.play().catch((err) => {
+    if (err.name === "AbortError") return; // a newer source replaced this one
+    // Autoplay refused: the audio is loaded, it just needs a press.
+    msg($("speakMsg"), err.name === "NotAllowedError" ? "Press play to hear it." : err.message, "warn");
+  });
 }
 
 /** Show the numbers that came back with a synthesis, or clear them. */

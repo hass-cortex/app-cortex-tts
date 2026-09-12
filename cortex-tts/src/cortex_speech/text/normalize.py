@@ -63,19 +63,32 @@ SUFFIX_UNITS: dict[str, str] = {
 _UNIT_ALTERNATION = "|".join(
     re.escape(unit) for unit in sorted(SUFFIX_UNITS, key=len, reverse=True)
 )
-_UNIT = re.compile(rf"({passes.NUMBER})\s*({_UNIT_ALTERNATION})\b")
+# A unit followed by a Latin letter is part of a longer token ("kWhx"); a
+# CJK character after it is the sentence continuing.
+_UNIT = re.compile(
+    rf"({passes.NUMBER})(?:{passes.DASH}({passes.NUMBER}))?"
+    rf"\s*({_UNIT_ALTERNATION})(?![A-Za-z])"
+)
 
 # A version only reads as one when it has three segments or an explicit
 # introduction; without that, "2026.9" is a decimal quantity.
 _INTRODUCED_VERSION = re.compile(
-    r"(?<=[版本本v])\s*\b\d+(?:\.\d+)+\b", flags=re.IGNORECASE
+    rf"(?<=[版本v])\s*\d+(?:\.\d+)+{passes.TAIL}", flags=re.IGNORECASE
 )
-_TRAILING_VERSION = re.compile(r"\b(\d+(?:\.\d+)+)(?=\s*版)")
+_TRAILING_VERSION = re.compile(rf"{passes.LEAD}(\d+(?:\.\d+)+)(?=\s*版)")
 
 _BARE_NUMBER = re.compile(passes.NUMBER)
 
-# Characters that make a following number an identifier rather than a quantity.
-_IDENTIFIER_LEAD = re.compile(r"(?:版本|version|v)\s*$", re.IGNORECASE)
+# Words that make a following number an identifier rather than a quantity. A
+# bare "v" counts only as its own word, not as the last letter of "TV".
+_IDENTIFIER_LEAD = re.compile(r"(?:版本|version|(?<![A-Za-z])v)\s*$", re.IGNORECASE)
+
+
+def _span(match: re.Match[str]) -> str:
+    """Read the number, or both numbers of a range joined by 到."""
+    first = decimal(match.group(1))
+    second = match.group(2)
+    return first if second is None else f"{first}到{decimal(second)}"
 
 
 def _date(match: re.Match[str], options: NormalizeOptions) -> str:
@@ -86,34 +99,41 @@ def _date(match: re.Match[str], options: NormalizeOptions) -> str:
 def _clock(match: re.Match[str], options: NormalizeOptions) -> str:
     hour, minute = int(match.group(1)), int(match.group(2))
     second = match.group(3)
+    if hour > 23 or minute > 59:
+        return match.group(0)
     text = f"{hours(hour)}點"
+    # "3:05分" already says 分; do not say it twice.
+    follows_fen = match.string[match.end() : match.end() + 1] == "分"
     if minute == 0 and second is None:
-        text += "整"
+        text += "" if follows_fen else "整"
     elif minute:
-        text += f"{minutes(minute)}分"
+        text += minutes(minute) + ("" if follows_fen else "分")
+    elif second is not None:
+        # 十四點三十秒 is indistinguishable by ear from 14:30.
+        text += "零分"
     if second is not None and int(second):
         text += f"{cardinal(int(second))}秒"
     return text
 
 
 def _percent(match: re.Match[str], options: NormalizeOptions) -> str:
-    return "百分之" + decimal(match.group(1))
+    return "百分之" + _span(match)
 
 
 def _temperature(match: re.Match[str], options: NormalizeOptions) -> str:
-    value = decimal(match.group(1))
-    if match.group(2) in ("°F", "℉"):
+    value = _span(match)
+    if match.group(3) in ("°F", "℉"):
         return f"華氏{value}度"
     return f"攝氏{value}度" if options.temperature_prefix else f"{value}度"
 
 
 def _numbered_unit(match: re.Match[str], options: NormalizeOptions) -> str:
-    return decimal(match.group(1)) + SUFFIX_UNITS[match.group(2)]
+    return _span(match) + SUFFIX_UNITS[match.group(3)]
 
 
 def _degree(match: re.Match[str], options: NormalizeOptions) -> str:
     """Read a degree sign with no scale letter: "26.5°" is a plain 度."""
-    return decimal(match.group(1)) + "度"
+    return _span(match) + "度"
 
 
 def _version(match: re.Match[str], options: NormalizeOptions) -> str:
@@ -140,6 +160,7 @@ def _bare_number(match: re.Match[str], options: NormalizeOptions) -> str:
 
 
 _PASSES: tuple[Pass, ...] = (
+    Pass(passes.THOUSANDS, passes.drop),
     Pass(passes.DATE, _date, "expand_dates"),
     Pass(passes.CLOCK, _clock, "expand_time"),
     Pass(passes.PERCENT, _percent),

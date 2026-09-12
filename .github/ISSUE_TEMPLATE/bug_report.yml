@@ -21,11 +21,9 @@ body:
     attributes:
       label: Deployment environment
       options:
-        - Home Assistant App
-        - Docker
-        - Docker Compose
-        - Bare metal (systemd)
-        - Proxmox LXC
+        - Home Assistant OS app (amd64)
+        - Home Assistant Supervised app (amd64)
+        - Run outside Home Assistant (say how, below)
     validations:
       required: true
 
@@ -43,9 +41,9 @@ body:
       label: Steps to reproduce
       description: Minimal steps to reproduce the issue
       placeholder: |
-        1. Start Cortex TTS with the 40M model
-        2. Send audio via HTTP API
-        3. Observe error in logs
+        1. Start Cortex TTS with the 40M model downloaded
+        2. Send text via `tts.speak` or `POST /api/speak`
+        3. Observe the error in the app log or the wrong audio
     validations:
       required: true
 
@@ -67,7 +65,7 @@ body:
     id: logs
     attributes:
       label: Relevant logs
-      description: Paste relevant log output (use debug logging if possible)
+      description: Paste the app log (set `log_level` to `debug` first if you can) and, for a wrong reading, the prepared text the admin UI shows
       render: text
 
   - type: textarea
@@ -76,9 +74,9 @@ body:
       label: Hardware info
       description: CPU, RAM, GPU (if applicable)
       placeholder: |
-        CPU: Intel i5-12400
+        CPU: Intel i5-12400 (4 cores given to the HA VM)
         RAM: 16GB
-        GPU: NVIDIA RTX 3060 (CUDA 12.x)
+        Model: hojo-40m, sensor.<model>_real_time_factor reads 0.53
 
   - type: textarea
     id: additional
