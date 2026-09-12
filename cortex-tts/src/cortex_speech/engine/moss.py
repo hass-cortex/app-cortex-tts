@@ -51,6 +51,17 @@ _GENDER_HINTS = {"female": "female", "male": "male"}
 # time at 12.5 Hz, so this is a few seconds of audio.
 _STREAM_QUEUE_CHUNKS = 8
 
+# The runtime seeds its sampler once, when it is constructed, and every
+# generated frame draws from it — so the second synthesis continues where the
+# first left off and the same text comes out differently every time. Measured
+# on three consecutive requests for one 37-character line: 6.80 s, 7.52 s and
+# 9.60 s, a 41% spread in speaking rate and 1.5 dB in level. A reply split
+# across requests is several syntheses, so the halves were paced differently
+# from each other. Seeding per segment makes a reply reproducible and its
+# pieces consistent; the sampling itself is untouched (`sample_mode` stays
+# `fixed`, which is the mode that stops reliably).
+_SAMPLING_SEED = 1234
+
 # A chunk arrives every few hundred milliseconds, so an abandoned worker
 # notices within one chunk; this only bounds a decode that never returns.
 _STREAM_JOIN_SECONDS = 5.0
@@ -198,6 +209,15 @@ class MossEngine:
             raise UnknownVoiceError(f"unknown voice {voice!r}")
         return self._prompts.get(reference, self._encode)
 
+    def _reseed(self) -> None:
+        """Put the runtime's sampler back to its starting state.
+
+        Reaching for the attribute is the vendor boundary's fault: the entry
+        point this engine uses, `synthesize_single_chunk`, takes no seed, and
+        the one that does is the file-writing path we do not call.
+        """
+        self._runtime.rng = np.random.default_rng(_SAMPLING_SEED)
+
     def synthesize(
         self, segments: list[str], voice: str, *, temperature: float | None = None
     ) -> Synthesis:
@@ -210,6 +230,7 @@ class MossEngine:
         started = time.perf_counter()
         waves: list[np.ndarray] = []
         for text in segments:
+            self._reseed()
             result = self._runtime.synthesize_single_chunk(
                 text=text,
                 prompt_audio_codes=codes,
@@ -280,6 +301,7 @@ class MossEngine:
                     # sentences has to be emitted rather than added after.
                     if index and not offer(gap):
                         return
+                    self._reseed()
                     self._runtime.synthesize_single_chunk(
                         text=text,
                         prompt_audio_codes=codes,
