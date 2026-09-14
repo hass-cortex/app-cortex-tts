@@ -264,6 +264,37 @@ class TestReferences:
         )
         assert response.status_code == 422
 
+    def test_an_edit_that_changes_nothing_is_rejected(self, client: TestClient) -> None:
+        response = client.patch("/api/references/nope", headers=AUTH, json={})
+        assert response.status_code == 422
+
+    def test_a_made_up_gender_is_rejected(self, client: TestClient) -> None:
+        response = client.patch(
+            "/api/references/nope", headers=AUTH, json={"gender": "robot"}
+        )
+        assert response.status_code == 422
+
+    def test_the_gender_label_can_be_corrected_alone(
+        self, client: TestClient, reference_wav: bytes
+    ) -> None:
+        """Uploads made through the API without a label all read unknown."""
+        added = client.post(
+            "/api/references",
+            headers=AUTH,
+            data={"name": "Anna", "transcript": "你好。"},
+            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
+        ).json()
+        assert added["gender"] == "unknown"
+
+        response = client.patch(
+            f"/api/references/{added['id']}", headers=AUTH, json={"gender": "female"}
+        )
+        assert response.status_code == 200
+        assert response.json()["gender"] == "female"
+        assert response.json()["raw_transcript"] == "你好。"
+        listed = client.get("/api/references", headers=AUTH).json()
+        assert [r["gender"] for r in listed] == ["female"]
+
 
 class TestTemperatureOption:
     """The sampling temperature is configurable per app and per request."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from cortex_speech import AudioFormat, Delivery
 
@@ -186,13 +186,24 @@ class ReferenceOut(BaseModel):
     created: float
 
 
-class ReferenceUpdate(BaseModel):
-    """Correct the transcript of a stored reference.
+Gender = Literal["female", "male", "unknown"]
 
-    The audio is not resent — only the text the model is told it contains.
+
+class ReferenceUpdate(BaseModel):
+    """Correct the transcript and/or gender label of a stored reference.
+
+    The audio is not resent — only the text the model is told it contains, or
+    how the voice is labelled in the picker.
     """
 
-    transcript: str = Field(min_length=1, max_length=2000)
+    transcript: str | None = Field(None, min_length=1, max_length=2000)
+    gender: Gender | None = None
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> ReferenceUpdate:
+        if self.transcript is None and self.gender is None:
+            raise ValueError("send a transcript, a gender, or both")
+        return self
 
 
 class PreviewRequest(BaseModel):

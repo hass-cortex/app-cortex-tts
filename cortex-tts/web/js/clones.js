@@ -19,13 +19,18 @@ const saved = new Map();
 // Voices whose Delete awaits its second click.
 const armed = new Set();
 
+const GENDERS = ["female", "male", "unknown"];
+
 const deleteLabel = (id) => (armed.has(id) ? "Confirm delete" : "Delete");
 
 const row = (r) => `
   <div class="ref">
     <div class="ref-head">
       <span class="ref-name">${esc(r.name)}</span>
-      <span class="ref-id">${esc(r.id)}${r.gender === "unknown" ? "" : ` · ${esc(r.gender)}`}</span>
+      <span class="ref-id">${esc(r.id)}</span>
+      <select class="ref-gender" data-ref-gender="${esc(r.id)}" aria-label="Gender label of ${esc(r.name)}">
+        ${GENDERS.map((g) => `<option value="${g}"${g === r.gender ? " selected" : ""}>${g}</option>`).join("")}
+      </select>
       <span class="ref-meta">${Number(r.seconds).toFixed(1)}s · ${esc(languageName(r.language))}</span>
     </div>
     <textarea class="tr-edit" data-ref-tr="${esc(r.id)}" rows="1"
@@ -101,6 +106,26 @@ async function saveTranscript(button) {
   }
 }
 
+async function saveGender(select) {
+  const id = select.dataset.refGender;
+  select.disabled = true;
+  try {
+    const res = await call(`/references/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gender: select.value }),
+    });
+    const body = await res.json();
+    select.value = body.gender;
+    msg(hintFor(id), `Labelled ${body.gender}.`, "ok");
+    await refreshVoices();
+  } catch (err) {
+    msg(hintFor(id), err.message, "err");
+  } finally {
+    select.disabled = false;
+  }
+}
+
 async function remove(button) {
   const id = button.dataset.refDel;
   const relabel = () => { const b = deleteFor(id); if (b) b.textContent = deleteLabel(id); };
@@ -157,6 +182,10 @@ export function init() {
     msg(hintFor(id), "");
   });
 
+  $("refs").addEventListener("change", (e) => {
+    const select = e.target.closest("select[data-ref-gender]");
+    if (select) saveGender(select);
+  });
   $("refs").addEventListener("click", (e) => {
     const playBtn = e.target.closest("button[data-ref-play]");
     if (playBtn) {

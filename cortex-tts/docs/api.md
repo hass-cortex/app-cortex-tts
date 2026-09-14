@@ -43,7 +43,7 @@ stays unpublished.
 | POST   | `/v1/audio/speech`           | the same, OpenAI-shaped                                            |
 | GET    | `/api/references`            | cloned-voice reference recordings                                  |
 | POST   | `/api/references`            | add one (multipart: audio + transcript + metadata)                 |
-| PATCH  | `/api/references/{id}`       | correct a transcript                                               |
+| PATCH  | `/api/references/{id}`       | correct a transcript and/or the gender label                       |
 | DELETE | `/api/references/{id}`       | remove it, and the voice it defined                                |
 | GET    | `/api/references/{id}/audio` | play the recording back                                            |
 

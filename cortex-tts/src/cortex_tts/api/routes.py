@@ -53,6 +53,7 @@ from .deps import AppState, get_state, require_api_key
 from .schemas import (
     DefaultsResponse,
     ErrorResponse,
+    Gender,
     HealthResponse,
     MeasuredRtf,
     ModelOut,
@@ -755,7 +756,7 @@ async def add_reference(
     name: str = Form(...),
     transcript: str = Form(...),
     language: str = Form("zh"),
-    gender: str = Form("unknown"),
+    gender: Gender = Form("unknown"),
     audio: UploadFile = File(...),
     state: AppState = Depends(get_state),
 ) -> ReferenceOut:
@@ -801,20 +802,25 @@ async def update_reference(
     body: ReferenceUpdate,
     state: AppState = Depends(get_state),
 ) -> ReferenceOut:
-    """Correct a reference's transcript.
+    """Correct a reference's transcript and/or gender label.
 
     A transcript that does not match the recording degrades the clone without
     any error, so this is the fix for a mistyped or mis-transcribed upload —
     without asking for the audio again.
     """
     try:
-        reference = state.references.update(reference_id, transcript=body.transcript)
+        reference = state.references.update(
+            reference_id, transcript=body.transcript, gender=body.gender
+        )
     except KeyError as err:
         raise _no_reference(reference_id) from err
     except ReferenceError as err:
         raise _http(
             http_status.HTTP_400_BAD_REQUEST, "BAD_REFERENCE", str(err)
         ) from err
+    if body.gender is not None:
+        # The label is part of what the voice picker shows.
+        await fire_models_changed(f"reference-updated:{reference_id}")
     return _reference_out(reference)
 
 

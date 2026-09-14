@@ -56,6 +56,9 @@ SILENT_PEAK_DBFS = -45.0
 
 _ID_SAFE = re.compile(r"[^a-z0-9_-]+")
 
+# Label only: nothing downstream reads it, the voice picker shows it.
+GENDERS = ("female", "male", "unknown")
+
 
 class ReferenceError(ValueError):
     """An uploaded reference cannot be used as a voice."""
@@ -265,41 +268,59 @@ class ReferenceStore:
         )
         return reference
 
-    def update(self, reference_id: str, *, transcript: str) -> Reference:
-        """Replace the transcript of a stored reference.
+    def update(
+        self,
+        reference_id: str,
+        *,
+        transcript: str | None = None,
+        gender: str | None = None,
+    ) -> Reference:
+        """Correct the transcript and/or the gender label of a stored reference.
 
         The recording is untouched, so the cloned voice keeps its timbre; only
-        the text the model is told the recording contains changes. That text is
-        run through the same pipeline as a fresh upload, because the model
-        needs it in the same script and normalisation as the target text.
+        what the model is told the recording contains, or how the voice is
+        labelled, changes. A transcript is run through the same pipeline as a
+        fresh upload, because the model needs it in the same script and
+        normalisation as the target text.
 
         Args:
             reference_id: Which reference to edit.
             transcript: Corrected wording of what the recording says.
+            gender: One of `GENDERS`.
 
         Returns:
             The updated reference.
 
         Raises:
             KeyError: No reference with that id.
-            ReferenceError: The transcript is empty.
+            ReferenceError: Nothing to change, an empty transcript, or an
+                unknown gender.
         """
-        if not transcript.strip():
-            raise ReferenceError("a reference needs the transcript of what is said")
-        prepared = prepared_text(prepare(transcript, TextOptions()))
-        if not prepared:
-            raise ReferenceError("the transcript has no pronounceable content")
+        changes: dict[str, str] = {}
+        if transcript is not None:
+            if not transcript.strip():
+                raise ReferenceError("a reference needs the transcript of what is said")
+            prepared = prepared_text(prepare(transcript, TextOptions()))
+            if not prepared:
+                raise ReferenceError("the transcript has no pronounceable content")
+            changes.update(transcript=prepared, raw_transcript=transcript.strip())
+        if gender is not None:
+            if gender not in GENDERS:
+                raise ReferenceError(f"gender must be one of {', '.join(GENDERS)}")
+            changes["gender"] = gender
+        if not changes:
+            raise ReferenceError("nothing to change")
 
         with self._lock:
             existing = self._items.get(reference_id)
             if existing is None:
                 raise KeyError(reference_id)
-            updated = replace(
-                existing, transcript=prepared, raw_transcript=transcript.strip()
-            )
+            updated = replace(existing, **changes)
             self._items[reference_id] = updated
             self._save()
-        _LOGGER.info("updated transcript for reference %s", reference_id)
+        _LOGGER.info(
+            "updated %s for reference %s", ", ".join(sorted(changes)), reference_id
+        )
         return updated
 
     def remove(self, reference_id: str) -> bool:
