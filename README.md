@@ -31,11 +31,14 @@ front-end none of the models ship. No cloud, no per-character bill.
 
 ## Models
 
-| Model                                                          | Voices                            | Languages  |
-| -------------------------------------------------------------- | --------------------------------- | ---------- |
-| [Hojo TTS Light 40M](https://github.com/HojoAI/Hojo-TTS-Light) | 15 built in (2 zh, 13 en)         | zh, en     |
-| [Hojo TTS Light 80M](https://github.com/HojoAI/Hojo-TTS-Light) | clones only                       | zh, en     |
-| [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano)     | 18 built in (6 zh) **and** clones | zh, en, ja |
+| Model                                                          | Voices                            | Languages                    |
+| -------------------------------------------------------------- | --------------------------------- | ---------------------------- |
+| [Hojo TTS Light 40M](https://github.com/HojoAI/Hojo-TTS-Light) | 15 built in (2 zh, 13 en)         | zh, en                       |
+| [Hojo TTS Light 80M](https://github.com/HojoAI/Hojo-TTS-Light) | clones only                       | zh, en                       |
+| [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano)     | 18 built in (6 zh) **and** clones | zh, en, ja                   |
+| [OmniVoice 0.8B](https://github.com/k2-fsa/OmniVoice)          | 9 designed **and** clones         | 800+, told per request       |
+| [Qwen3-TTS 0.6B](https://github.com/QwenLM/Qwen3-TTS)          | 9 built in (5 zh)                 | zh, en, ja, ko, de, fr, … 10 |
+| Qwen3-TTS 0.6B (voice cloning)                                 | clones only                       | the same 10                  |
 
 Nothing is baked into the image; each is downloaded from the app's own UI on
 first use. What each costs, how each clones and which to pick is
@@ -94,9 +97,13 @@ configuration, settings and troubleshooting.
 
 ## Acknowledgements
 
-- [Hojo TTS Light](https://github.com/HojoAI/Hojo-TTS-Light) and
-  [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) — the ONNX models
-  this app serves.
+- [Hojo TTS Light](https://github.com/HojoAI/Hojo-TTS-Light),
+  [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano),
+  [OmniVoice](https://github.com/k2-fsa/OmniVoice) and
+  [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) — the models this app
+  serves; the ONNX graphs of the last two are
+  [rhasspy/omnivoice-onnx](https://huggingface.co/rhasspy/omnivoice-onnx) and
+  [onnx-community](https://huggingface.co/onnx-community)'s.
 
 ## License
 
