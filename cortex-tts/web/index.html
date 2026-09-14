@@ -65,6 +65,14 @@
         <label for="voice" id="voiceLabel">Voice</label>
         <select id="voice"></select>
       </div>
+      <div class="field fixed">
+        <label for="gender">Gender</label>
+        <select id="gender">
+          <option value="">— any —</option>
+          <option value="female">female</option>
+          <option value="male">male</option>
+        </select>
+      </div>
       <div class="field" id="instructField" hidden>
         <label for="instruct">Style instruction</label>
         <input id="instruct" type="text" placeholder="speak slowly, in a warm tone">
@@ -98,7 +106,7 @@
   <div class="sec-head">
     <h2>Models</h2>
     <span class="note">Weights download on demand. Only one model stays in
-    memory at a time by default — the larger two need about 2 GB each.</span>
+    memory at a time by default; the larger ones need 1–2 GB each.</span>
   </div>
   <div class="cards" id="models"></div>
   <div class="msg" id="modelMsg" aria-live="polite" hidden></div>
