@@ -127,6 +127,11 @@ class ReferenceStore:
         self._lock = threading.Lock()
         self._load()
 
+    @property
+    def root(self) -> Path:
+        """Directory holding the recordings and whatever engines keep beside them."""
+        return self._root
+
     def _load(self) -> None:
         if not self._index.is_file():
             return
@@ -304,6 +309,10 @@ class ReferenceStore:
             if reference is None:
                 return False
             reference.audio_path.unlink(missing_ok=True)
+            # Engines keep their encodings beside the recording; an engine
+            # not loaded right now would never be told to drop its own.
+            for sidecar in self._root.glob(f"{reference_id}.*"):
+                sidecar.unlink(missing_ok=True)
             self._save()
         _LOGGER.info("removed reference %s", reference_id)
         return True

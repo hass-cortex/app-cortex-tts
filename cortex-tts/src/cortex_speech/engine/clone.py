@@ -51,6 +51,18 @@ class _Prompt(NamedTuple):
     speaker_vec: np.ndarray
 
 
+class _PromptSidecar:
+    suffix = ".hojo80.npz"
+
+    def dump(self, value: _Prompt, path: Path) -> None:
+        with path.open("wb") as handle:
+            np.savez(handle, codes=value.codes, speaker_vec=value.speaker_vec)
+
+    def load(self, path: Path) -> _Prompt:
+        with np.load(path) as data:
+            return _Prompt(codes=data["codes"], speaker_vec=data["speaker_vec"])
+
+
 class CloneEngine:
     """Wraps the vendored 80M runtime, caching per-reference encodings."""
 
@@ -85,7 +97,9 @@ class CloneEngine:
         )
         self.provider = verify(execution_provider, in_use(sessions_of(self._model)))
         self._references = references
-        self._prompts: ConditioningCache[_Prompt] = ConditioningCache()
+        self._prompts: ConditioningCache[_Prompt] = ConditioningCache(
+            _PromptSidecar(), references.root
+        )
         _LOGGER.info(
             "loaded 80M bundle from %s in %.2fs on %s",
             models_dir,

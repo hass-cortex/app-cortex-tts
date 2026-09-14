@@ -134,6 +134,31 @@ def own_voices(directory: Path) -> list[Voice]:
     return [_describe(voice_id) for voice_id in _DESIGNED_VOICES]
 
 
+def retranscribed(prompt: object, transcript: str) -> object:
+    """Put the reference's current transcript on a cached clone prompt.
+
+    The cache is keyed by the recording alone, and the transcript can be
+    corrected without re-uploading it, so the prompt's copy is replaced on
+    every use rather than trusted.
+    """
+    prompt.ref_text = transcript  # type: ignore[attr-defined]
+    return prompt
+
+
+class _PromptSidecar:
+    """The clone prompt in the vendored runtime's own portable format."""
+
+    suffix = ".omni.pt"
+
+    def dump(self, value: object, path: Path) -> None:
+        value.save(str(path))  # type: ignore[attr-defined]
+
+    def load(self, path: Path) -> object:
+        from ..vendor.omnivoice.modeling import VoiceClonePrompt
+
+        return VoiceClonePrompt.load(str(path))
+
+
 class OmniVoiceEngine:
     """Wraps the vendored OmniVoice pipeline with an ONNX language model."""
 
@@ -175,7 +200,9 @@ class OmniVoiceEngine:
             num_threads=num_threads,
         )
         self.provider = verify(execution_provider, in_use(sessions_of(self)))
-        self._prompts: ConditioningCache[object] = ConditioningCache()
+        self._prompts: ConditioningCache[object] = ConditioningCache(
+            _PromptSidecar(), references.root
+        )
         _LOGGER.info(
             "loaded OmniVoice bundle from %s in %.2fs on %s (%d designed voices)",
             models_dir,
@@ -241,7 +268,9 @@ class OmniVoiceEngine:
         reference = self._references.get(voice)
         if reference is None:
             raise UnknownVoiceError(f"unknown voice {voice!r}")
-        return None, self._prompts.get(reference, self._encode)
+        return None, retranscribed(
+            self._prompts.get(reference, self._encode), reference.transcript
+        )
 
     def synthesize(
         self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()

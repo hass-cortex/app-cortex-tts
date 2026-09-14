@@ -12,6 +12,7 @@ import json
 import logging
 import time
 from collections.abc import Generator, Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -130,6 +131,27 @@ def _frame_budget(text: str) -> int:
     return int((seconds + _FRAME_BUDGET_FLOOR_SECONDS) * FRAMES_PER_SECOND)
 
 
+class _ConditioningSidecar:
+    suffix = ".qwen3.npz"
+
+    def dump(self, value: ReferenceConditioning, path: Path) -> None:
+        with path.open("wb") as handle:
+            np.savez(
+                handle,
+                codes=value.codes,
+                x_vector=value.x_vector,
+                transcript=np.array(value.transcript),
+            )
+
+    def load(self, path: Path) -> ReferenceConditioning:
+        with np.load(path) as data:
+            return ReferenceConditioning(
+                codes=data["codes"],
+                x_vector=data["x_vector"],
+                transcript=str(data["transcript"]),
+            )
+
+
 class Qwen3TtsEngine:
     """Wraps the Qwen3-TTS ONNX bundle, caching per-reference conditioning."""
 
@@ -170,7 +192,7 @@ class Qwen3TtsEngine:
         self._voices = [_describe(name) for name in self._runtime.speakers]
         self._builtin = {voice.id for voice in self._voices}
         self._conditioning: ConditioningCache[ReferenceConditioning] = (
-            ConditioningCache()
+            ConditioningCache(_ConditioningSidecar(), references.root)
         )
         _LOGGER.info(
             "loaded Qwen3-TTS bundle from %s in %.2fs on %s "
@@ -229,6 +251,9 @@ class Qwen3TtsEngine:
             )
         try:
             conditioning = self._conditioning.get(reference, self._encode)
+            # Cached by the recording alone; the transcript is corrected in
+            # place, so the cached copy is never the one to trust.
+            conditioning = replace(conditioning, transcript=reference.transcript)
         except Qwen3TtsError as err:
             raise NoAudioError(str(err)) from err
         return None, conditioning, _TAG_FOR_LANGUAGE.get(reference.language)

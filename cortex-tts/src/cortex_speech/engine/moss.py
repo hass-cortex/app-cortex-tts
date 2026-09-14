@@ -124,6 +124,18 @@ def _downmix(waveform: np.ndarray) -> np.ndarray:
     return waveform.mean(axis=axis).astype(np.float32)
 
 
+class _CodesSidecar:
+    """Prompt codes as JSON: exact, and ragged rows would not fit an array."""
+
+    suffix = ".moss.json"
+
+    def dump(self, value: list[list[int]], path: Path) -> None:
+        path.write_text(json.dumps(value), encoding="utf-8")
+
+    def load(self, path: Path) -> list[list[int]]:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+
 class MossEngine:
     """Wraps the vendored MOSS runtime, caching per-reference conditioning."""
 
@@ -165,7 +177,9 @@ class MossEngine:
         self.provider = verify(execution_provider, in_use(sessions_of(self._runtime)))
         self._voices = [_describe(v) for v in self._runtime.list_builtin_voices()]
         self._builtin_ids = {v.id for v in self._voices}
-        self._prompts: ConditioningCache[list[list[int]]] = ConditioningCache()
+        self._prompts: ConditioningCache[list[list[int]]] = ConditioningCache(
+            _CodesSidecar(), references.root
+        )
         _LOGGER.info(
             "loaded MOSS bundle from %s in %.2fs on %s (%d built-in voices)",
             models_dir,

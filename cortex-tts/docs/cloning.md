@@ -71,7 +71,10 @@ one.
 WAV, FLAC and OGG are accepted; the recording is stored as 16-bit PCM WAV at
 its original sample rate, downmixed to mono, under `/share/cortex-tts/references/`
 (`<id>.wav` plus a `references.json` index) — so it is in Home Assistant backups
-and reachable over the `share` Samba folder.
+and reachable over the `share` Samba folder. Each model keeps its encoding of
+the recording beside it (`<id>.<fingerprint>.<model>.*`), so a model that was
+unloaded does not re-encode the reference when it comes back; these files are
+disposable and are recreated on demand.
 
 ## The transcript
 

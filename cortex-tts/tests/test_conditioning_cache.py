@@ -10,12 +10,16 @@ the wrong branch still produces audio, in the wrong voice.
 from __future__ import annotations
 
 import ast
+import io
+import json
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 from cortex_speech.engine.conditioning import ConditioningCache
-from cortex_speech.references import Reference
+from cortex_speech.references import Reference, ReferenceStore
 
 SRC = Path(__file__).resolve().parent.parent / "src/cortex_speech/engine"
 
@@ -77,7 +81,12 @@ class TestInvalidation:
         assert encode.calls == 2
 
     def test_editing_a_transcript_keeps_the_encoding(self) -> None:
-        """The transcript reaches the model as text; re-encoding is waste."""
+        """The encoding is of the audio alone; re-encoding is waste.
+
+        An engine whose conditioning object also carries the transcript
+        (OmniVoice, Qwen3) replaces that copy on use — see
+        `test_transcript_refresh.py`.
+        """
         cache: ConditioningCache[str] = ConditioningCache()
         encode = _Encoder()
         before = cache.get(_reference(), encode)
@@ -127,3 +136,103 @@ class TestNoEngineKeepsItsOwn:
             and ast.unparse(node.annotation).startswith("dict[str,")
         ]
         assert not offenders, f"{module} keeps its own cache: {offenders}"
+
+
+class _JsonSidecar:
+    """The smallest thing that satisfies `Sidecar`."""
+
+    suffix = ".fake.json"
+
+    def dump(self, value: str, path: Path) -> None:
+        path.write_text(json.dumps(value))
+
+    def load(self, path: Path) -> str:
+        return json.loads(path.read_text())
+
+
+class TestOnDisk:
+    """An unloaded engine that comes back must not pay the encode again."""
+
+    def test_a_fresh_cache_reads_what_the_last_one_wrote(self, tmp_path) -> None:
+        encode = _Encoder()
+        first = ConditioningCache[str](_JsonSidecar(), tmp_path).get(
+            _reference(), encode
+        )
+        again = ConditioningCache[str](_JsonSidecar(), tmp_path).get(
+            _reference(), encode
+        )
+        assert again == first
+        assert encode.calls == 1
+        assert (tmp_path / "wanwan.aaaa.fake.json").is_file()
+
+    def test_a_replaced_recording_misses_and_sweeps_the_old_file(
+        self, tmp_path
+    ) -> None:
+        encode = _Encoder()
+        ConditioningCache[str](_JsonSidecar(), tmp_path).get(_reference("aaaa"), encode)
+        ConditioningCache[str](_JsonSidecar(), tmp_path).get(_reference("bbbb"), encode)
+        assert encode.calls == 2
+        assert [p.name for p in tmp_path.iterdir()] == ["wanwan.bbbb.fake.json"]
+
+    def test_an_unreadable_file_is_replaced_not_fatal(self, tmp_path) -> None:
+        (tmp_path / "wanwan.aaaa.fake.json").write_text("{not json")
+        encode = _Encoder()
+        value = ConditioningCache[str](_JsonSidecar(), tmp_path).get(
+            _reference(), encode
+        )
+        assert encode.calls == 1
+        assert json.loads((tmp_path / "wanwan.aaaa.fake.json").read_text()) == value
+
+    def test_forget_removes_the_file_too(self, tmp_path) -> None:
+        cache = ConditioningCache[str](_JsonSidecar(), tmp_path)
+        cache.get(_reference(), _Encoder())
+        cache.forget("wanwan")
+        assert list(tmp_path.iterdir()) == []
+
+    def test_only_this_engine_s_files_are_touched(self, tmp_path) -> None:
+        other = tmp_path / "wanwan.aaaa.other.npz"
+        other.write_bytes(b"")
+        cache = ConditioningCache[str](_JsonSidecar(), tmp_path)
+        cache.get(_reference(), _Encoder())
+        cache.forget("wanwan")
+        assert other.is_file()
+
+    def test_without_a_directory_nothing_is_written(self, tmp_path) -> None:
+        ConditioningCache[str](_JsonSidecar()).get(_reference(), _Encoder())
+        assert list(tmp_path.iterdir()) == []
+
+
+class TestTheStoreSweepsSidecars:
+    """Removing a reference while no engine is loaded must not leave files."""
+
+    def test_remove_takes_every_engine_s_sidecar_with_it(self, tmp_path) -> None:
+        store = ReferenceStore(tmp_path)
+        rate = 24000
+        t = np.arange(int(rate * 2.5)) / rate
+        clip = np.concatenate([0.2 * np.sin(2 * np.pi * 220 * t), np.zeros(rate // 2)])
+        buffer = io.BytesIO()
+        sf.write(buffer, clip.astype(np.float32), rate, format="WAV", subtype="PCM_16")
+        reference = store.add(
+            name="Wanwan", transcript="你好。", audio=buffer.getvalue()
+        )
+        for suffix in (".omni.pt", ".moss.json"):
+            (
+                store.root / f"{reference.id}.{reference.fingerprint}{suffix}"
+            ).write_bytes(b"")
+        neighbour = store.add(
+            name="Wanwan", transcript="你好。", audio=buffer.getvalue()
+        )
+        (store.root / f"{neighbour.id}.{neighbour.fingerprint}.omni.pt").write_bytes(
+            b""
+        )
+
+        assert store.remove(reference.id)
+
+        left = sorted(p.name for p in store.root.iterdir())
+        assert left == sorted(
+            [
+                "references.json",
+                f"{neighbour.id}.wav",
+                f"{neighbour.id}.{neighbour.fingerprint}.omni.pt",
+            ]
+        )
