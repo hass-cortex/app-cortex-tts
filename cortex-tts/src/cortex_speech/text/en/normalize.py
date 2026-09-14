@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .. import passes
+from .. import passes, units
 from ..options import DEFAULT_OPTIONS, NormalizeOptions
 from ..passes import Pass
 
@@ -185,6 +185,43 @@ def _degree(match: re.Match[str], options: NormalizeOptions) -> str:
     return f"{_span(match)} degrees"
 
 
+# Symbols Home Assistant emits that CLDR has no English name for.
+_OWN_UNITS: dict[str, tuple[str, str]] = {
+    "mWh": ("milliwatt-hour", "milliwatt-hours"),
+    "Wh": ("watt-hour", "watt-hours"),
+    "MWh": ("megawatt-hour", "megawatt-hours"),
+    "GWh": ("gigawatt-hour", "gigawatt-hours"),
+    "μA": ("microampere", "microamperes"),
+    "µA": ("microampere", "microamperes"),
+    "μV": ("microvolt", "microvolts"),
+    "µV": ("microvolt", "microvolts"),
+    "mV": ("millivolt", "millivolts"),
+    "kV": ("kilovolt", "kilovolts"),
+    "VA": ("volt-ampere", "volt-amperes"),
+    "kVA": ("kilovolt-ampere", "kilovolt-amperes"),
+    "mHz": ("millihertz", "millihertz"),
+    "mPa": ("millipascal", "millipascals"),
+    "dB": ("decibel", "decibels"),
+    "dBA": ("decibel", "decibels"),
+    "ppm": ("part per million", "parts per million"),
+    "ppb": ("part per billion", "parts per billion"),
+}
+_UNIT = passes.quantity(units.alternation(set(units.HA_UNITS) | units.UNNAMED))
+
+
+def _unit(match: re.Match[str], options: NormalizeOptions) -> str:
+    """Read a number and its unit as CLDR names it: "48 W" -> forty-eight watts."""
+    words, symbol = _span(match), match.group(3)
+    # A range agrees with the number read last.
+    value = float(match.group(2) or match.group(1))
+    named = units.name(value, words, symbol, "en")
+    if named is not None:
+        return named
+    if symbol in _OWN_UNITS:
+        return f"{words} {_OWN_UNITS[symbol][0 if value == 1 else 1]}"
+    return f"{words} {symbol}"
+
+
 def _version(match: re.Match[str], options: NormalizeOptions) -> str:
     return " point ".join(cardinal(int(part)) for part in match.group(0).split("."))
 
@@ -230,6 +267,7 @@ _PASSES: tuple[Pass, ...] = (
     Pass(passes.TEMPERATURE, _temperature, "expand_units"),
     Pass(passes.DEGREE, _degree, "expand_units"),
     Pass(passes.VERSION, _version),
+    Pass(_UNIT, _unit, "expand_units"),
     Pass(passes.RANGE, _range, "expand_numbers"),
     Pass(_STANDALONE, _number, "expand_numbers"),
     Pass(_WELDED, _welded, "expand_numbers"),

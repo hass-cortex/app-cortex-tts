@@ -3,8 +3,9 @@
 The models pronounce no Arabic numeral in any language, so the least a
 language needs is its numbers read out — ``num2words`` knows how to for some
 forty of them — and the shapes Home Assistant puts numbers in read the way
-that language reads them: unit symbols named as CLDR names them (``babel``:
-26.5°C is "sechsundzwanzig Komma fünf Grad Celsius"), an ISO date laid out
+that language reads them: unit symbols named as CLDR names them (``babel``,
+through the table in `units`: 26.5°C is "sechsundzwanzig Komma fünf Grad
+Celsius"), an ISO date laid out
 as CLDR lays it out ("14. September 2026", "2026年9月14日") with its numbers
 in words, a clock literal as hour words then minute words. Only those fixed
 shapes: a number this locale is not sure of is left as digits, because a
@@ -23,7 +24,7 @@ import re
 from collections.abc import Callable
 from functools import cache
 
-from . import passes
+from . import passes, units
 from .locales import Locale
 from .options import NormalizeOptions
 from .passes import Pass
@@ -38,37 +39,6 @@ _UNSPACED = frozenset({"ja"})
 # not how a date read off a sensor should sound.
 _ERA_YEARS = frozenset({"ja", "ko"})
 
-# The unit symbols the Chinese locale reads, as CLDR names them. A symbol
-# with no CLDR unit (ppm, µg/m³) is left as written rather than half-read.
-_CLDR_UNITS: dict[str, str] = {
-    "%": "concentr-percent",
-    "％": "concentr-percent",
-    "°C": "temperature-celsius",
-    "℃": "temperature-celsius",
-    "°F": "temperature-fahrenheit",
-    "℉": "temperature-fahrenheit",
-    "kWh": "energy-kilowatt-hour",
-    "kW": "power-kilowatt",
-    "W": "power-watt",
-    "mA": "electric-milliampere",
-    "A": "electric-ampere",
-    "V": "electric-volt",
-    "kB": "digital-kilobyte",
-    "MB": "digital-megabyte",
-    "GB": "digital-gigabyte",
-    "TB": "digital-terabyte",
-    "hPa": "pressure-hectopascal",
-    "km/h": "speed-kilometer-per-hour",
-    "m/s": "speed-meter-per-second",
-    "km": "length-kilometer",
-    "cm": "length-centimeter",
-    "mm": "length-millimeter",
-    "m²": "area-square-meter",
-    "m³": "volume-cubic-meter",
-    "kg": "mass-kilogram",
-    "mg": "mass-milligram",
-    "lx": "light-lux",
-}
 
 # A number as Home Assistant writes one (26.5, -3, 1,234) or as the language
 # writes one (26,5 where the comma is the decimal mark). A comma before
@@ -80,7 +50,7 @@ _NUMBER = re.compile(
 _QUANTITY = re.compile(
     rf"({_NUMBER.pattern})(?:{passes.DASH}({_NUMBER.pattern}))?\s*"
     + "("
-    + "|".join(re.escape(u) for u in sorted(_CLDR_UNITS, key=len, reverse=True))
+    + units.alternation(set(units.HA_UNITS) | units.UNNAMED)
     + ")"
 )
 _DAY_DOT = re.compile(r"(?<!\d)(\d{1,2})\.(?=\s)")
@@ -130,32 +100,12 @@ def _words(value: float | int, code: str, to: str = "cardinal") -> str:
 
 
 def _named(value: float | int, words: str, unit: str, code: str) -> str:
-    """The unit's CLDR name around the number words, or the symbol if none.
-
-    The number goes in as a number, so the name agrees with it (kilomètre,
-    kilomètres), and comes out replaced by its words. Checked first: asked
-    for a name a locale lacks, babel hands back the unit's id, and
-    "concentr-percent" read aloud is worse than "%".
-    """
-    from babel.core import UnknownLocaleError
-    from babel.numbers import format_decimal
-    from babel.units import format_unit, get_unit_name
-
+    """The unit's CLDR name around the number words, or the symbol if none."""
+    named = units.name(value, words, unit, code)
+    if named is not None:
+        return named
     # A symbol stays welded to the words (68%); a letter needs its space back.
-    unnamed = f"{words} {unit}" if unit[0].isalpha() else f"{words}{unit}"
-    cldr = _CLDR_UNITS[unit]
-    try:
-        if get_unit_name(cldr, "long", code) is None:
-            return unnamed
-        named = format_unit(value, cldr, "long", locale=code)
-        digits = format_decimal(value, locale=code)
-    except UnknownLocaleError:
-        return unnamed
-    if digits not in named:
-        return unnamed
-    # CLDR joins number and unit with a narrow no-break space in some
-    # locales; a model has no reason to know that glyph.
-    return named.replace(digits, words, 1).replace(" ", " ").replace("\xa0", " ")
+    return f"{words} {unit}" if unit[0].isalpha() else f"{words}{unit}"
 
 
 def _renders(code: str) -> tuple[Pass, ...]:

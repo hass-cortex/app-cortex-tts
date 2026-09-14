@@ -41,9 +41,11 @@ def quantity(unit: str) -> re.Pattern[str]:
 
     Groups: the first number, the second number of a range or None, and the
     unit. A range is claimed together with its unit so that "25-30°C" reads
-    as one temperature span, not as a number and a negative temperature.
+    as one temperature span, not as a number and a negative temperature. A
+    unit followed by a letter is the start of a word: "72 hours" holds no
+    "h".
     """
-    return re.compile(rf"({NUMBER})(?:{DASH}({NUMBER}))?\s*({unit})")
+    return re.compile(rf"({NUMBER})(?:{DASH}({NUMBER}))?\s*({unit})(?![A-Za-z])")
 
 
 PERCENT = quantity(r"[%％]")

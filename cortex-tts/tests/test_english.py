@@ -53,6 +53,30 @@ class TestNormalize:
     def test_constructs(self, raw: str, expected: str) -> None:
         assert english.normalize(raw, NUMBERS) == expected
 
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("48 W", "forty-eight watts"),
+            ("1 kWh", "one kilowatt hour"),
+            ("3.2 kWh", "three point two kilowatt-hours"),
+            ("1013 hPa", "one thousand and thirteen hectopascals"),
+            ("12 km/h", "twelve kilometers per hour"),
+            ("2 L/min", "two liters per minute"),
+            ("12 mV", "twelve millivolts"),
+            ("5 ppm", "five parts per million"),
+            ("1-2 kWh", "one to two kilowatt-hours"),
+            ("72 hours", "72 hours"),
+            ("3 dBm", "three dBm"),
+        ],
+    )
+    def test_home_assistant_s_units_are_read_by_default(
+        self, raw: str, expected: str
+    ) -> None:
+        # A unit says what the number is, so no bare-number switch is
+        # needed; "72 hours" holds no "h", and a unit CLDR cannot name stays
+        # as its letters.
+        assert english.normalize(raw) == expected
+
     @pytest.mark.parametrize("dash", ["-", "~", "\u2013", "\u2014"])
     def test_a_dash_between_numbers_is_a_range(self, dash: str) -> None:
         assert english.normalize(f"48 {dash} 72 hours", NUMBERS) == (
@@ -79,7 +103,7 @@ class TestNormalize:
             ("v1.2 shipped", "v one point two shipped"),
             ("PM2.5 is high", "PM two point five is high"),
             # Digits before a letter carry a unit, so they stay a quantity.
-            ("a 24V supply", "a twenty-four V supply"),
+            ("a 24V supply", "a twenty-four volts supply"),
         ],
     )
     def test_a_digit_welded_to_a_letter_is_still_spoken(

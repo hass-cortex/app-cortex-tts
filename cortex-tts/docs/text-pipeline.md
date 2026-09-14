@@ -132,9 +132,16 @@ Latin words inside a Chinese sentence are left alone — the models read English
 natively, so `Home Assistant` and `Roborock` pass through untouched. A bare
 English sentence is not converted either: `t2s` has nothing to do to it.
 
-The unit tables are fixed (`SUFFIX_UNITS` for symbols and `WORD_UNITS` for
-Chinese unit words, both in `src/cortex_speech/text/zh/normalize.py`); an
-unusual unit passes through unexpanded until it is added there.
+The unit symbols are the ones Home Assistant's `homeassistant/const.py`
+defines (`UnitOf*`: `W`, `kWh`, `hPa`, `L/min`, …). English and the generic
+locale name them through CLDR (`src/cortex_speech/text/units.py`, via
+`babel`: "forty-eight watts", "zwei Liter pro Minute"), with the number's
+agreement; a symbol CLDR has no name for in that language stays as its
+letters after the number words (`5 ppm` → "five parts per million" in
+English, "fünf ppm" in German). Chinese has its own readings table
+(`SUFFIX_UNITS` in `text/zh/normalize.py`: `kWh` → 度電, `MHz` → 兆赫) and
+`WORD_UNITS` for unit words. Symbols that are also words or labels (`in`,
+`st`, `ac`, `ha`, `K`, `B`, `d`, `w`, `y`) are left out on purpose.
 
 ## Order, and the stop at the end
 

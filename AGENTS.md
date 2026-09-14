@@ -108,6 +108,7 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 ├── text/             ── THE TEXT PATH ──
 │   ├── pipeline.py   plan()/prepare(): language → locale → normalise → rewrites → segment
 │   ├── locales.py    Locale and Rewrite: what a language is to the pipeline; the registry
+│   ├── units.py      Home Assistant's unit symbols as CLDR unit ids, named through babel
 │   ├── generic.py    the locale any unwritten language gets: num2words + CLDR units and dates
 │   ├── passes.py     the ordered pass table the written normalisers are built from
 │   ├── options.py    NormalizeOptions, shared so no normaliser imports another
@@ -451,10 +452,15 @@ is who hears it.
 
 ### Add a unit to the normaliser
 
-`SUFFIX_UNITS` in `text/zh/normalize.py` for a symbol with a spoken form
-(`kWh` → 度電); `WORD_UNITS` there for a Chinese unit word that is read as
-written (`分鐘`), listed in both scripts. Either alternation is built
-longest-first so `km/h` is matched before `km`; nothing else needs to change.
+The symbols are Home Assistant's (`homeassistant/const.py`, `UnitOf*`).
+`text/units.py` maps each to its CLDR unit id (or a numerator/denominator
+pair for a rate), which names it in English and in every generic-locale
+language through `babel`; `UNNAMED` there lists the symbols CLDR has no
+unit for, so the number before them is still read. `SUFFIX_UNITS` in
+`text/zh/normalize.py` carries the Chinese reading of the same symbols
+(`kWh` → 度電); `WORD_UNITS` there the Chinese unit words read as written
+(`分鐘`), in both scripts. Every alternation is built longest-first so
+`km/h` is matched before `km`; nothing else needs to change.
 
 ### Add an engine
 

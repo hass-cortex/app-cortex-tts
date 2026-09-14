@@ -93,6 +93,12 @@ class TestNormalize:
             ("12 km/h", "十二公里每小時"),
             ("1013 hPa", "一千零一十三百帕"),
             ("-3.5°C", "攝氏負三點五度"),
+            ("2 L/min", "二公升每分鐘"),
+            ("12 mV", "十二毫伏特"),
+            ("5 m", "五公尺"),
+            ("30 s", "三十秒"),
+            ("2.4 GHz", "二點四吉赫"),
+            ("5 ppm", "五ppm"),
         ],
     )
     def test_units_and_literals(self, raw: str, expected: str) -> None:

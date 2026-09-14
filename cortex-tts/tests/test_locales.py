@@ -99,10 +99,20 @@ class TestGeneric:
         )
 
     def test_a_unit_cldr_has_no_name_for_keeps_its_symbol(self) -> None:
-        # Japanese CLDR has no long name for percent; "concentr-percent" read
-        # aloud would be worse than the sign.
-        assert "".join(prepare("湿度 68%", language="ja")) == "湿度六十八%。"
+        # Japanese CLDR composes no "per" unit; "リットル毎duration-minute"
+        # read aloud would be worse than the symbol.
+        assert "".join(prepare("湿度 68%、2 L/min", language="ja")) == (
+            "湿度六十八パーセント、二 L/min。"
+        )
         assert "".join(prepare("濃度 5 ppm", WITH_NUMBERS, "de")) == "濃度 fünf ppm."
+
+    def test_home_assistant_s_units_are_named_by_cldr(self) -> None:
+        assert "".join(prepare("2 L/min und 12 mV", language="de")) == (
+            "zwei Liter pro Minute und zwölf mV."
+        )
+        assert "".join(prepare("2 µg/m³", language="fr")) == (
+            "deux microgrammes par mètre cube."
+        )
 
     def test_a_model_that_reads_numerals_keeps_the_generic_locale_out(self) -> None:
         decided = plan("Es sind 26.5°C", language="de", reads_numerals=True)
