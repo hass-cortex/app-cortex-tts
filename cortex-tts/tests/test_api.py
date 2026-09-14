@@ -206,8 +206,9 @@ class TestPreview:
         body = response.json()
         assert body["prepared"] == "Es sind sechsundzwanzig Komma fünf Grad Celsius."
         assert body["language"] == "de-DE"
-        # A language without Chinese rewrites lists none, rather than "off".
-        assert body["passes"] == {"normalize_text": True, "expand_numbers": False}
+        # A language without Chinese rewrites lists none, rather than "off";
+        # the default model here is Hojo, which cannot say a digit.
+        assert body["passes"] == {"normalize_text": True, "expand_numbers": True}
 
     def test_the_model_decides_whether_the_generic_locale_runs(
         self, client: TestClient
@@ -235,7 +236,7 @@ class TestPreview:
         assert body["prepared"] == "垃圾车来了。"
         assert body["passes"] == {
             "normalize_text": True,
-            "expand_numbers": False,
+            "expand_numbers": True,
             "convert_script": True,
             "taiwan_readings": False,
         }
@@ -259,17 +260,40 @@ class TestPreview:
             assert request.convert_script is None
             assert request.taiwan_readings is None
 
-    def test_a_bare_number_is_read_only_when_asked(self, client: TestClient) -> None:
-        # 110 is an emergency number; read as a quantity it would mislead.
-        unasked = client.post("/api/preview", headers=AUTH, json={"text": "撥打 110"})
-        assert unasked.json()["prepared"] == "拨打 110。"
-        asked = client.post(
+    def test_the_model_decides_whether_a_bare_number_is_read(
+        self, client: TestClient
+    ) -> None:
+        # 110 is an emergency number; read as a quantity it would mislead —
+        # unless the model cannot say a digit at all, when digits are noise.
+        hojo = client.post(
+            "/api/preview", headers=AUTH, json={"text": "撥打 110", "model": "hojo-40m"}
+        )
+        assert hojo.json()["prepared"] == "拨打一百一十。"
+        assert hojo.json()["passes"]["expand_numbers"] is True
+        moss = client.post(
             "/api/preview",
             headers=AUTH,
-            json={"text": "撥打 110", "expand_numbers": True},
+            json={"text": "撥打 110", "model": "moss-nano"},
         )
-        assert asked.json()["prepared"] == "拨打一百一十。"
-        assert asked.json()["passes"]["expand_numbers"] is True
+        assert moss.json()["prepared"] == "拨打 110。"
+        assert moss.json()["passes"]["expand_numbers"] is False
+
+    def test_the_request_overrides_the_model_on_bare_numbers(
+        self, client: TestClient
+    ) -> None:
+        told_off = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={"text": "撥打 110", "model": "hojo-40m", "expand_numbers": False},
+        )
+        assert told_off.json()["prepared"] == "拨打 110。"
+        told_on = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={"text": "撥打 110", "model": "moss-nano", "expand_numbers": True},
+        )
+        assert told_on.json()["prepared"] == "拨打一百一十。"
+        assert told_on.json()["passes"]["expand_numbers"] is True
 
     def test_preview_can_leave_the_readings_alone(self, client: TestClient) -> None:
         response = client.post(

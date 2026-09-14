@@ -91,6 +91,9 @@ class ModelOut(BaseModel):
     reads_numerals: bool
     """Whether the model reads digits itself where the pipeline has no locale
     written for the language; the generic number expansion then stands aside."""
+    needs_number_words: bool
+    """Whether the model cannot say a digit at all, so a bare number is read
+    as a quantity for it unless the request says otherwise."""
     languages: list[str]
     sample_rate: int
     size_mb: int
@@ -131,10 +134,11 @@ class SpeakRequest(BaseModel):
     `/api/speak/stream` to mp3, because a stream has to be writable
     without knowing how long the audio will be."""
     normalize_text: bool = True
-    expand_numbers: bool = False
+    expand_numbers: bool | None = None
     """Read a bare number — no unit, clock or date around it — as a quantity.
-    Off unless asked: a bare number is as often a phone number, a room or a
-    model as a count, and a wrong reading misleads."""
+    Left out, the model decides: on for one that cannot say a digit at all
+    (Hojo), off for the rest, because a bare number is as often a phone
+    number, a room or a model as a count, and a wrong reading misleads."""
     convert_script: bool | None = None
     """Chinese only. Left out, the pipeline decides from the language."""
     taiwan_readings: bool | None = None
@@ -226,7 +230,7 @@ class PreviewRequest(BaseModel):
     language: str | None = Field(default=None, max_length=32)
     """The language of the text, as on `/api/speak`; sniffed when left out."""
     normalize_text: bool = True
-    expand_numbers: bool = False
+    expand_numbers: bool | None = None
     convert_script: bool | None = None
     taiwan_readings: bool | None = None
 

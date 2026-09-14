@@ -32,7 +32,6 @@ from cortex_speech import (
     ModelNotReadyError,
     ModelSpec,
     NoAudioError,
-    NormalizeOptions,
     OutOfMemoryError,
     ProviderUnavailableError,
     Reference,
@@ -215,6 +214,7 @@ def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
         language_choice=spec.language_choice,
         style_instruction=spec.style_instruction,
         reads_numerals=spec.reads_numerals,
+        needs_number_words=spec.needs_number_words,
         languages=list(spec.languages),
         sample_rate=spec.sample_rate,
         size_mb=spec.size_mb,
@@ -371,7 +371,13 @@ async def preview_text(
         body.taiwan_readings,
     )
     text = body.text.strip()
-    decided = plan(text, options, body.language, reads_numerals=spec.reads_numerals)
+    decided = plan(
+        text,
+        options,
+        body.language,
+        reads_numerals=spec.reads_numerals,
+        needs_number_words=spec.needs_number_words,
+    )
     prepared = run(text, decided, options.normalize_options)
     segments = segment(prepared, stop=decided.locale.stop)
     readings: list[Reading] = []
@@ -402,16 +408,16 @@ async def preview_text(
 
 def _text_options(
     normalize_text: bool,
-    expand_numbers: bool,
+    expand_numbers: bool | None,
     convert_script: bool | None,
     taiwan_readings: bool | None,
 ) -> TextOptions:
     """The request's text switches as the pipeline takes them."""
     return TextOptions(
         normalize_text=normalize_text,
+        expand_numbers=expand_numbers,
         convert_script=convert_script,
         taiwan_readings=taiwan_readings,
-        normalize_options=NormalizeOptions(expand_numbers=expand_numbers),
     )
 
 
@@ -473,7 +479,7 @@ async def _resolve(
     model: str | None,
     voice: str | None,
     normalize_text: bool,
-    expand_numbers: bool,
+    expand_numbers: bool | None,
     convert_script: bool | None,
     taiwan_readings: bool | None,
     delivery: Delivery = Delivery(),
@@ -511,7 +517,11 @@ async def _resolve(
     # answered first — before a model with no voices, or one not downloaded,
     # gets to answer instead.
     segments = prepare(
-        text, options, delivery.language, reads_numerals=spec.reads_numerals
+        text,
+        options,
+        delivery.language,
+        reads_numerals=spec.reads_numerals,
+        needs_number_words=spec.needs_number_words,
     )
     if not segments:
         raise _http(
@@ -551,7 +561,13 @@ async def _resolve(
 
     language = delivery.language or chosen.language
     if language != delivery.language:
-        segments = prepare(text, options, language, reads_numerals=spec.reads_numerals)
+        segments = prepare(
+            text,
+            options,
+            language,
+            reads_numerals=spec.reads_numerals,
+            needs_number_words=spec.needs_number_words,
+        )
 
     # The engine is told the language only where the catalog says it takes
     # one; elsewhere the voice decides, and the tag has done its work in the
@@ -570,7 +586,7 @@ async def _synthesize(
     voice: str | None,
     fmt: AudioFormat,
     normalize_text: bool = True,
-    expand_numbers: bool = False,
+    expand_numbers: bool | None = None,
     convert_script: bool | None = None,
     taiwan_readings: bool | None = None,
     normalize_level: bool = True,

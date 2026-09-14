@@ -21,7 +21,8 @@ _Avoid_: "preprocessing", "cleanup" (both suggest something optional)
 **Normalisation**:
 Expanding the fixed shapes a sensor produces — units, percentages, clock
 literals, ISO dates — into words: `26.5°C` into 攝氏二十六點五度. A bare `80`
-is read as "eighty" only when `expand_numbers` asks. Which language the words
+is read as "eighty" only when `expand_numbers` asks, or the model cannot say
+a digit at all (`needs_number_words`, Hojo). Which language the words
 come out in is the **Locale**'s, chosen by the request's language tag.
 _Avoid_: "conversion" (that is the other pass), "normalize the audio" (see
 Flagged ambiguities)
@@ -85,7 +86,8 @@ the wire. The last two are Chinese's, and absent means the language decides.
 text is already prepared, not a preference: turning conversion off for
 ordinary Traditional Chinese makes the voice unintelligible.
 `expand_numbers` is off unless asked — a bare number is as often a room or a
-phone number as a count — and `taiwan_readings` is a preference.
+phone number as a count — except for a model that cannot say a digit at all,
+where digits are noise and it is on; `taiwan_readings` is a preference.
 
 **Taiwan reading** / **Stand-in**:
 A word Taiwan reads differently from the mainland (垃圾 lè sè), and the

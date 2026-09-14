@@ -84,6 +84,12 @@ class ModelSpec:
             noise. Where it is true the generic locale stands aside; the
             Chinese and English locales never do, having been measured
             against every model and won.
+        needs_number_words: Whether the model cannot pronounce an Arabic
+            digit at all, so a bare number is expanded for it by default —
+            a quantity reading of a room number misleads, but digits it
+            cannot say are noise. Measured: Hojo read 110 as 十億億安 and
+            an English sentence with three numbers as nonsense; MOSS,
+            OmniVoice and Qwen3-TTS read digits themselves.
         size_mb: Approximate on-disk size once downloaded.
         languages: Base language codes the model was trained on.
         sample_rate: Output sample rate in Hz.
@@ -105,6 +111,7 @@ class ModelSpec:
     language_choice: bool = False
     style_instruction: bool = False
     reads_numerals: bool = False
+    needs_number_words: bool = False
     sample_rate: int = 24000
     rss_hint_mb: int = 0
 
@@ -160,6 +167,7 @@ CATALOG: tuple[ModelSpec, ...] = (
             ),
         ),
         backend="hojo-preset",
+        needs_number_words=True,
         size_mb=241,
         languages=("zh", "en"),
         builtin_voices=True,
@@ -185,6 +193,7 @@ CATALOG: tuple[ModelSpec, ...] = (
             ),
         ),
         backend="hojo-clone",
+        needs_number_words=True,
         size_mb=437,
         languages=("zh", "en"),
         cloning=True,

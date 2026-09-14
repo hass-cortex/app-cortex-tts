@@ -10,20 +10,22 @@ import { previewLanguage } from "./models.js";
 // Han only: the warning is about Traditional glyphs, which kana never are.
 const HAS_HAN = /[㐀-䶿一-鿿]/;
 
-// The switches a language may have beyond number expansion, and the chip
-// each one is shown as. A language without one has no chip for it: the
-// server lists only the passes the language has, and the chip follows.
-const REWRITES = { convert_script: "conv", taiwan_readings: "tw" };
+// The switches the server decides a default for, and the chip each one is
+// shown as: bare numbers by the model (on for one that cannot say a digit),
+// the two rewrites by the language. A language without a rewrite has no
+// chip for it: the server lists only the passes the language has.
+const DECIDED = { expand_numbers: "num", convert_script: "conv", taiwan_readings: "tw" };
 
-// What the reader has set by hand, per rewrite: null means "as the language
-// decides", which the server answers in `passes`. Reset when the language
-// changes, because a choice made for Chinese says nothing about German.
-let overrides = { convert_script: null, taiwan_readings: null };
+// What the reader has set by hand, per switch: null means "as decided",
+// which the server answers in `passes`. Reset when the language changes,
+// because a choice made for Chinese says nothing about German.
+const UNSET = { expand_numbers: null, convert_script: null, taiwan_readings: null };
+let overrides = { ...UNSET };
 let lastLanguage = null;
 // The server's answer for the current text, so a click can invert it.
 let passes = { normalize_text: true };
 
-/** Flip a rewrite the reader clicked, against what the server said it is. */
+/** Flip a switch the reader clicked, against what the server said it is. */
 export function toggle(name) {
   overrides[name] = !passes[name];
   refresh();
@@ -31,8 +33,8 @@ export function toggle(name) {
 
 /** The switch fields a request carries: explicit where set, absent otherwise. */
 export function switches() {
-  const out = { normalize_text: pressed($("norm")), expand_numbers: pressed($("num")) };
-  for (const name of Object.keys(REWRITES)) {
+  const out = { normalize_text: pressed($("norm")) };
+  for (const name of Object.keys(DECIDED)) {
     if (overrides[name] !== null) out[name] = overrides[name];
   }
   return out;
@@ -50,7 +52,7 @@ function hint(active) {
   if (active.normalize_text) {
     parts.push(
       active.expand_numbers
-        ? "A number on its own is read as a quantity too."
+        ? "A number on its own is read as a quantity too: on by default only for a model that cannot say a digit at all."
         : "A number on its own stays as digits: it may be a room, a phone number or a model, and a wrong reading would mislead.",
     );
   }
@@ -68,7 +70,7 @@ function hint(active) {
 }
 
 function syncChips(active) {
-  for (const [name, id] of Object.entries(REWRITES)) {
+  for (const [name, id] of Object.entries(DECIDED)) {
     const has = name in active;
     $(id).hidden = !has;
     if (has) $(id).setAttribute("aria-pressed", String(active[name]));
@@ -178,7 +180,7 @@ export async function refresh() {
       // again only if there were any — with none, the answer is this one.
       lastLanguage = full.language;
       const handSet = Object.values(overrides).some((v) => v !== null);
-      overrides = { convert_script: null, taiwan_readings: null };
+      overrides = { ...UNSET };
       if (handSet) return refresh();
     }
     passes = full.passes;

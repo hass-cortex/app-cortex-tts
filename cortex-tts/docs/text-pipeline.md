@@ -122,6 +122,15 @@ merely go unread. So a bare number stays as digits unless the request says
 counts (a template that formats sensor values without units) — or, better,
 writes them as words itself. The rule is the same in every locale.
 
+The one exception is a model that cannot say a digit at all. Measured with
+`撥打 110，房間在 302 號房，型號 RTX 4090，共 25 人` and its English
+counterpart: MOSS read every number itself (110 as 一幺幺零, the phone way),
+OmniVoice and Qwen3-TTS read them too, but Hojo produced 十億億安 and, in
+English, nonsense. For such a model — `needs_number_words` in the catalog —
+digits left alone are not unread but noise, so bare numbers are expanded by
+default; `expand_numbers` in the request still overrides it either way, and
+`/api/models` reports the flag.
+
 With bare numbers on, a number welded after a letter is an identifier and is
 read digit by digit (`P0` → "P zero"); one before a letter carries a unit and
 stays a quantity (`24V` → "twenty-four V"). A range is read with its unit
@@ -160,7 +169,8 @@ in punctuation — the app adds it.
 ## The switches
 
 `normalize_text` is every language's, on by default; `expand_numbers` is
-every language's too, off by default (see above). `convert_script` and
+every language's too, left out it is the model's call — on only for one
+that cannot say a digit (see above). `convert_script` and
 `taiwan_readings` are Chinese's alone: left out of a request, the language
 decides them — conversion is always on, readings are on for `zh-TW` and
 `zh-Hant` (a bare `zh` counts when the text is Traditional) and off for

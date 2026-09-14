@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from cortex_speech.text.locales import LOCALES, primary
-from cortex_speech.text.options import NormalizeOptions
 from cortex_speech.text.pipeline import (
     TextOptions,
     locale_for,
@@ -65,7 +64,7 @@ class TestResolution:
 
 # Bare numbers are read only when asked; the shapes with a unit, a clock
 # or a date around them are read by default.
-WITH_NUMBERS = TextOptions(normalize_options=NormalizeOptions(expand_numbers=True))
+WITH_NUMBERS = TextOptions(expand_numbers=True)
 
 
 class TestGeneric:
@@ -120,6 +119,18 @@ class TestGeneric:
         assert "".join(
             prepare("Es sind 26.5°C", language="de", reads_numerals=True)
         ) == ("Es sind 26.5°C.")
+
+    def test_a_model_that_cannot_say_a_digit_gets_bare_numbers_read(self) -> None:
+        assert plan("撥打 110", language="zh").expand_numbers is False
+        assert plan("撥打 110", language="zh", needs_number_words=True).expand_numbers
+        # The request's answer beats the model's need, either way.
+        assert not plan(
+            "撥打 110", TextOptions(expand_numbers=False), "zh", needs_number_words=True
+        ).expand_numbers
+        assert (
+            "".join(prepare("撥打 110", language="zh-TW", needs_number_words=True))
+            == "拨打一百一十。"
+        )
 
     def test_a_written_locale_is_kept_whatever_the_model_reads(self) -> None:
         assert plan("溫度 26.5°C", language="zh", reads_numerals=True).normalize_text

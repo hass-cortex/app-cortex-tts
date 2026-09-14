@@ -32,7 +32,7 @@ from cortex_speech.text.zh.script import to_simplified
 # The number passes are exercised with bare numbers on: the default leaves
 # them as digits, and that default has its own tests.
 NUMBERS = NormalizeOptions(expand_numbers=True)
-WITH_NUMBERS = TextOptions(normalize_options=NUMBERS)
+WITH_NUMBERS = TextOptions(expand_numbers=True)
 
 
 class TestNumbers:

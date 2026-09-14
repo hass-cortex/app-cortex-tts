@@ -11,7 +11,7 @@ from cortex_speech.text.pipeline import TextOptions, prepare
 # The number passes are exercised with bare numbers on: the default leaves
 # them as digits, and that default has its own tests.
 NUMBERS = NormalizeOptions(expand_numbers=True)
-WITH_NUMBERS = TextOptions(normalize_options=NUMBERS)
+WITH_NUMBERS = TextOptions(expand_numbers=True)
 
 
 class TestCardinal:
@@ -116,7 +116,7 @@ class TestPipelineChoosesByScript:
     def test_latin_text_is_normalised_into_english(self) -> None:
         assert prepare(
             "It usually takes 48 - 72 hours",
-            TextOptions(convert_script=False, normalize_options=NUMBERS),
+            TextOptions(convert_script=False, expand_numbers=True),
         ) == ["It usually takes forty-eight to seventy-two hours."]
 
     def test_chinese_text_still_gets_the_chinese_normaliser(self) -> None:
@@ -127,7 +127,7 @@ class TestPipelineChoosesByScript:
     def test_one_chinese_word_does_not_make_a_sentence_chinese(self) -> None:
         assert prepare(
             "Turn on 3 lights in the 客廳",
-            TextOptions(convert_script=False, normalize_options=NUMBERS),
+            TextOptions(convert_script=False, expand_numbers=True),
         ) == ["Turn on three lights in the 客廳."]
 
     def test_a_latin_acronym_does_not_make_a_sentence_english(self) -> None:

@@ -475,9 +475,11 @@ Four declarations, across two files:
 4. `backends.register("your-key", builder, voices=…)`, plus a `ModelSpec` in
    `catalog.py` naming that backend with the capabilities it actually has —
    including what it does to the text path: `reads_numerals` lets the
-   generic locale stand aside for a model that reads digits itself, and it
-   is declared only after measuring (every model so far, Qwen3-TTS included,
-   read German and Japanese digits as noise on the sentences tried).
+   generic locale stand aside for a model that reads digits itself, and
+   `needs_number_words` turns bare-number expansion on for one that cannot
+   say a digit at all. Both are declared only after measuring (every model
+   so far, Qwen3-TTS included, read German and Japanese digits as noise on
+   the sentences tried; only Hojo could not read Chinese or English ones).
 
 Then a `[project.optional-dependencies]` extra and a `--extra` in the
 Dockerfile if the backend needs its own dependencies.

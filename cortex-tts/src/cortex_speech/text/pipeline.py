@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from . import en, generic, zh
 from .locales import LOCALES, Locale, primary, register
@@ -117,6 +117,9 @@ class TextOptions:
 
     Attributes:
         normalize_text: Expand numbers, units, dates and clock literals.
+        expand_numbers: Read a bare number — no unit, clock or date around
+            it — as a quantity too. ``None`` lets the model decide: on for
+            one that cannot say a digit, off otherwise.
         convert_script: Chinese only — the Traditional->Simplified glyph
             conversion. ``None`` lets the locale decide (it is always on).
         taiwan_readings: Chinese only — respell words Taiwan reads
@@ -126,6 +129,7 @@ class TextOptions:
     """
 
     normalize_text: bool = True
+    expand_numbers: bool | None = None
     convert_script: bool | None = None
     taiwan_readings: bool | None = None
     normalize_options: NormalizeOptions = NormalizeOptions()
@@ -176,6 +180,7 @@ def plan(
     language: str | None = None,
     *,
     reads_numerals: bool = False,
+    needs_number_words: bool = False,
 ) -> TextPlan:
     """Decide the locale and the passes for a text without running them.
 
@@ -187,10 +192,14 @@ def plan(
             itself. That beats the generic locale's numbers-and-unit-names,
             so normalisation is skipped there; a written locale is kept,
             because it was measured against the model and won.
+        needs_number_words: Whether the model cannot say a digit at all, so
+            a bare number is expanded unless the caller said otherwise.
     """
     tag = resolve_language(text, language)
     locale = locale_for(tag)
     normalize = options.normalize_text and (locale.written or not reads_numerals)
+    wanted = options.expand_numbers
+    expand = needs_number_words if wanted is None else wanted
     rewrites: dict[str, bool] = {}
     for rewrite in locale.rewrites:
         wanted = options.wants(rewrite.name)
@@ -198,7 +207,7 @@ def plan(
         rewrites[rewrite.name] = on and all(
             rewrites.get(r, False) for r in rewrite.requires
         )
-    return TextPlan(tag, normalize, options.normalize_options.expand_numbers, rewrites)
+    return TextPlan(tag, normalize, expand, rewrites)
 
 
 def _terminate(segment: str, stop: str) -> str:
@@ -311,7 +320,9 @@ def run(text: str, decided: TextPlan, options: NormalizeOptions) -> str:
     """Run a plan over the text it was made for; the rewritten text back."""
     locale = decided.locale
     if decided.normalize_text:
-        text = locale.normalize(text, options)
+        text = locale.normalize(
+            text, replace(options, expand_numbers=decided.expand_numbers)
+        )
         if locale.close_gaps:
             text = _CJK_GAP.sub("", text)
     for rewrite in locale.rewrites:
@@ -326,12 +337,19 @@ def prepare_text(
     language: str | None = None,
     *,
     reads_numerals: bool = False,
+    needs_number_words: bool = False,
 ) -> str:
     """Run the rewriting passes and return the text, not yet segmented."""
     text = text.strip()
     if not text:
         return ""
-    decided = plan(text, options, language, reads_numerals=reads_numerals)
+    decided = plan(
+        text,
+        options,
+        language,
+        reads_numerals=reads_numerals,
+        needs_number_words=needs_number_words,
+    )
     return run(text, decided, options.normalize_options)
 
 
@@ -341,6 +359,7 @@ def prepare(
     language: str | None = None,
     *,
     reads_numerals: bool = False,
+    needs_number_words: bool = False,
 ) -> list[str]:
     """Run the full text path and return synthesis-ready segments.
 
@@ -349,6 +368,7 @@ def prepare(
         options: Which passes to apply.
         language: The request's language tag, or ``None`` to sniff the text.
         reads_numerals: Whether the model reads digits itself; see `plan`.
+        needs_number_words: Whether it cannot say a digit at all; see `plan`.
 
     Returns:
         Segments ready to hand to an engine, in reading order.
@@ -356,7 +376,13 @@ def prepare(
     text = text.strip()
     if not text:
         return []
-    decided = plan(text, options, language, reads_numerals=reads_numerals)
+    decided = plan(
+        text,
+        options,
+        language,
+        reads_numerals=reads_numerals,
+        needs_number_words=needs_number_words,
+    )
     segments = segment(
         run(text, decided, options.normalize_options), stop=decided.locale.stop
     )

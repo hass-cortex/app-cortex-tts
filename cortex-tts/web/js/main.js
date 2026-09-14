@@ -23,15 +23,14 @@ function wire() {
     preview.schedule();
   });
 
-  // Number expansion and bare numbers are the reader's own switches; the two Chinese rewrites
-  // are the language's, shown only when the text is Chinese, and a click on
-  // one overrides what the language decided.
-  for (const id of ["norm", "num"]) {
-    $(id).addEventListener("click", () => {
-      $(id).setAttribute("aria-pressed", String(!pressed($(id))));
-      preview.refresh();
-    });
-  }
+  // Number expansion is the reader's own switch. Bare numbers are the
+  // model's decision and the two Chinese rewrites the language's, shown
+  // only when the text is Chinese; a click on any of those overrides it.
+  $("norm").addEventListener("click", () => {
+    $("norm").setAttribute("aria-pressed", String(!pressed($("norm"))));
+    preview.refresh();
+  });
+  $("num").addEventListener("click", () => preview.toggle("expand_numbers"));
   $("conv").addEventListener("click", () => preview.toggle("convert_script"));
   $("tw").addEventListener("click", () => preview.toggle("taiwan_readings"));
 

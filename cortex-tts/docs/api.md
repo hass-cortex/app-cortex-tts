@@ -58,7 +58,7 @@ stays unpublished.
 | `voice`           | the default          | A voice id the model offers; the first available when it does not                                                                                  |
 | `format`          | `wav`                | `wav`, `flac`, `ogg` or `mp3`                                                                                                                      |
 | `normalize_text`  | `true`               | Expand numbers, units, dates and clock literals ([why](text-pipeline.md))                                                                          |
-| `expand_numbers`  | `false`              | Also read a bare number — no unit, clock or date around it — as a quantity ([why not by default](text-pipeline.md))                                |
+| `expand_numbers`  | model decides        | Also read a bare number — no unit, clock or date around it — as a quantity. Left out: on for a model that cannot say a digit (Hojo), off otherwise ([why](text-pipeline.md)) |
 | `convert_script`  | the language decides | Chinese only: Traditional → Simplified glyph conversion                                                                                            |
 | `taiwan_readings` | the language decides | Chinese only: respell words Taiwan reads differently ([why](text-pipeline.md))                                                                     |
 | `normalize_level` | `true`               | Peak-normalise the finished waveform                                                                                                               |
