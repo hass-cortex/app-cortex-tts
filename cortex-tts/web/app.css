@@ -241,3 +241,4 @@ audio{width:100%}
 .rule button{padding:8px 10px}
 .rules-empty{color:var(--ink-3);font-size:13px}
 @media (max-width:720px){.rule{grid-template-columns:1fr 1fr}}
+.ref-audio{width:100%;margin:6px 0 4px}

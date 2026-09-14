@@ -3,7 +3,6 @@
 
 import { call, json } from "./api.js";
 import { $, confirmStep, esc, languageName, languageOptions, msg } from "./dom.js";
-import { play } from "./player.js";
 import { cloningLanguages, refreshVoices, selectedLanguage } from "./models.js";
 
 // A transcript must be readable in full without an inner scrollbar, so the
@@ -50,6 +49,7 @@ const row = (r) => `
     <textarea class="tr-edit" data-ref-tr="${esc(r.id)}" rows="1"
       aria-label="Transcript of ${esc(r.name)}" spellcheck="false">${esc(r.raw_transcript)}</textarea>
     <div class="tr-hint" data-base="tr-hint" data-ref-hint="${esc(r.id)}" aria-live="polite"></div>
+    <audio class="ref-audio" data-ref-audio="${esc(r.id)}" controls hidden></audio>
     <div class="actions">
       <button class="sm" data-ref-play="${esc(r.id)}">Play</button>
       <button class="sm" data-ref-save="${esc(r.id)}" disabled>Save transcript</button>
@@ -224,11 +224,23 @@ export function init() {
   $("refs").addEventListener("click", (e) => {
     const playBtn = e.target.closest("button[data-ref-play]");
     if (playBtn) {
-      // Fetched rather than handed to <audio> as a URL, so the key travels.
-      call(`/references/${playBtn.dataset.refPlay}/audio`)
+      // The card's own player, not the composer's: hearing a recording must
+      // not replace the utterance someone just rendered up there. Fetched
+      // rather than handed to <audio> as a URL, so the key travels.
+      const id = playBtn.dataset.refPlay;
+      const audio = $("refs").querySelector(`audio[data-ref-audio="${CSS.escape(id)}"]`);
+      call(`/references/${id}/audio`)
         .then((res) => res.blob())
-        .then((blob) => play(URL.createObjectURL(blob), { revokable: true }))
-        .catch((err) => msg($("refMsg"), err.message, "err"));
+        .then((blob) => {
+          if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
+          audio.dataset.url = URL.createObjectURL(blob);
+          audio.src = audio.dataset.url;
+          audio.hidden = false;
+          return audio.play();
+        })
+        .catch((err) => {
+          if (err.name !== "NotAllowedError") msg($("refMsg"), err.message, "err");
+        });
       $("stats").textContent = "";
       return;
     }
