@@ -38,10 +38,20 @@ elif [ -d "${DEV_DIR}" ]; then
     bashio::log.info "Ignoring ${DEV_DIR}: dev override only applies to version dev"
 fi
 
-# Model bundles and reference recordings live under /data so Home Assistant's
-# "remove with data" sweeps them up; they are downloaded on demand, not baked
-# into the image.
-mkdir -p /data/models /data/references /data/.cache/huggingface /data/.cache/numba
+# Model bundles live under /data so Home Assistant's "remove with data" sweeps
+# them up; they are downloaded on demand, not baked into the image.
+mkdir -p /data/models /data/.cache/huggingface /data/.cache/numba
+
+# Reference recordings live on /share: backed up, reachable over Samba, and
+# kept when the app is removed. Releases before this kept them in /data.
+# The same path is exported to the app by the service's run script.
+REFERENCES_DIR="/share/cortex-tts/references"
+mkdir -p "${REFERENCES_DIR}"
+if [ -f /data/references/references.json ] && [ ! -f "${REFERENCES_DIR}/references.json" ]; then
+    bashio::log.info "Moving reference recordings from /data/references to ${REFERENCES_DIR}"
+    mv /data/references/* "${REFERENCES_DIR}/"
+    rmdir /data/references
+fi
 
 # The bootstrap key Supervisor discovery hands to the integration. Admins can
 # rotate it from the Configuration tab — clearing the field regenerates it on
@@ -53,5 +63,5 @@ if ! bashio::config.has_value 'discovery_api_key'; then
     bashio::log.info "Generated bootstrap API key for Home Assistant discovery"
 fi
 
-chown -R cortex-tts:cortex-tts /data 2>/dev/null || true
+chown -R cortex-tts:cortex-tts /data "${REFERENCES_DIR}" 2>/dev/null || true
 chown -R cortex-tts:cortex-tts /app/src /app/web 2>/dev/null || true

@@ -62,7 +62,11 @@ class Settings:
     Attributes:
         host: Bind address.
         port: Bind port.
-        data_dir: Root for models, references and state.
+        data_dir: Root for models and state.
+        references_dir: Where reference recordings for cloned voices live.
+            Defaults to ``references/`` under ``data_dir``; the Home Assistant
+            app points it at ``/share`` so user-made recordings are backed up
+            and reachable over Samba.
         static_dir: Directory served as the ingress UI.
         api_key: Bearer token required on every ``/api`` route. Empty disables
             authentication, which is only sane behind ingress.
@@ -73,24 +77,22 @@ class Settings:
     data_dir: Path = field(default_factory=lambda: Path("/data"))
     static_dir: Path = field(default_factory=lambda: Path("/app/web"))
     api_key: str = ""
+    references_dir: Path = field(default_factory=lambda: Path("/data/references"))
 
     @property
     def models_dir(self) -> Path:
         """Directory holding downloaded model bundles."""
         return self.data_dir / "models"
 
-    @property
-    def references_dir(self) -> Path:
-        """Directory holding reference recordings for cloned voices."""
-        return self.data_dir / "references"
-
 
 def load() -> Settings:
     """Build settings from the process environment."""
+    data_dir = _env_path("DATA_DIR", "/data")
     return Settings(
         host=os.environ.get("HOST", "0.0.0.0"),
         port=_env_int("PORT", 8771),
-        data_dir=_env_path("DATA_DIR", "/data"),
+        data_dir=data_dir,
         static_dir=_env_path("STATIC_DIR", "/app/web"),
         api_key=os.environ.get("API_KEY", "").strip(),
+        references_dir=_env_path("REFERENCES_DIR", str(data_dir / "references")),
     )

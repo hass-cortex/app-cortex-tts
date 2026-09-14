@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
     speech = SpeechService(
         SpeechConfig(
             data_dir=settings.data_dir,
+            references_dir=settings.references_dir,
             num_threads=prefs.num_threads,
             max_loaded_models=prefs.max_loaded_models,
             idle_unload_seconds=prefs.idle_unload_seconds,
@@ -109,12 +110,13 @@ async def lifespan(app: FastAPI):
 
     _LOGGER.info(
         "cortex-tts %s listening on %s:%d "
-        "(data=%s, threads=%d, max_loaded=%d, idle_unload=%ds, "
+        "(data=%s, references=%s, threads=%d, max_loaded=%d, idle_unload=%ds, "
         "max_synthesis=%ds, temp=%.2f, provider=%s)",
         state.version,
         settings.host,
         settings.port,
         settings.data_dir,
+        settings.references_dir,
         prefs.num_threads,
         prefs.max_loaded_models,
         prefs.idle_unload_seconds,

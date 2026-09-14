@@ -7,6 +7,9 @@
 LOG_LEVEL="$(bashio::config 'log_level')"
 export LOG_LEVEL
 export DATA_DIR="/data"
+# Recordings are the one thing here a user made by hand: keep them on /share,
+# which Home Assistant backs up and exposes over Samba, unlike /data.
+export REFERENCES_DIR="/share/cortex-tts/references"
 export STATIC_DIR="/app/web"
 # The package is run from source, not installed, so the dev override is a
 # plain directory swap with no install metadata to fall out of sync.
@@ -32,6 +35,7 @@ export NUMBA_CACHE_DIR="/data/.cache/numba"
 bashio::log.info "Starting Cortex TTS"
 bashio::log.info "Log level:     ${LOG_LEVEL}"
 bashio::log.info "Data dir:      ${DATA_DIR}"
+bashio::log.info "References:    ${REFERENCES_DIR}"
 # Everything else is stored settings the app reads for itself and logs once
 # it has them; see preferences.py.
 

@@ -69,7 +69,9 @@ stage could undo it. A clean, evenly loud recording is worth more than a long
 one.
 
 WAV, FLAC and OGG are accepted; the recording is stored as 16-bit PCM WAV at
-its original sample rate, downmixed to mono.
+its original sample rate, downmixed to mono, under `/share/cortex-tts/references/`
+(`<id>.wav` plus a `references.json` index) — so it is in Home Assistant backups
+and reachable over the `share` Samba folder.
 
 ## The transcript
 

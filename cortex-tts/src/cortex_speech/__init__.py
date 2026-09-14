@@ -140,7 +140,10 @@ class SpeechConfig:
     library's configuration from drifting with the addon's.
 
     Attributes:
-        data_dir: Root holding ``models/`` and ``references/``.
+        data_dir: Root holding ``models/`` and, by default, ``references/``.
+        references_dir: Where reference recordings live when not under
+            ``data_dir``; recordings are user-made and worth keeping where the
+            host backs them up, unlike bundles that can be downloaded again.
         num_threads: ONNX Runtime thread count; 0 lets the runtime decide.
         max_loaded_models: How many engines may stay resident at once.
         idle_unload_seconds: Drop an engine this long after its last request;
@@ -158,6 +161,7 @@ class SpeechConfig:
     idle_unload_seconds: int = 0
     temperature: float = 0.8
     execution_provider: ExecutionProvider = "auto"
+    references_dir: Path | None = None
 
 
 class SpeechService:
@@ -171,7 +175,9 @@ class SpeechService:
     def __init__(self, config: SpeechConfig) -> None:
         """Assemble the library against ``config``'s directories."""
         self._config = config
-        self._references = ReferenceStore(config.data_dir / "references")
+        self._references = ReferenceStore(
+            config.references_dir or config.data_dir / "references"
+        )
         self._downloads = DownloadManager(config.data_dir)
         self._registry = EngineRegistry(
             config.data_dir,
