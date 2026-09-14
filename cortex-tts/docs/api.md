@@ -51,20 +51,20 @@ stays unpublished.
 
 `POST /api/speak` takes JSON:
 
-| Field             | Default              | Meaning                                                                                                                                            |
-| ----------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `text`            | required             | Up to 4000 characters, in whatever script you write                                                                                                |
-| `model`           | the default          | A model id from `/api/models`                                                                                                                      |
-| `voice`           | the default          | A voice id the model offers; the first available when it does not                                                                                  |
-| `format`          | `wav`                | `wav`, `flac`, `ogg` or `mp3`                                                                                                                      |
-| `normalize_text`  | `true`               | Expand numbers, units, dates and clock literals ([why](text-pipeline.md))                                                                          |
+| Field             | Default              | Meaning                                                                                                                                                                      |
+| ----------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `text`            | required             | Up to 4000 characters, in whatever script you write                                                                                                                          |
+| `model`           | the default          | A model id from `/api/models`                                                                                                                                                |
+| `voice`           | the default          | A voice id the model offers; the first available when it does not                                                                                                            |
+| `format`          | `wav`                | `wav`, `flac`, `ogg` or `mp3`                                                                                                                                                |
+| `normalize_text`  | `true`               | Expand numbers, units, dates and clock literals ([why](text-pipeline.md))                                                                                                    |
 | `expand_numbers`  | model decides        | Also read a bare number — no unit, clock or date around it — as a quantity. Left out: on for a model that cannot say a digit (Hojo), off otherwise ([why](text-pipeline.md)) |
-| `convert_script`  | the language decides | Chinese only: Traditional → Simplified glyph conversion                                                                                            |
-| `taiwan_readings` | the language decides | Chinese only: respell words Taiwan reads differently ([why](text-pipeline.md))                                                                     |
-| `normalize_level` | `true`               | Peak-normalise the finished waveform                                                                                                               |
-| `temperature`     | the setting          | Sampling temperature 0–1, for models that have one                                                                                                 |
-| `language`        | the voice's          | The language of the text, as a whole tag: picks how it is prepared on every model, and which language the model reads it in on those that take one |
-| `instruct`        | none                 | A plain-language instruction beside the voice, for the one model that does                                                                         |
+| `convert_script`  | the language decides | Chinese only: Traditional → Simplified glyph conversion                                                                                                                      |
+| `taiwan_readings` | the language decides | Chinese only: respell words Taiwan reads differently ([why](text-pipeline.md))                                                                                               |
+| `normalize_level` | `true`               | Peak-normalise the finished waveform                                                                                                                                         |
+| `temperature`     | the setting          | Sampling temperature 0–1, for models that have one                                                                                                                           |
+| `language`        | the voice's          | The language of the text, as a whole tag: picks how it is prepared on every model, and which language the model reads it in on those that take one                           |
+| `instruct`        | none                 | A plain-language instruction beside the voice, for the one model that does                                                                                                   |
 
 The response is the audio, with the measurements in headers:
 `X-Cortex-Model`, `X-Cortex-Voice`, `X-Cortex-Inference-Ms`,
