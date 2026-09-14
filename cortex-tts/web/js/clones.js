@@ -23,6 +23,17 @@ const GENDERS = ["female", "male", "unknown"];
 
 const deleteLabel = (id) => (armed.has(id) ? "Confirm delete" : "Delete");
 
+// The tags the cloning models read, plus the stored one if it is not among
+// them: a tag typed over the API must not be silently relabelled by opening
+// the page.
+function languageChoices(current) {
+  const codes = cloningLanguages();
+  if (current && !codes.includes(current)) codes.unshift(current);
+  return codes
+    .map((c) => `<option value="${esc(c)}"${c === current ? " selected" : ""}>${esc(languageName(c))}</option>`)
+    .join("");
+}
+
 const row = (r) => `
   <div class="ref">
     <div class="ref-head">
@@ -31,7 +42,10 @@ const row = (r) => `
       <select class="ref-gender" data-ref-gender="${esc(r.id)}" aria-label="Gender label of ${esc(r.name)}">
         ${GENDERS.map((g) => `<option value="${g}"${g === r.gender ? " selected" : ""}>${g}</option>`).join("")}
       </select>
-      <span class="ref-meta">${Number(r.seconds).toFixed(1)}s · ${esc(languageName(r.language))}</span>
+      <select class="ref-gender" data-ref-language="${esc(r.id)}" aria-label="Language of ${esc(r.name)}">
+        ${languageChoices(r.language)}
+      </select>
+      <span class="ref-meta">${Number(r.seconds).toFixed(1)}s</span>
     </div>
     <textarea class="tr-edit" data-ref-tr="${esc(r.id)}" rows="1"
       aria-label="Transcript of ${esc(r.name)}" spellcheck="false">${esc(r.raw_transcript)}</textarea>
@@ -103,6 +117,25 @@ async function saveTranscript(button) {
   } catch (err) {
     msg(hintFor(id), err.message, "err");
     button.disabled = false;
+  }
+}
+
+async function saveLanguage(select) {
+  const id = select.dataset.refLanguage;
+  select.disabled = true;
+  try {
+    const res = await call(`/references/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: select.value }),
+    });
+    const body = await res.json();
+    select.value = body.language;
+    msg(hintFor(id), `Speaks ${languageName(body.language)}.`, "ok");
+  } catch (err) {
+    msg(hintFor(id), err.message, "err");
+  } finally {
+    select.disabled = false;
   }
 }
 
@@ -183,8 +216,10 @@ export function init() {
   });
 
   $("refs").addEventListener("change", (e) => {
-    const select = e.target.closest("select[data-ref-gender]");
-    if (select) saveGender(select);
+    const gender = e.target.closest("select[data-ref-gender]");
+    if (gender) saveGender(gender);
+    const language = e.target.closest("select[data-ref-language]");
+    if (language) saveLanguage(language);
   });
   $("refs").addEventListener("click", (e) => {
     const playBtn = e.target.closest("button[data-ref-play]");

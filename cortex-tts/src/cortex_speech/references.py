@@ -77,6 +77,11 @@ def slugify(name: str) -> str:
     return slug[:48]
 
 
+def _tag(language: str) -> str:
+    """A language tag as the pipeline reads it: ``zh_TW`` is ``zh-TW``."""
+    return language.strip().replace("_", "-")
+
+
 @dataclass(frozen=True)
 class Reference:
     """One stored reference recording.
@@ -86,7 +91,8 @@ class Reference:
         name: Display name.
         transcript: Model-ready transcript (normalised and script-converted).
         raw_transcript: What the user typed, kept for display and editing.
-        language: Base language code of the recording.
+        language: Language tag of the recording, whole: ``zh-TW`` is a
+            Taiwanese voice, ``zh`` only says Chinese.
         gender: ``female``, ``male`` or ``unknown``; label only.
         seconds: Duration of the stored audio.
         created: Unix timestamp of upload.
@@ -198,7 +204,7 @@ class ReferenceStore:
             name: Display name; also seeds the voice id.
             transcript: Exactly what is said in the recording.
             audio: Encoded audio bytes in any format soundfile can read.
-            language: Base language code.
+            language: Language tag of the recording, whole.
             gender: Label shown in the voice picker.
 
         Returns:
@@ -210,6 +216,7 @@ class ReferenceStore:
         """
         if not transcript.strip():
             raise ReferenceError("a reference needs the transcript of what is said")
+        language = _tag(language)
         # Validated before anything is written: a wrong transcript degrades
         # the clone with no error, and a rejected upload must leave no file.
         prepared = prepared_text(prepare(transcript, TextOptions(), language))
@@ -274,19 +281,22 @@ class ReferenceStore:
         *,
         transcript: str | None = None,
         gender: str | None = None,
+        language: str | None = None,
     ) -> Reference:
-        """Correct the transcript and/or the gender label of a stored reference.
+        """Correct the transcript, gender label or language of a stored reference.
 
         The recording is untouched, so the cloned voice keeps its timbre; only
         what the model is told the recording contains, or how the voice is
         labelled, changes. A transcript is run through the same pipeline as a
         fresh upload, because the model needs it in the same script and
-        normalisation as the target text.
+        normalisation as the target text — and a new language re-runs it,
+        since the tag is what picks that pipeline.
 
         Args:
             reference_id: Which reference to edit.
             transcript: Corrected wording of what the recording says.
             gender: One of `GENDERS`.
+            language: The recording's language tag, whole.
 
         Returns:
             The updated reference.
@@ -297,14 +307,21 @@ class ReferenceStore:
                 unknown gender.
         """
         changes: dict[str, str] = {}
+        existing = self.get(reference_id)
+        if existing is None:
+            raise KeyError(reference_id)
+        if language is not None:
+            language = _tag(language)
+            if not language:
+                raise ReferenceError("a reference needs a language")
+            changes["language"] = language
+        if transcript is None and language is not None:
+            transcript = existing.raw_transcript
         if transcript is not None:
             if not transcript.strip():
                 raise ReferenceError("a reference needs the transcript of what is said")
-            existing = self.get(reference_id)
-            if existing is None:
-                raise KeyError(reference_id)
             prepared = prepared_text(
-                prepare(transcript, TextOptions(), existing.language)
+                prepare(transcript, TextOptions(), language or existing.language)
             )
             if not prepared:
                 raise ReferenceError("the transcript has no pronounceable content")

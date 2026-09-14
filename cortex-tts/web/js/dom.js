@@ -18,7 +18,8 @@ export const pressed = (el) => el.getAttribute("aria-pressed") === "true";
 // so the voice picker, the language picker and the upload form cannot end up
 // offering three different vocabularies for the same thing.
 export const LANGUAGE_NAMES = {
-  zh: "Chinese", en: "English", ja: "Japanese", ko: "Korean", de: "German",
+  zh: "Chinese", "zh-TW": "Chinese (Taiwan)", "zh-CN": "Chinese (China)",
+  en: "English", ja: "Japanese", ko: "Korean", de: "German",
   fr: "French", it: "Italian", pt: "Portuguese", ru: "Russian", es: "Spanish",
 };
 

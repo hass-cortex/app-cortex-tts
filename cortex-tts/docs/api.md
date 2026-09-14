@@ -97,6 +97,11 @@ sent), `passes` (every switch that language has, and whether it ran) and
 `readings` — the `{word, standin}` respellings applied, in text order —
 without touching a model.
 
+A reference recording's `language` (on `POST /api/references` and editable
+with `PATCH /api/references/{id}`) is a whole tag as well: a voice labelled
+`zh-TW` is Taiwanese, so text read in it gets Taiwan readings by default
+even where the glyphs alone could not say — `zh` promises only Chinese.
+
 `language` is sent whole — `zh-TW`, not `zh` (`zh_TW` is read as the
 same tag). It is accepted on every model:
 the text pipeline reads it on all of them, and a model that takes a language

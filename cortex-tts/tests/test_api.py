@@ -464,6 +464,29 @@ class TestReferences:
         listed = client.get("/api/references", headers=AUTH).json()
         assert [r["gender"] for r in listed] == ["female"]
 
+    def test_a_reference_s_language_is_a_whole_tag_and_editable(
+        self, client: TestClient, reference_wav: bytes
+    ) -> None:
+        # Every glyph here is the same in both scripts, so zh says only
+        # Chinese and the transcript keeps the mainland reading; zh-TW is a
+        # Taiwanese voice, and re-preparing it respells 垃圾.
+        added = client.post(
+            "/api/references",
+            headers=AUTH,
+            data={"name": "Ya", "transcript": "今天要到垃圾。", "language": "zh"},
+            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
+        ).json()
+        assert added["language"] == "zh"
+        assert added["transcript"] == "今天要到垃圾。"
+        moved = client.patch(
+            f"/api/references/{added['id']}", headers=AUTH, json={"language": "zh_TW"}
+        )
+        assert moved.status_code == 200
+        assert moved.json()["language"] == "zh-TW"
+        assert moved.json()["transcript"] == "今天要到乐色。"
+        listed = client.get("/api/references", headers=AUTH).json()
+        assert next(r for r in listed if r["id"] == added["id"])["language"] == "zh-TW"
+
 
 class TestTemperatureOption:
     """The sampling temperature is configurable per app and per request."""

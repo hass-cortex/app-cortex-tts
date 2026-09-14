@@ -207,19 +207,22 @@ Gender = Literal["female", "male", "unknown"]
 
 
 class ReferenceUpdate(BaseModel):
-    """Correct the transcript and/or gender label of a stored reference.
+    """Correct the transcript, gender label or language of a stored reference.
 
-    The audio is not resent — only the text the model is told it contains, or
-    how the voice is labelled in the picker.
+    The audio is not resent — only the text the model is told it contains,
+    how the voice is labelled in the picker, or which language it speaks.
     """
 
     transcript: str | None = Field(None, min_length=1, max_length=2000)
     gender: Gender | None = None
+    language: str | None = Field(None, min_length=1, max_length=32)
+    """A whole tag: `zh-TW` makes the voice Taiwanese, so text read in it
+    gets Taiwan readings by default; `zh` says only Chinese."""
 
     @model_validator(mode="after")
     def _something_to_change(self) -> ReferenceUpdate:
-        if self.transcript is None and self.gender is None:
-            raise ValueError("send a transcript, a gender, or both")
+        if self.transcript is None and self.gender is None and self.language is None:
+            raise ValueError("send a transcript, a gender, a language, or several")
         return self
 
 

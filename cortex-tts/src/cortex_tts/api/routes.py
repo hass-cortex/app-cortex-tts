@@ -898,7 +898,7 @@ async def update_reference(
     body: ReferenceUpdate,
     state: AppState = Depends(get_state),
 ) -> ReferenceOut:
-    """Correct a reference's transcript and/or gender label.
+    """Correct a reference's transcript, gender label or language.
 
     A transcript that does not match the recording degrades the clone without
     any error, so this is the fix for a mistyped or mis-transcribed upload —
@@ -906,7 +906,10 @@ async def update_reference(
     """
     try:
         reference = state.references.update(
-            reference_id, transcript=body.transcript, gender=body.gender
+            reference_id,
+            transcript=body.transcript,
+            gender=body.gender,
+            language=body.language,
         )
     except KeyError as err:
         raise _no_reference(reference_id) from err
@@ -914,8 +917,8 @@ async def update_reference(
         raise _http(
             http_status.HTTP_400_BAD_REQUEST, "BAD_REFERENCE", str(err)
         ) from err
-    if body.gender is not None:
-        # The label is part of what the voice picker shows.
+    if body.gender is not None or body.language is not None:
+        # Both are part of what the voice picker shows.
         await fire_models_changed(f"reference-updated:{reference_id}")
     return _reference_out(reference)
 

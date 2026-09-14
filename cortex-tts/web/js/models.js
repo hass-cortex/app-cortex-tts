@@ -197,12 +197,20 @@ function selectedModel() {
 /** The language the reader filtered the voices by, or "" for any. */
 export const selectedLanguage = () => $("language").value;
 
+// A recording's tag may carry the region: a Taiwanese voice labelled zh-TW
+// gets Taiwan readings by default for whatever it is asked to read, which
+// the bare "zh" cannot promise. Offered ahead of the base code, most common
+// first.
+const REGIONS = { zh: ["zh-TW", "zh-CN"] };
+
 export function cloningLanguages() {
   const seen = [];
   for (const model of models) {
     if (!model.cloning) continue;
     for (const code of model.languages || []) {
-      if (!seen.includes(code)) seen.push(code);
+      for (const tag of [...(REGIONS[code] || []), code]) {
+        if (!seen.includes(tag)) seen.push(tag);
+      }
     }
   }
   return seen;
