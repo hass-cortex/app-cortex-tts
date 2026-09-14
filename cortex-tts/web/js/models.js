@@ -84,7 +84,10 @@ function actions(m) {
     `<button class="${cls}" data-act="${act}" data-id="${esc(m.id)}"${busy.has(m.id) ? " disabled" : ""}>${label}</button>`;
   if (!m.downloaded) return button("download", "Download");
   const load = m.loaded ? button("unload", "Unload") : button("load", "Load");
-  return `${load} ${button("delete", armed.has(m.id) ? "Confirm delete" : "Delete", "sm danger")}`;
+  // Only offered once there is something to reset; the host's measured RTF
+  // goes stale when the model moves host, and the render guard reads it.
+  const reset = m.rtf && m.rtf.length ? ` ${button("reset-stats", "Reset RTF")}` : "";
+  return `${load} ${button("delete", armed.has(m.id) ? "Confirm delete" : "Delete", "sm danger")}${reset}`;
 }
 
 function voiceCount(m) {
@@ -348,6 +351,7 @@ const ENDPOINTS = {
   load: (id) => [`/models/${id}/load`, { method: "POST" }],
   unload: (id) => [`/models/${id}/unload`, { method: "POST" }],
   delete: (id) => [`/models/${id}`, { method: "DELETE" }],
+  "reset-stats": (id) => [`/models/${id}/stats`, { method: "DELETE" }],
 };
 
 export function init() {

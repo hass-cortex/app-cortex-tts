@@ -199,6 +199,31 @@ class TestSpeakErrors:
             == 422
         )
 
+
+class TestResettingStats:
+    """RTF is measured per host and goes stale when the host changes; a reset
+    lets the next replies re-measure. The endpoints answer even when nothing
+    was ever measured, so the UI can offer them without first checking."""
+
+    def test_resetting_one_model_returns_it(self, client: TestClient) -> None:
+        response = client.delete("/api/models/hojo-40m/stats", headers=AUTH)
+        assert response.status_code == 200
+        assert response.json()["id"] == "hojo-40m"
+        assert response.json()["rtf"] == []
+
+    def test_resetting_an_unknown_model_is_404(self, client: TestClient) -> None:
+        response = client.delete("/api/models/gpt-9/stats", headers=AUTH)
+        assert response.status_code == 404
+
+    def test_resetting_all_returns_the_catalog(self, client: TestClient) -> None:
+        response = client.delete("/api/stats", headers=AUTH)
+        assert response.status_code == 200
+        assert {m["id"] for m in response.json()} == {m.id for m in CATALOG}
+        assert all(m["rtf"] == [] for m in response.json())
+
+    def test_a_reset_needs_the_key(self, client: TestClient) -> None:
+        assert client.delete("/api/stats").status_code == 401
+
     def test_undownloaded_model_is_a_conflict(self, client: TestClient) -> None:
         response = client.post(
             "/api/speak", headers=AUTH, json={"text": "測試", "model": "hojo-40m"}
@@ -288,6 +313,28 @@ class TestSettingsEndpoint:
         body = client.get("/api/settings", headers=AUTH).json()
         assert body["default_model"] == "hojo-40m"
         assert body["execution_provider"] == "auto"
+
+    def test_idle_unload_is_a_setting(self, client: TestClient) -> None:
+        saved = client.put(
+            "/api/settings", headers=AUTH, json={"idle_unload_seconds": 300}
+        ).json()
+        assert saved["settings"]["idle_unload_seconds"] == 300
+        assert not saved["reloaded"], "nothing resident needs rebuilding for it"
+        assert (
+            client.get("/api/settings", headers=AUTH).json()["idle_unload_seconds"]
+            == 300
+        )
+
+    def test_max_synthesis_is_a_setting(self, client: TestClient) -> None:
+        saved = client.put(
+            "/api/settings", headers=AUTH, json={"max_synthesis_seconds": 120}
+        ).json()
+        assert saved["settings"]["max_synthesis_seconds"] == 120
+        assert not saved["reloaded"], "nothing resident needs rebuilding for it"
+        assert (
+            client.get("/api/settings", headers=AUTH).json()["max_synthesis_seconds"]
+            == 120
+        )
 
     def test_a_change_is_readable_immediately(self, client: TestClient) -> None:
         client.put("/api/settings", headers=AUTH, json={"default_model": "moss-nano"})

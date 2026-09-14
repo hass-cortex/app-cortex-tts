@@ -151,6 +151,18 @@ class StatsStore:
                 if samples
             ]
 
+    def clear(self) -> None:
+        """Drop every model's measurements.
+
+        For when the host changed under all of them at once — a new execution
+        provider, a different thread count — and every stored figure now
+        describes a machine that is gone.
+        """
+        with self._lock:
+            if self._samples:
+                self._samples = {}
+                self._write()
+
     def forget(self, model_id: str) -> None:
         """Drop a model's measurements, when its weights are deleted.
 

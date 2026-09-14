@@ -100,6 +100,24 @@ class TestDeletingAModel:
         assert store.get("hojo-40m") != []
 
 
+class TestResettingEverything:
+    def test_clear_forgets_every_model(self, store: StatsStore) -> None:
+        store.record("omnivoice", "designed", 3.46, 7.0)
+        store.record("hojo-40m", "builtin", 0.55, 4.0)
+        store.clear()
+        assert store.get("omnivoice") == []
+        assert store.get("hojo-40m") == []
+
+    def test_a_cleared_store_stays_cleared_across_a_restart(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "stats.json"
+        first = StatsStore(path)
+        first.record("omnivoice", "designed", 3.46, 7.0)
+        first.clear()
+        assert StatsStore(path).get("omnivoice") == []
+
+
 class TestOneFigurePerKind:
     """A clone and a designed voice are different work on the same model.
 

@@ -162,6 +162,7 @@ async def write_settings(
         reloaded = await state.registry.reconfigure(
             num_threads=updated.num_threads,
             max_loaded=updated.max_loaded_models,
+            idle_seconds=updated.idle_unload_seconds,
             temperature=updated.temperature,
             execution_provider=updated.execution_provider,
         )
@@ -271,6 +272,29 @@ async def unload_model(model_id: str, state: AppState = Depends(get_state)) -> M
     spec = _spec_or_404(state, model_id)
     await state.registry.unload(model_id)
     return _model_out(state, spec)
+
+
+@api.delete("/models/{model_id}/stats", response_model=ModelOut)
+async def reset_model_stats(
+    model_id: str, state: AppState = Depends(get_state)
+) -> ModelOut:
+    """Forget this model's measured real-time factors.
+
+    A model's speed belongs to the host, and the host changes — a model moved
+    onto the GPU, a thread count raised. The old figures then misjudge it,
+    the render guard that reads them included, until enough new replies push
+    them out of the window. This drops them so the next reply measures fresh.
+    """
+    spec = _spec_or_404(state, model_id)
+    await asyncio.to_thread(state.stats.forget, model_id)
+    return _model_out(state, spec)
+
+
+@api.delete("/stats", response_model=list[ModelOut])
+async def reset_all_stats(state: AppState = Depends(get_state)) -> list[ModelOut]:
+    """Forget every model's measured real-time factors at once."""
+    await asyncio.to_thread(state.stats.clear)
+    return [_model_out(state, spec) for spec in CATALOG]
 
 
 # ---------------------------------------------------------------------------
