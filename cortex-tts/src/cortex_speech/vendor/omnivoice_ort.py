@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 """Build OmniVoice with an ONNX graph where its transformer should be.
 
 Upstream runs the whole pipeline in PyTorch. `rhasspy/omnivoice-onnx` publishes
@@ -12,15 +13,14 @@ codes into a waveform, the text tokenizer, and the feature extractor.
 
 Measured on a 4-vCPU i7-9750H: peak resident 1.4 GB against 4.7 GB loading the
 pipeline whole.
-"""
 
-# torch and transformers arrive with the `omnivoice` extra, which CI does not
-# install — a couple of gigabytes to type-check 150 lines of glue. Unresolved,
-# they also make everything derived from them `Unknown`, so the optional-access
-# rule fires on locals the narrowing above it has already settled. Both are
-# suppressed here rather than by excluding the file: every other rule, and all
-# of ruff, still apply.
-# pyright: reportMissingImports=false, reportOptionalMemberAccess=false
+The pragma sits above this docstring, not below it, because pyright reads a
+file-level one only before any other code — and a docstring is code. Below it,
+as it was, the suppression is silently ignored. torch and transformers arrive
+with the `omnivoice` extra, which CI does not install: a couple of gigabytes to
+type-check 150 lines of glue. Nothing else is suppressed file-wide; this file is
+ours, so every other rule and all of ruff still apply to it.
+"""
 
 from __future__ import annotations
 
@@ -98,7 +98,12 @@ def _onnx_forward(session: Any) -> Any:
             "input_ids": input_ids.cpu().numpy().astype(np.int64),
             "audio_mask": audio_mask.cpu().numpy().astype(bool),
             "attention_mask": mask.cpu().numpy().astype(np.int64),
-            "position_ids": position_ids.cpu().numpy().astype(np.int64),
+            # Narrowed by the `is None` branch above. With torch
+            # unresolved the checker cannot follow that, so it is told
+            # here rather than for the whole file.
+            "position_ids": position_ids.cpu()  # pyright: ignore[reportOptionalMemberAccess]
+            .numpy()
+            .astype(np.int64),
         }
         logits = session.run(
             ["logits"], {k: v for k, v in feeds.items() if k in accepted}

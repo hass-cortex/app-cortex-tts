@@ -6,6 +6,7 @@ change drops engines only for the two values a session cannot adopt.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +44,9 @@ class _Fake:
     def forget(self, reference_id: str) -> None:
         del reference_id
 
+    def close(self) -> None:
+        pass
+
 
 def _pretend_downloaded(data_dir: Path, model_id: str) -> None:
     spec = BY_ID[model_id]
@@ -64,6 +68,7 @@ def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EngineRegistry:
         tmp_path,
         ReferenceStore(tmp_path / "references"),
         max_loaded=2,
+        execution_provider="cpu",
         num_threads=2,
         temperature=0.8,
     )
@@ -108,7 +113,7 @@ class TestReconfigure:
         self, registry: EngineRegistry
     ) -> None:
         await registry.synthesize("hojo-40m", ["x"], "v")
-        dropped = await registry.reconfigure(num_threads=2, execution_provider="auto")
+        dropped = await registry.reconfigure(num_threads=2, execution_provider="cpu")
         assert not dropped
         assert registry.is_loaded("hojo-40m")
 
@@ -130,3 +135,54 @@ class TestReconfigure:
         await registry.synthesize("moss-nano", ["x"], "v")
         assert await registry.reconfigure(max_loaded=1)
         assert registry.loaded_ids == {"moss-nano"}
+
+
+class TestIdleUnload:
+    """A model nobody has asked for in a while is dropped, so a card shared
+    with another workload is not held for a reply that is not coming."""
+
+    async def test_an_idle_model_is_dropped_after_the_bound(
+        self, registry: EngineRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await registry.reconfigure(idle_seconds=0.2)
+        with caplog.at_level("INFO"):
+            await registry.synthesize("hojo-40m", ["x"], "v")
+            assert registry.loaded_ids == {"hojo-40m"}
+            await asyncio.sleep(0.6)
+        assert registry.loaded_ids == set()
+        assert "unloaded (idle for 0s)" in caplog.text
+
+    async def test_a_request_resets_the_clock(self, registry: EngineRegistry) -> None:
+        await registry.reconfigure(idle_seconds=0.4)
+        await registry.synthesize("hojo-40m", ["x"], "v")
+        await asyncio.sleep(0.25)
+        await registry.synthesize("hojo-40m", ["x"], "v")
+        await asyncio.sleep(0.25)
+        assert registry.loaded_ids == {"hojo-40m"}, "dropped mid-conversation"
+        await asyncio.sleep(0.5)
+        assert registry.loaded_ids == set()
+
+    async def test_zero_keeps_the_model(self, registry: EngineRegistry) -> None:
+        await registry.synthesize("hojo-40m", ["x"], "v")
+        await asyncio.sleep(0.3)
+        assert registry.loaded_ids == {"hojo-40m"}
+
+    async def test_turning_it_off_stops_the_sweep(
+        self, registry: EngineRegistry
+    ) -> None:
+        await registry.reconfigure(idle_seconds=0.2)
+        await registry.synthesize("hojo-40m", ["x"], "v")
+        await registry.reconfigure(idle_seconds=0)
+        await asyncio.sleep(0.5)
+        assert registry.loaded_ids == {"hojo-40m"}
+
+    async def test_close_unloads_everything_and_stops(
+        self, registry: EngineRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await registry.reconfigure(idle_seconds=60)
+        await registry.synthesize("hojo-40m", ["x"], "v")
+        with caplog.at_level("INFO"):
+            await registry.close()
+        assert registry.loaded_ids == set()
+        assert "unloaded (shutting down)" in caplog.text
+        assert registry._reaper is None  # noqa: SLF001

@@ -32,6 +32,7 @@ from cortex_speech import (
     ModelNotReadyError,
     ModelSpec,
     NoAudioError,
+    OutOfMemoryError,
     ProviderUnavailableError,
     Reference,
     ReferenceError,
@@ -41,6 +42,7 @@ from cortex_speech import (
     UnknownVoiceError,
     UnsupportedLanguageError,
     encode,
+    estimated_audio_seconds,
     prepare,
     prepared_text,
 )
@@ -90,6 +92,7 @@ async def health(state: AppState = Depends(get_state)) -> HealthResponse:
     return HealthResponse(
         version=state.version,
         loaded_models=len(state.registry.loaded_ids),
+        loading_models=sorted(state.registry.loading_ids),
         execution_provider=state.preferences.execution_provider,
         providers_in_use=state.registry.providers_in_use,
     )
@@ -351,6 +354,41 @@ class _Resolved(NamedTuple):
         return self.spec.id
 
 
+def _guard_render_length(
+    state: AppState, spec: ModelSpec, segments: list[str], voice_id: str
+) -> None:
+    """Refuse a reply too long to be worth rendering on this host.
+
+    The cost of a synthesis is uninterruptible — one worker thread the engine
+    runs to the end — so a reply that renders past the caller's timeout is not
+    merely late: its audio finishes into a socket nobody is reading, and the
+    model was held for the whole of it. This estimate stops that before it
+    starts, from the text's rough length and the speed this host has actually
+    measured for the chosen model and voice kind.
+
+    Fails open when the model has never been measured here: there is nothing to
+    estimate from, and one long render teaches the store what the next one is
+    judged against. `0` turns the guard off entirely.
+    """
+    limit = state.preferences.max_synthesis_seconds
+    if not limit:
+        return
+    kind = _voice_kind(state, spec, voice_id)
+    rtf = next((m.rtf for m in state.stats.get(spec.id) if m.kind == kind), None)
+    if rtf is None:
+        return
+    estimate = estimated_audio_seconds(segments) * rtf
+    if estimate <= limit:
+        return
+    raise _http(
+        http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        "RENDER_TOO_LONG",
+        f"{spec.name} would take about {estimate:.0f}s to render this on this "
+        f"host, over the {limit}s limit. Shorten the text, or render it on a "
+        "faster model or the GPU.",
+    )
+
+
 async def _resolve(
     state: AppState,
     *,
@@ -433,6 +471,8 @@ async def _resolve(
                 "UNKNOWN_VOICE",
                 f"{spec.name} has no voice {voice!r}{hint}",
             )
+
+    _guard_render_length(state, spec, segments, voice_id)
     return _Resolved(spec, segments, voice_id)
 
 
@@ -801,6 +841,13 @@ _WIRE_ERRORS: tuple[tuple[type[Exception], int, str], ...] = (
         ProviderUnavailableError,
         http_status.HTTP_503_SERVICE_UNAVAILABLE,
         "PROVIDER_UNAVAILABLE",
+    ),
+    # 503 rather than 500: the engine has been dropped, so the same request a
+    # moment later may well work. It is a condition, not a defect in the call.
+    (
+        OutOfMemoryError,
+        http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        "OUT_OF_MEMORY",
     ),
     (EngineError, http_status.HTTP_500_INTERNAL_SERVER_ERROR, "ENGINE_ERROR"),
 )

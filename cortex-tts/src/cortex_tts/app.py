@@ -88,6 +88,7 @@ async def lifespan(app: FastAPI):
             data_dir=settings.data_dir,
             num_threads=prefs.num_threads,
             max_loaded_models=prefs.max_loaded_models,
+            idle_unload_seconds=prefs.idle_unload_seconds,
             temperature=prefs.temperature,
             execution_provider=prefs.execution_provider,
         )
@@ -108,13 +109,16 @@ async def lifespan(app: FastAPI):
 
     _LOGGER.info(
         "cortex-tts %s listening on %s:%d "
-        "(data=%s, threads=%d, max_loaded=%d, temp=%.2f, provider=%s)",
+        "(data=%s, threads=%d, max_loaded=%d, idle_unload=%ds, "
+        "max_synthesis=%ds, temp=%.2f, provider=%s)",
         state.version,
         settings.host,
         settings.port,
         settings.data_dir,
         prefs.num_threads,
         prefs.max_loaded_models,
+        prefs.idle_unload_seconds,
+        prefs.max_synthesis_seconds,
         prefs.temperature,
         prefs.execution_provider,
     )
@@ -146,8 +150,7 @@ async def lifespan(app: FastAPI):
         preload.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await preload
-    for model_id in list(state.registry.loaded_ids):
-        await state.registry.unload(model_id)
+    await state.registry.close()
 
 
 def create_app() -> FastAPI:

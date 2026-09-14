@@ -34,7 +34,14 @@ from pathlib import Path
 
 import numpy as np
 
-from ..providers import ExecutionProvider, in_use, requested, sessions_of, verify
+from ..providers import (
+    ExecutionProvider,
+    in_use,
+    release_sessions,
+    requested,
+    sessions_of,
+    verify,
+)
 from ..references import Reference, ReferenceStore
 from ..text.pipeline import is_chinese
 from .base import (
@@ -185,6 +192,10 @@ class OmniVoiceEngine:
     def forget(self, reference_id: str) -> None:
         """Drop cached conditioning for a reference that changed or went away."""
         self._prompts.forget(reference_id)
+
+    def close(self) -> None:
+        """Release the sessions; see `Engine.close`."""
+        release_sessions(self)
 
     def _encode(self, reference: Reference) -> object:
         """Encode a reference recording into a reusable clone prompt."""

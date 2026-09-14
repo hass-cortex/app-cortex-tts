@@ -18,11 +18,11 @@ import unicodedata
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import numpy as np
 import soundfile as sf
 
+from .store import write_json
 from .text.pipeline import TextOptions, prepare, prepared_text
 
 _LOGGER = logging.getLogger(__name__)
@@ -161,21 +161,9 @@ class ReferenceStore:
                 _LOGGER.warning("skipping malformed reference entry: %s", err)
 
     def _save(self) -> None:
-        """Write the index. Callers hold `_lock`.
-
-        The temporary carries a unique name: a fixed one is a second shared
-        mutable thing, and two writers would truncate each other's bytes in it
-        before either renamed.
-        """
+        """Write the index. Callers hold `_lock`."""
         payload = {"references": [ref.to_json() for ref in self._items.values()]}
-        temp = self._index.with_suffix(f".json.{uuid4().hex}.tmp")
-        try:
-            temp.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            temp.replace(self._index)
-        finally:
-            temp.unlink(missing_ok=True)
+        write_json(self._index, payload, ensure_ascii=False, indent=2)
 
     def list(self) -> list[Reference]:
         """Return every stored reference, oldest first."""
@@ -184,7 +172,8 @@ class ReferenceStore:
 
     def get(self, reference_id: str) -> Reference | None:
         """Return one reference, or ``None`` when it does not exist."""
-        return self._items.get(reference_id)
+        with self._lock:
+            return self._items.get(reference_id)
 
     def add(
         self,

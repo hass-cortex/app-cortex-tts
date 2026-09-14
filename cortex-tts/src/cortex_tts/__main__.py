@@ -9,6 +9,8 @@ import uvicorn
 
 from . import config, preferences
 
+GRACEFUL_SHUTDOWN_SECONDS = 10
+
 
 def _configure_logging() -> None:
     level = os.environ.get("LOG_LEVEL", "info").upper()
@@ -65,6 +67,12 @@ def main() -> None:
         # worker would duplicate them without adding throughput, since the
         # decode loop is CPU-bound and already serialised per engine.
         workers=1,
+        # A synthesis in flight is a worker thread that cannot be interrupted,
+        # and without a cap uvicorn waits for it before shutting down — seen
+        # as a 7-minute stop behind one long CPU render. Past this, the
+        # request is cancelled and the engines are closed; a render that
+        # outlives a stop was not going to be heard anyway.
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
     )
 
 

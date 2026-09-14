@@ -44,7 +44,13 @@ from .engine.base import (
     UnsupportedLanguageError,
     Voice,
 )
-from .engine.registry import EngineRegistry, ModelNotReadyError, UnknownModelError
+from .engine.overrun import estimated_audio_seconds
+from .engine.registry import (
+    EngineRegistry,
+    ModelNotReadyError,
+    OutOfMemoryError,
+    UnknownModelError,
+)
 from .notifications import notify_models_changed
 from .notifications import subscribe as subscribe_models_changed
 from .providers import (
@@ -60,59 +66,68 @@ from .references import (
     ReferenceError,
     ReferenceStore,
 )
+
+# Not speech, and exported anyway: three files in this app are rewritten
+# while it serves, and the rule about the temporary's name is one a second
+# copy would eventually get wrong. The app may only reach the library through
+# this list, so it leaves by it.
+from .store import write_json
 from .text.options import NormalizeOptions
 from .text.pipeline import TextOptions, prepare, prepared_text
 
 __all__ = [
-    "SpeechConfig",
-    "SpeechService",
+    # audio encoding
     # catalog
-    "CATALOG",
-    "BY_ID",
-    "ModelSpec",
-    "ModelState",
-    # synthesis
-    "Voice",
-    "Synthesis",
-    "Delivery",
-    "UnsupportedLanguageError",
-    "EngineRegistry",
-    "StreamingEngine",
-    # references
-    "Reference",
-    "ReferenceStore",
-    "MAX_REFERENCE_SECONDS",
     # downloads
+    # errors
+    # notifications
+    # references
+    # synthesis
+    # text
+    "AudioFormat",
+    "BY_ID",
+    "CATALOG",
+    "CONTENT_TYPES",
+    "decode_reference",
+    "Delivery",
     "DownloadManager",
     "DownloadProgress",
-    # audio encoding
-    "AudioFormat",
-    "CONTENT_TYPES",
     "encode",
-    "decode_reference",
-    "level",
-    "STREAM_ENCODERS",
-    "MP3_BITRATE",
-    "StreamGain",
-    "wav_header",
-    # text
-    "TextOptions",
-    "NormalizeOptions",
-    "prepare",
-    "prepared_text",
-    # notifications
+    "estimated_audio_seconds",
+    "EngineError",
+    "EngineRegistry",
     "EXECUTION_PROVIDERS",
     "ExecutionProvider",
-    "ProviderUnavailableError",
-    "notify_models_changed",
-    "subscribe_models_changed",
-    # errors
-    "EngineError",
-    "NoAudioError",
-    "UnknownVoiceError",
-    "UnknownModelError",
+    "level",
+    "MAX_REFERENCE_SECONDS",
     "ModelNotReadyError",
+    "ModelSpec",
+    "ModelState",
+    "MP3_BITRATE",
+    "NoAudioError",
+    "NormalizeOptions",
+    "notify_models_changed",
+    "OutOfMemoryError",
+    "prepare",
+    "prepared_text",
+    "ProviderUnavailableError",
+    "Reference",
     "ReferenceError",
+    "ReferenceStore",
+    "SpeechConfig",
+    "SpeechService",
+    "STREAM_ENCODERS",
+    "StreamGain",
+    "StreamingEngine",
+    "subscribe_models_changed",
+    "Synthesis",
+    "TextOptions",
+    "UnknownModelError",
+    "UnknownVoiceError",
+    "UnsupportedLanguageError",
+    "Voice",
+    "wav_header",
+    "write_json",
 ]
 
 
@@ -128,6 +143,8 @@ class SpeechConfig:
         data_dir: Root holding ``models/`` and ``references/``.
         num_threads: ONNX Runtime thread count; 0 lets the runtime decide.
         max_loaded_models: How many engines may stay resident at once.
+        idle_unload_seconds: Drop an engine this long after its last request;
+            0 keeps it until evicted.
         temperature: Default sampling temperature for engines that have one.
         execution_provider: Which ONNX Runtime provider to ask for. `auto`
             takes a GPU when one answers; `cuda` refuses to fall back, because
@@ -138,6 +155,7 @@ class SpeechConfig:
     data_dir: Path
     num_threads: int = 0
     max_loaded_models: int = 1
+    idle_unload_seconds: int = 0
     temperature: float = 0.8
     execution_provider: ExecutionProvider = "auto"
 
@@ -160,6 +178,7 @@ class SpeechService:
             self._references,
             num_threads=config.num_threads,
             max_loaded=config.max_loaded_models,
+            idle_seconds=config.idle_unload_seconds,
             temperature=config.temperature,
             execution_provider=config.execution_provider,
         )

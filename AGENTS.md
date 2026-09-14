@@ -129,7 +129,11 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 ├── references.py     reference recordings: audio + transcript, validated on entry
 ├── audio.py          waveform ↔ bytes: output encoding, reference decode +
 │                     levelling, and the header a chunked stream opens with
-├── providers.py      which ONNX Runtime provider was asked for, and got
+├── providers.py      which ONNX Runtime provider was asked for, and got, and
+│                     what to hand CUDA beside the name
+├── device.py         the card: how much memory it has left, and how a failure
+│                     that means it has none is recognised
+├── store.py          replacing a small JSON file without a reader seeing half
 ├── notifications.py  publish "the voice set changed"; the app decides what that means
 └── vendor/           upstream inference code, kept diffable — exempt from ruff
                       and pyright file by file, never as `vendor/**`, because
@@ -148,12 +152,39 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   `text/passes.py` owns the order; each script only supplies readings.
 - **Every segment ends in sentence-final punctuation.** Without it the model
   misses its cue to stop and invents a syllable.
+- **A model's lifecycle is legible from the log alone.** The registry logs
+  every transition it owns — loading, resident, unloaded and why — with the
+  card's memory and the change across it, because an arena that grew, an engine
+  that did not give its memory back and another process taking the card leave
+  the same absolute figure and are told apart only by the movement. `loading`
+  is a state `/health` reports (`loading_models`), not a four-second gap in
+  which the registry says nothing is resident. Reading the figure costs a
+  subprocess, so it is read once per transition and never on a host configured
+  for the CPU.
+- **A device that runs out of memory costs the engine, not the process.** An
+  ONNX Runtime arena only grows, and only the session losing its last reference
+  returns it, so one exhausted render would otherwise leave the card full and
+  every request after it failing the same way. `providers.exhausted` recognises
+  the condition and the registry drops the engine holding the arena; the failed
+  request is not retried, because a stream has usually sent audio by then.
+  Dropping it is not enough on its own: an exception and its traceback
+  reference each other, so one that reaches a logger and stops there is freed
+  by a collection and never by refcounting — and every frame in it is still
+  holding the engine and its sessions. `traceback.clear_frames` empties those
+  locals and keeps the frames, so the trace still prints and the card comes
+  back at once. Measured with the collector disabled: 3716 MiB still held
+  without it, 494 with. It cannot reach the frame that raised — that one is
+  still executing — but that frame dies with its coroutine, and the frames it
+  clears are the deep ones holding the sessions and the tensors.
 - **One synthesis per engine at a time.** The ONNX sessions drive a stateful
   per-token loop, so the registry serialises calls; concurrency would corrupt
   state, not just slow things down.
 - **At most `max_loaded_models` engines are resident**, least-recently-used
   evicted. The 40M beside either 2 GB model costs about 2.8 GB; the 80M and
-  MOSS together about 4 GB.
+  MOSS together about 4 GB. Those are host figures and a card's are larger:
+  measured on a 4 GB GTX 1650, MOSS alone takes 2.9 GB and its streaming path
+  plateaus at 3.7 GB, which is the whole card. A model that fits in RAM is not
+  therefore a model that fits on the GPU.
 - **A bundle may span repositories.** `ModelSpec.sources` is a list;
   MOSS publishes weights and audio codec separately and needs both, and
   `catalog.inspect` reports half a bundle as not downloaded.

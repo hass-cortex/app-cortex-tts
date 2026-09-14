@@ -10,6 +10,8 @@ from typing import Any, Callable
 import numpy as np
 import onnxruntime as ort
 
+from ..providers import run_options
+
 SAMPLE_MODE_GREEDY = "greedy"
 SAMPLE_MODE_FIXED = "fixed"
 SAMPLE_MODE_FULL = "full"
@@ -294,6 +296,7 @@ def _resolve_stream_decode_frame_budget(
 class CodecStreamingDecodeSession:
     codec_meta: dict[str, Any]
     session: ort.InferenceSession
+    run_options: ort.RunOptions | None = None
 
     def __post_init__(self) -> None:
         self.transformer_specs = list(
@@ -340,7 +343,7 @@ class CodecStreamingDecodeSession:
             "audio_code_lengths": np.asarray([frame_count], dtype=np.int32),
         }
         feeds.update(self.state_feeds)
-        outputs = self.session.run(None, feeds)
+        outputs = self.session.run(None, feeds, self.run_options)
         output_names = [output.name for output in self.session.get_outputs()]
         named_outputs = dict(zip(output_names, outputs, strict=True))
         for spec in self.transformer_specs:
@@ -406,10 +409,12 @@ class OrtCpuRuntime:
         self.tts_meta = json.loads(self.tts_meta_path.read_text(encoding="utf-8"))
         self.codec_meta = json.loads(self.codec_meta_path.read_text(encoding="utf-8"))
         self.rng = np.random.default_rng(1234)
+        self.run_options = run_options(self.execution_provider)
         self.sessions = self._create_sessions()
         self.codec_streaming_session = CodecStreamingDecodeSession(
             codec_meta=self.codec_meta,
             session=self.sessions["codec_decode_step"],
+            run_options=self.run_options,
         )
 
     @staticmethod
@@ -526,6 +531,7 @@ class OrtCpuRuntime:
                 "input_ids": prefill_ids.reshape(prefill_dims),
                 "attention_mask": prefill_mask.reshape(prefill_mask_dims),
             },
+            self.run_options,
         )
         output_names = [
             output.name for output in self.sessions["prefill"].get_outputs()
@@ -645,6 +651,7 @@ class OrtCpuRuntime:
                 "text_token_id": np.asarray([int(text_token_id)], dtype=np.int32),
                 "audio_prefix_token_ids": padded_prefix,
             },
+            self.run_options,
         )
         output_names = [
             output.name for output in self.sessions["local_decoder"].get_outputs()
@@ -689,6 +696,7 @@ class OrtCpuRuntime:
                 ),
                 **local_past_by_name,
             },
+            self.run_options,
         )
         output_names = [
             output.name for output in self.sessions["local_cached_step"].get_outputs()
@@ -731,6 +739,7 @@ class OrtCpuRuntime:
                     [float(repetition_penalty)], dtype=np.float32
                 ),
             },
+            self.run_options,
         )
         output_names = [
             output.name for output in self.sessions["local_greedy_frame"].get_outputs()
@@ -782,6 +791,7 @@ class OrtCpuRuntime:
                 "assistant_random_u": assistant_random_u,
                 "audio_random_u": audio_random_u,
             },
+            self.run_options,
         )
         output_names = [
             output.name
@@ -822,6 +832,7 @@ class OrtCpuRuntime:
                     [len(generated_frames)], dtype=np.int32
                 ),
             },
+            self.run_options,
         )
         output_names = [
             output.name for output in self.sessions["codec_decode"].get_outputs()
@@ -849,6 +860,7 @@ class OrtCpuRuntime:
                 "input_ids": prefill_ids.reshape(prefill_dims),
                 "attention_mask": prefill_mask.reshape(prefill_mask_dims),
             },
+            self.run_options,
         )
         output_names = [
             output.name for output in self.sessions["prefill"].get_outputs()
@@ -1025,7 +1037,9 @@ class OrtCpuRuntime:
             }
             for input_name in self.tts_meta["onnx"]["decode_input_names"][2:]:
                 decode_feeds[input_name] = past_by_name[input_name]
-            decode_outputs = self.sessions["decode"].run(None, decode_feeds)
+            decode_outputs = self.sessions["decode"].run(
+                None, decode_feeds, self.run_options
+            )
             decode_output_names = [
                 output.name for output in self.sessions["decode"].get_outputs()
             ]

@@ -140,6 +140,16 @@ class Engine(Protocol):
         """
         ...
 
+    def close(self) -> None:
+        """Release the sessions, now.
+
+        A card's memory comes back when the sessions die, and the registry
+        needs that to happen at the line it drops the engine — not when the
+        collector next reaches whatever else held it. Idempotent; any call
+        after this raises `SessionClosedError`.
+        """
+        ...
+
 
 @runtime_checkable
 class StreamingEngine(Protocol):

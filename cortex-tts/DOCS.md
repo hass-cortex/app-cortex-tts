@@ -176,6 +176,25 @@ How many models may stay in memory at once. The 40M needs about 780 MB, the
 demand. Raise it to `2` only if the host can hold two — about 2.8 GB for the
 40M beside either of the others, about 4 GB for the 80M beside MOSS.
 
+### Unload when idle
+
+Seconds after its last request a model is dropped from memory; `0`, the
+default, keeps it until something evicts it. The next reply then pays the load
+again — about a second for the 40M, about 4 s for MOSS on a GPU. Worth setting
+on a card another workload shares: MOSS holds about 2.5 GB of a GPU for as
+long as it is resident, whether or not anyone is speaking.
+
+### Refuse over-long replies
+
+Seconds; a reply whose estimated render would take longer than this on the
+chosen model's measured speed is refused with a clear error rather than
+rendered. `0`, the default, accepts any length. What it stops is a reply long
+enough to render past the caller's own timeout: the audio then finishes into a
+connection nobody is reading, having held the model for the whole of it — one
+514-character story measured at over seven minutes on a CPU that renders
+OmniVoice at 4.6x. The estimate needs the model to have been measured on this
+host at least once, so the very first long reply on a fresh model still runs.
+
 ## Troubleshooting
 
 **No voices in the pipeline picker.** The model is probably not downloaded —

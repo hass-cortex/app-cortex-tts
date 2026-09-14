@@ -25,6 +25,14 @@ They are **not** exempt from ruff or pyright; the exemption in
 `pyproject.toml` names files individually so that a blanket `vendor/**` cannot
 quietly take our own code out of both checkers again.
 
+`omnivoice_ort.py` carries one file-level suppression, `reportMissingImports`:
+torch and transformers arrive with the `omnivoice` extra and CI does not
+install it, so every import of them is unresolved there. Anything narrower
+than a file is suppressed at the line that needs it. A file-level pragma has
+to sit **above** the module docstring — pyright reads one only before any
+other code — and one written below it is ignored without a word, which is how
+this file spent a while type-checking less than it claimed.
+
 | Path                | What it is                                                                                                                                                             |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `qwen3_tts_ort.py`  | Derived from `inference.py` in `onnx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice` (**Apache-2.0**), which mirrors `Qwen3TTSForConditionalGeneration.generate`. Reshaped from a demo script into a runtime: no manifest, provider chosen by the caller, tokenizer injected, generation yields frames. The file's own docstring lists every departure. |

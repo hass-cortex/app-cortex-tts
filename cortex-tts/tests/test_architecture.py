@@ -160,6 +160,7 @@ FACADE = {
     "AudioFormat",
     "CONTENT_TYPES",
     "encode",
+    "estimated_audio_seconds",
     "decode_reference",
     "level",
     "StreamGain",
@@ -177,9 +178,11 @@ FACADE = {
     "EngineError",
     "NoAudioError",
     "UnknownVoiceError",
+    "write_json",
     "UnsupportedLanguageError",
     "UnknownModelError",
     "ModelNotReadyError",
+    "OutOfMemoryError",
     "ReferenceError",
 }
 

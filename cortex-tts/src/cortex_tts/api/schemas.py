@@ -23,6 +23,12 @@ class HealthResponse(BaseModel):
     server: str = "cortex-tts"
     api_version: int = API_VERSION
     loaded_models: int
+    loading_models: list[str] = []
+    """Ids of the models being built right now, at most one.
+
+    A bundle takes seconds to become a session, and `loaded_models` counts
+    zero for the whole of that — which reads exactly like idle. This is how a
+    caller tells "nothing is happening" from "wait, it is coming"."""
     execution_provider: str
     """What was asked for — `auto`, `cpu` or `cuda`."""
     providers_in_use: dict[str, str] = {}
@@ -231,6 +237,8 @@ class SettingsOut(BaseModel):
     num_threads: int
     execution_provider: str
     max_loaded_models: int
+    idle_unload_seconds: int
+    max_synthesis_seconds: int
     default_model: str
     default_voice: str
     temperature: float
@@ -248,6 +256,8 @@ class SettingsUpdate(BaseModel):
     num_threads: int | None = None
     execution_provider: str | None = None
     max_loaded_models: int | None = None
+    idle_unload_seconds: int | None = None
+    max_synthesis_seconds: int | None = None
     default_model: str | None = None
     default_voice: str | None = None
     temperature: float | None = None

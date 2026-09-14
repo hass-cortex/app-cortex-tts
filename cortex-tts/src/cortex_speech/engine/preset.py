@@ -9,7 +9,14 @@ from pathlib import Path
 
 import numpy as np
 
-from ..providers import ExecutionProvider, in_use, requested, sessions_of, verify
+from ..providers import (
+    ExecutionProvider,
+    in_use,
+    release_sessions,
+    requested,
+    sessions_of,
+    verify,
+)
 from ..vendor.hojo40 import VOICES_NPZ_NAME, HojoTTSLightOnnx
 from .base import (
     Delivery,
@@ -115,6 +122,10 @@ class PresetEngine:
 
     def forget(self, reference_id: str) -> None:
         """Nothing to drop: this engine's voices are baked into the bundle."""
+
+    def close(self) -> None:
+        """Release the sessions; see `Engine.close`."""
+        release_sessions(self._model)
 
     def _render(self, text: str, voice: str, temperature: float) -> np.ndarray:
         """Render one segment, seeding each attempt for the shared retry."""

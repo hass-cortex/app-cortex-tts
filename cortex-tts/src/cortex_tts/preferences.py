@@ -21,9 +21,14 @@ import logging
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, cast
-from uuid import uuid4
 
-from cortex_speech import BY_ID, CATALOG, EXECUTION_PROVIDERS, ExecutionProvider
+from cortex_speech import (
+    BY_ID,
+    CATALOG,
+    EXECUTION_PROVIDERS,
+    ExecutionProvider,
+    write_json,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +47,15 @@ class Preferences:
             back, because a host with a GPU quietly on its CPU is the failure
             nobody notices.
         max_loaded_models: How many engines may stay resident at once.
+        idle_unload_seconds: Drop a model this long after its last request;
+            0 keeps it until something evicts it. The next reply pays the
+            load again, which is what makes this a choice: on a card shared
+            with another workload the memory is worth more than the seconds.
+        max_synthesis_seconds: Refuse a request whose estimated render would
+            take longer than this on the measured speed of the chosen model;
+            0 accepts any length. What it stops is a reply so long it renders
+            past the client's own timeout — the audio finishes into a socket
+            nobody is reading, having held the model for minutes.
         default_model: Model used when a request names none.
         default_voice: Voice used when a request names none. Empty takes the
             first the model offers.
@@ -52,6 +66,8 @@ class Preferences:
     num_threads: int = 2
     execution_provider: ExecutionProvider = "auto"
     max_loaded_models: int = 1
+    idle_unload_seconds: int = 0
+    max_synthesis_seconds: int = 0
     default_model: str = "hojo-40m"
     default_voice: str = "hojo_zh_f_01"
     temperature: float = 0.8
@@ -110,6 +126,20 @@ def _loaded(value: Any) -> int:
     return number
 
 
+def _idle(value: Any) -> int:
+    number = int(value)
+    if not 0 <= number <= 86400:
+        raise ValueError("idle unload out of range")
+    return number
+
+
+def _synthesis_seconds(value: Any) -> int:
+    number = int(value)
+    if not 0 <= number <= 3600:
+        raise ValueError("max synthesis seconds out of range")
+    return number
+
+
 def _provider(value: Any) -> ExecutionProvider:
     text = str(value).strip().lower()
     if text not in EXECUTION_PROVIDERS:
@@ -144,6 +174,8 @@ _VALIDATORS: dict[str, Any] = {
     "num_threads": _threads,
     "execution_provider": _provider,
     "max_loaded_models": _loaded,
+    "idle_unload_seconds": _idle,
+    "max_synthesis_seconds": _synthesis_seconds,
     "default_model": _model,
     # Deliberately unvalidated: a voice only exists once its model is
     # downloaded, and refusing one that is not there yet would make the field
@@ -183,13 +215,4 @@ def save(data_dir: Path, preferences: Preferences) -> None:
     """
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / FILE_NAME
-    # Unique temporary: this runs on a worker thread now, so a fixed name is
-    # something two writers share and truncate under each other.
-    temp = path.with_suffix(f".json.{uuid4().hex}.tmp")
-    try:
-        temp.write_text(
-            json.dumps(asdict(preferences), indent=2, sort_keys=True), encoding="utf-8"
-        )
-        temp.replace(path)
-    finally:
-        temp.unlink(missing_ok=True)
+    write_json(path, asdict(preferences), indent=2, sort_keys=True)

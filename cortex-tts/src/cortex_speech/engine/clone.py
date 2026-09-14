@@ -17,7 +17,14 @@ from typing import NamedTuple
 
 import numpy as np
 
-from ..providers import ExecutionProvider, in_use, requested, sessions_of, verify
+from ..providers import (
+    ExecutionProvider,
+    in_use,
+    release_sessions,
+    requested,
+    sessions_of,
+    verify,
+)
 from ..references import Reference, ReferenceStore
 from ..vendor.hojo80 import (
     HojoTTSLightOnnx,
@@ -94,6 +101,10 @@ class CloneEngine:
     def forget(self, reference_id: str) -> None:
         """Drop cached encodings for a reference that changed or was deleted."""
         self._prompts.forget(reference_id)
+
+    def close(self) -> None:
+        """Release the sessions; see `Engine.close`."""
+        release_sessions(self._model)
 
     def _encode(self, ref: Reference) -> _Prompt:
         """Run both of the runtime's encoders over a reference recording."""

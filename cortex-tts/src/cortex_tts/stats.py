@@ -20,7 +20,8 @@ import statistics
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
+
+from cortex_speech import write_json
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -109,20 +110,14 @@ class StatsStore:
 
     def _write(self) -> None:
         """Write the file. Callers hold `_lock`."""
-        temp = self._path.with_suffix(f".json.{uuid4().hex}.tmp")
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            temp.write_text(
-                json.dumps(self._samples, indent=2, sort_keys=True), encoding="utf-8"
-            )
-            temp.replace(self._path)
+            write_json(self._path, self._samples, indent=2, sort_keys=True)
         except OSError as err:
             # The measurement still counts for this process; only the memory
             # of it across a restart is lost, which is not worth an error to
             # the caller who only asked for audio.
             _LOGGER.warning("could not write stats: %s", err)
-        finally:
-            temp.unlink(missing_ok=True)
 
     def record(
         self, model_id: str, kind: str, rtf: float, audio_seconds: float

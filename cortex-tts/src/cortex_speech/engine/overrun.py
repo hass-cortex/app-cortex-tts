@@ -42,6 +42,18 @@ def expected_seconds(text: str) -> float:
     return len(text) / rate
 
 
+def estimated_audio_seconds(segments: list[str]) -> float:
+    """Roughly how much audio these segments will make, summed by script.
+
+    The same rough rates `expected_seconds` uses to judge truncation, put to a
+    second use: estimating a render's length *before* it runs, so a reply too
+    long to be worth rendering can be refused rather than discovered at a
+    timeout. An estimate, never a promise — a caller acts on the order of
+    magnitude, not the digits.
+    """
+    return sum(expected_seconds(segment) for segment in segments)
+
+
 def looks_truncated(text: str, seconds: float) -> bool:
     """Whether a generation stopped far short of the text it was given.
 

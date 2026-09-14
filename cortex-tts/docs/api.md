@@ -27,7 +27,7 @@ stays unpublished.
 
 | Method | Path                         | Purpose                                                            |
 | ------ | ---------------------------- | ------------------------------------------------------------------ |
-| GET    | `/health`                    | liveness; version, `api_version`, resident count, provider         |
+| GET    | `/health`                    | liveness; version, `api_version`, resident count, what is loading, provider |
 | GET    | `/api/defaults`              | the configured default model and voice                             |
 | GET    | `/api/settings`              | every stored setting, as it is now in force                        |
 | PUT    | `/api/settings`              | change some of them; omitted fields keep their value               |
@@ -145,6 +145,13 @@ each setting does.
 client reads changes shape; the app's release `version`, reported beside it,
 says nothing about the wire. A client compares the number before trusting
 anything else it reads. `api_version` is 1.
+
+A field a client did not know about is not a change of shape, so adding one
+does not bump it — the integration refuses to set up on a mismatch, and
+widening the response is not a reason to stop an install that works.
+`/health` gained `loading_models` that way: it lists what is being built right
+now, at most one, and is how `loaded_models: 0` during a load is told apart
+from `loaded_models: 0` because nothing is happening.
 
 ## For integration authors
 

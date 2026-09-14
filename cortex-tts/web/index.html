@@ -182,6 +182,26 @@
         on demand; lowering it evicts the least recently used at once.</p>
       </div>
     </div>
+    <div class="row lone">
+      <div class="field">
+        <label for="setIdle">Unload when idle (seconds)</label>
+        <input id="setIdle" type="number" min="0" max="86400" step="1">
+        <p class="sub">Drop a model this long after its last request; 0 keeps it
+        until something evicts it. The next reply pays the load again — about
+        4 s for MOSS on a GPU — which is worth it on a card shared with another
+        workload.</p>
+      </div>
+    </div>
+    <div class="row lone">
+      <div class="field">
+        <label for="setMaxSynth">Refuse over-long replies (seconds)</label>
+        <input id="setMaxSynth" type="number" min="0" max="3600" step="1">
+        <p class="sub">Refuse a reply whose estimated render, on this model's
+        measured speed, would take longer than this; 0 accepts any length. It
+        stops a reply so long it renders past the caller's timeout into audio
+        nobody hears. Judged only once the model has been measured here.</p>
+      </div>
+    </div>
   </div>
 
   <div class="actions">

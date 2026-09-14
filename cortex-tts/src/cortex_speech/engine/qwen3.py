@@ -17,7 +17,14 @@ from pathlib import Path
 import numpy as np
 
 from ..audio import decode_reference
-from ..providers import ExecutionProvider, in_use, requested, sessions_of, verify
+from ..providers import (
+    ExecutionProvider,
+    in_use,
+    release_sessions,
+    requested,
+    sessions_of,
+    verify,
+)
 from ..references import Reference, ReferenceStore
 from ..text.pipeline import is_chinese
 from ..vendor.qwen3_tts_ort import (
@@ -183,6 +190,10 @@ class Qwen3TtsEngine:
     def forget(self, reference_id: str) -> None:
         """Drop cached conditioning for a reference that changed or went away."""
         self._conditioning.forget(reference_id)
+
+    def close(self) -> None:
+        """Release the sessions; see `Engine.close`."""
+        release_sessions(self._runtime)
 
     # -- voices ------------------------------------------------------------
 

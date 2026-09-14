@@ -16,7 +16,10 @@ quietly running on its CPU is the failure that costs an afternoon.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+if TYPE_CHECKING:
+    import onnxruntime as ort
 
 ExecutionProvider = Literal["auto", "cpu", "cuda"]
 """What a caller may ask for.
@@ -38,6 +41,73 @@ _CUDA = "CUDAExecutionProvider"
 # other" and "switch freely". No measurable cost: RTF 2.82 against 2.78.
 CUDA_OPTIONS = {"arena_extend_strategy": "kSameAsRequested"}
 _CUDA_PRELOADED = False
+
+# The Python wrapper's references into the C++ session. ONNX Runtime has no
+# `close()`; its own `_reset_session` nulls exactly these before `_sess`, and
+# that is what returns a CUDA arena to the card. Pinned to the wrapper's
+# source by a test, because these names are not API.
+_SESSION_REFERENCES = (
+    "_sess_options",
+    "_inputs_meta",
+    "_outputs_meta",
+    "_overridable_initializers",
+    "_input_meminfos",
+    "_output_meminfos",
+    "_input_epdevices",
+    "_model_meta",
+    "_providers",
+    "_provider_options",
+    "_profiling_start_time_ns",
+)
+
+
+class SessionClosedError(RuntimeError):
+    """The engine holding this session has been closed."""
+
+
+class _ClosedSession:
+    """What a released wrapper points at, so a late call says why it failed."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise SessionClosedError(f"session is closed ({name} was called)")
+
+
+def run_options(provider: str) -> ort.RunOptions | None:
+    """What every `session.run` should carry on this provider.
+
+    Each session owns a BFC arena that only grows, and a runtime with many
+    sessions keeps every one's high-water mark. Shrinking after each run
+    returns the extensions. Measured on a 4 GB GTX 1650 with MOSS-TTS-Nano's
+    nine sessions: 3694 MiB standing without it, 2784 with, at RTF 0.38
+    against 0.36.
+    """
+    if provider != "cuda":
+        return None
+    import onnxruntime as ort
+
+    options = ort.RunOptions()
+    options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "gpu:0")
+    return options
+
+
+def release_sessions(runtime: Any) -> int:
+    """Destroy every session an object holds, now, and say how many.
+
+    This is what returns a card's memory: the C++ session dies with its last
+    Python reference, and the wrapper holds several. Dropping them here makes
+    release a line in the code rather than whatever the collector gets to.
+    Idempotent — a wrapper already released has nothing left to drop.
+    """
+    released = 0
+    for session in sessions_of(runtime):
+        if isinstance(getattr(session, "_sess", None), _ClosedSession):
+            continue
+        for name in _SESSION_REFERENCES:
+            if hasattr(session, name):
+                setattr(session, name, None)
+        session._sess = _ClosedSession()  # noqa: SLF001 - the wrapper has no close
+        released += 1
+    return released
 
 
 class _Session(Protocol):

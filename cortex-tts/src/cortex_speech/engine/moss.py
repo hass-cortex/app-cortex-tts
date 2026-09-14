@@ -28,6 +28,7 @@ import numpy as np
 from ..providers import (
     ExecutionProvider,
     in_use,
+    release_sessions,
     requested,
     sessions_of,
     verify,
@@ -181,6 +182,10 @@ class MossEngine:
     def forget(self, reference_id: str) -> None:
         """Drop cached conditioning for a reference that changed or went away."""
         self._prompts.forget(reference_id)
+
+    def close(self) -> None:
+        """Release the sessions; see `Engine.close`."""
+        release_sessions(self._runtime)
 
     def _encode(self, reference: Reference) -> list[list[int]]:
         """Run the codec encoder over a reference recording."""

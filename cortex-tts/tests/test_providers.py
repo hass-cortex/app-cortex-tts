@@ -87,3 +87,63 @@ class TestRefusingASilentDowngrade:
 
     def test_cpu_is_never_upgraded_behind_the_caller(self) -> None:
         assert verify("cpu", "cpu") == "cpu"
+
+
+class TestReleasingSessions:
+    """ONNX Runtime has no `close()`. What returns a CUDA arena is the C++
+    session losing its last Python reference, and the wrapper holds several —
+    so release nulls the same names the wrapper's own `_reset_session` does.
+    Measured on a GTX 1650 with the collector off and the engine pinned by a
+    cycle: 2480 MiB before, 110 after."""
+
+    def test_the_names_are_the_ones_onnxruntime_itself_nulls(self) -> None:
+        import inspect
+
+        import onnxruntime as ort
+
+        from cortex_speech.providers import _SESSION_REFERENCES
+
+        source = inspect.getsource(ort.InferenceSession._reset_session)  # noqa: SLF001
+        missing = [name for name in _SESSION_REFERENCES if name not in source]
+        assert not missing, f"onnxruntime {ort.__version__} no longer holds {missing}"
+
+    def test_a_released_session_says_so_when_used(self) -> None:
+        from cortex_speech.providers import SessionClosedError, release_sessions
+
+        class _Wrapper(_Session):
+            def __init__(self) -> None:
+                super().__init__(CUDA)
+                self._sess = object()
+                self._inputs_meta = ["x"]
+
+            def run(self, *args: object) -> object:
+                return self._sess.run(*args)  # type: ignore[attr-defined]
+
+        class _Runtime:
+            def __init__(self) -> None:
+                self.sessions = {"a": _Wrapper(), "b": _Wrapper()}
+                self.other = _Wrapper()
+
+        runtime = _Runtime()
+        assert release_sessions(runtime) == 3
+        assert runtime.other._inputs_meta is None  # noqa: SLF001
+        with pytest.raises(SessionClosedError):
+            runtime.sessions["a"].run(None, {})
+        assert release_sessions(runtime) == 0, "release must be idempotent"
+
+
+class TestRunOptions:
+    def test_cuda_runs_shrink_the_arena(self) -> None:
+        from cortex_speech.providers import run_options
+
+        options = run_options("cuda")
+        assert options is not None
+        assert (
+            options.get_run_config_entry("memory.enable_memory_arena_shrinkage")
+            == "gpu:0"
+        )
+
+    def test_the_cpu_carries_nothing(self) -> None:
+        from cortex_speech.providers import run_options
+
+        assert run_options("cpu") is None

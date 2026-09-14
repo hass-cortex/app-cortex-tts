@@ -26,6 +26,8 @@ const LABELS = {
   num_threads: "Inference threads",
   execution_provider: "Execution provider",
   max_loaded_models: "Models kept in memory",
+  idle_unload_seconds: "Unload when idle",
+  max_synthesis_seconds: "Refuse over-long replies",
   temperature: "Sampling temperature",
   preload: "Preload",
 };
@@ -67,6 +69,8 @@ function render() {
   if (!current) return;
   $("setThreads").value = current.num_threads;
   $("setLoaded").value = current.max_loaded_models;
+  $("setIdle").value = current.idle_unload_seconds;
+  $("setMaxSynth").value = current.max_synthesis_seconds;
   $("setTemp").value = current.temperature;
   $("setProvider").innerHTML = PROVIDERS.map(
     ([id, label]) =>
@@ -116,6 +120,8 @@ async function save() {
         num_threads: numberOrOmit("setThreads"),
         execution_provider: $("setProvider").value,
         max_loaded_models: numberOrOmit("setLoaded"),
+        idle_unload_seconds: numberOrOmit("setIdle"),
+        max_synthesis_seconds: numberOrOmit("setMaxSynth"),
         temperature: numberOrOmit("setTemp"),
         preload: $("setPreload").checked,
       }),
