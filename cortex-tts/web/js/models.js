@@ -281,15 +281,20 @@ function renderDeliveryFields() {
  */
 function narrowed(all) {
   const code = $("language").value;
-  if (!code) return all;
   const base = code.split("-")[0];
-  const matching = all.filter(
-    (v) =>
-      !v.language ||
-      v.source === "reference" ||
-      v.language.split("-")[0] === base,
-  );
-  return matching.length ? matching : all;
+  const spoken = code
+    ? all.filter(
+        (v) =>
+          !v.language ||
+          v.source === "reference" ||
+          v.language.split("-")[0] === base,
+      )
+    : all;
+  const byLanguage = spoken.length ? spoken : all;
+  // Gender is a label on the voice, so the filter is strict: an empty list
+  // is the true answer, where the language fallback above is not.
+  const gender = $("gender").value;
+  return gender ? byLanguage.filter((v) => v.gender === gender) : byLanguage;
 }
 
 function renderVoicePicker() {
@@ -377,6 +382,7 @@ const ENDPOINTS = {
 export function init() {
   $("model").addEventListener("change", renderVoicePicker);
   $("language").addEventListener("change", renderVoicePicker);
+  $("gender").addEventListener("change", renderVoicePicker);
   $("voice").addEventListener("change", () => onVoiceChange());
 
   $("models").addEventListener("click", async (e) => {
