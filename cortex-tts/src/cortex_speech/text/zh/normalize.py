@@ -56,8 +56,25 @@ SUFFIX_UNITS: dict[str, str] = {
     "ug/m3": "微克每立方公尺",
     "lx": "勒克斯",
     "ppm": "ppm",
-    "小時": "小時",
 }
+
+# Chinese unit and measure words, in both scripts: a number before one of
+# these is a quantity, whatever the request says about bare numbers. 號 and
+# 年 are not here — 302號 is a label, and a year reads digit by digit.
+# fmt: off
+WORD_UNITS: frozenset[str] = frozenset({
+    # time
+    "秒", "分", "分鐘", "分钟", "小時", "小时", "天", "週", "周", "個月", "个月", "月", "日", "點", "点",
+    # length, mass, volume
+    "毫米", "公分", "公尺", "米", "公里", "毫克", "微克", "克", "公克", "公斤", "毫升", "升", "公升",
+    # physics and money
+    "度", "瓦", "千瓦", "伏特", "安培", "毫安", "帕", "百帕", "勒克斯", "分貝", "分贝", "赫茲", "赫兹",
+    "卡", "大卡", "元", "塊", "块",
+    # measure words
+    "倍", "歲", "岁", "次", "個", "个", "人", "台", "張", "张", "件", "條", "条", "杯", "顆", "颗",
+    "步", "隻", "只", "位", "樓", "楼", "層", "层", "格", "段", "級", "级", "檔", "档",
+})
+# fmt: on
 
 # Longest first so "km/h" is matched before "km", and "kWh" before "W".
 _UNIT_ALTERNATION = "|".join(
@@ -72,6 +89,12 @@ _UNIT = re.compile(
 
 # A version only reads as one when it has three segments or an explicit
 # introduction; without that, "2026.9" is a decimal quantity.
+_WORD_UNIT = passes.quantity(
+    "|".join(re.escape(unit) for unit in sorted(WORD_UNITS, key=len, reverse=True))
+)
+# A four-digit run before 年 is a year: 二零二六年, never 二千零二十六年.
+_YEAR = re.compile(rf"{passes.LEAD}(\d{{4}})(?=\s*年)")
+
 _INTRODUCED_VERSION = re.compile(
     rf"(?<=[版本v])\s*\d+(?:\.\d+)+{passes.TAIL}", flags=re.IGNORECASE
 )
@@ -131,6 +154,15 @@ def _numbered_unit(match: re.Match[str], options: NormalizeOptions) -> str:
     return _span(match) + SUFFIX_UNITS[match.group(3)]
 
 
+def _word_unit(match: re.Match[str], options: NormalizeOptions) -> str:
+    """Read the number and keep the unit word as written: 25.9 度 -> 二十五點九度."""
+    return _span(match) + match.group(3)
+
+
+def _year(match: re.Match[str], options: NormalizeOptions) -> str:
+    return digit_string(match.group(1))
+
+
 def _degree(match: re.Match[str], options: NormalizeOptions) -> str:
     """Read a degree sign with no scale letter: "26.5°" is a plain 度."""
     return _span(match) + "度"
@@ -152,16 +184,13 @@ def _bare_number(match: re.Match[str], options: NormalizeOptions) -> str:
     text = match.string
     if _IDENTIFIER_LEAD.search(text[: match.start()]):
         return digit_string(literal)
-    # A bare 4-digit run immediately followed by 年 is a year, not a count.
-    tail = text[match.end() : match.end() + 1]
-    if tail == "年" and len(literal) == 4 and literal.isdigit():
-        return digit_string(literal)
     return decimal(literal)
 
 
 _PASSES: tuple[Pass, ...] = (
     Pass(passes.THOUSANDS, passes.drop),
     Pass(passes.DATE, _date, "expand_dates"),
+    Pass(_YEAR, _year, "expand_dates"),
     Pass(passes.CLOCK, _clock, "expand_time"),
     Pass(passes.PERCENT, _percent),
     Pass(passes.TEMPERATURE, _temperature, "expand_units"),
@@ -170,6 +199,7 @@ _PASSES: tuple[Pass, ...] = (
     Pass(passes.VERSION, _version),
     Pass(_INTRODUCED_VERSION, _version),
     Pass(_TRAILING_VERSION, _version),
+    Pass(_WORD_UNIT, _word_unit, "expand_units"),
     Pass(passes.RANGE, _range, "expand_numbers"),
     Pass(_BARE_NUMBER, _bare_number, "expand_numbers"),
 )

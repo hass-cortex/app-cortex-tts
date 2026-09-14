@@ -451,7 +451,9 @@ is who hears it.
 
 ### Add a unit to the normaliser
 
-`SUFFIX_UNITS` in `text/zh/normalize.py`. The alternation is built
+`SUFFIX_UNITS` in `text/zh/normalize.py` for a symbol with a spoken form
+(`kWh` → 度電); `WORD_UNITS` there for a Chinese unit word that is read as
+written (`分鐘`), listed in both scripts. Either alternation is built
 longest-first so `km/h` is matched before `km`; nothing else needs to change.
 
 ### Add an engine

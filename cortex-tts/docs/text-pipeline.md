@@ -110,7 +110,10 @@ every model and won.
 
 **Only the fixed shapes are read by default.** A number with a unit, a
 percent sign, a clock colon or an ISO date around it says what it is; a
-number on its own does not. `撥打 110`, `電話 0912345678`, `302號房`,
+number on its own does not. In Chinese the unit may be a word as well as a
+symbol: `25.9 度`, `3 分鐘`, `2 個月` are quantities (`WORD_UNITS`, both
+scripts), and a four-digit number before 年 is a year read digit by digit.
+`302號` is not on that list — a number before 號 is a label. `撥打 110`, `電話 0912345678`, `302號房`,
 `RTX 4090`, `John 3:16`, `50-50` and `COVID-19` were all read as quantities
 by the earlier rule — one hundred and ten, nine hundred million, a range,
 minus nineteen — and a wrong reading misleads where digits left alone
@@ -129,8 +132,9 @@ Latin words inside a Chinese sentence are left alone — the models read English
 natively, so `Home Assistant` and `Roborock` pass through untouched. A bare
 English sentence is not converted either: `t2s` has nothing to do to it.
 
-The unit table is fixed (`SUFFIX_UNITS` in `src/cortex_speech/text/zh/normalize.py`);
-an unusual unit passes through unexpanded until it is added there.
+The unit tables are fixed (`SUFFIX_UNITS` for symbols and `WORD_UNITS` for
+Chinese unit words, both in `src/cortex_speech/text/zh/normalize.py`); an
+unusual unit passes through unexpanded until it is added there.
 
 ## Order, and the stop at the end
 

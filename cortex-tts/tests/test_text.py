@@ -99,7 +99,7 @@ class TestNormalize:
         assert normalize(raw, NUMBERS) == expected
 
     def test_range_reads_as_a_span_not_a_subtraction(self) -> None:
-        assert normalize("25-30 度", NUMBERS) == "二十五到三十 度"
+        assert normalize("25-30 度", NUMBERS) == "二十五到三十度"
 
     def test_version_reads_digit_by_digit(self) -> None:
         assert "二零二六點九" in normalize("更新到 2026.9 版本", NUMBERS)
@@ -135,6 +135,24 @@ class TestBareNumbersAreOptIn:
         ],
     )
     def test_the_fixed_shapes_are_still_read(self, raw: str, expected: str) -> None:
+        assert normalize(raw) == expected
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("現在 25.9 度，體感 29.0 度", "現在 二十五點九度，體感 二十九點零度"),
+            ("3 分鐘後", "三分鐘後"),
+            ("剩 3 个月", "剩 三个月"),
+            ("20 ~ 25 度", "二十到二十五度"),
+            ("2026年", "二零二六年"),
+            ("2026 年 9 月 15 日", "二零二六 年 九月 十五日"),
+        ],
+    )
+    def test_a_chinese_unit_word_makes_a_quantity(
+        self, raw: str, expected: str
+    ) -> None:
+        # 度 after a number says what the number is as surely as °C does, in
+        # either script; 年 reads as a year, never as a count.
         assert normalize(raw) == expected
 
     def test_a_dash_after_letters_is_not_a_minus(self) -> None:
