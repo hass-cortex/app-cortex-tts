@@ -2,7 +2,16 @@
 // the model and voice lists: everything else asks it.
 
 import { call, json } from "./api.js";
-import { $, confirmStep, esc, fillPicker, msg, voiceOption } from "./dom.js";
+import {
+  $,
+  confirmStep,
+  esc,
+  fillPicker,
+  languageName,
+  languageOptions,
+  msg,
+  voiceGroups,
+} from "./dom.js";
 
 let models = [];
 let voices = [];
@@ -16,10 +25,13 @@ let pollTimer = null;
 const busy = new Set();
 const armed = new Set();
 let onVoiceChange = () => {};
+let onModelsChange = () => {};
 let onCatalogChange = () => {};
 
 /** Register what to do when the chosen voice may have changed. */
 export const whenVoiceChanges = (fn) => { onVoiceChange = fn; };
+/** Told when the set of models changes, which is when a download finishes. */
+export const whenModelsChange = (fn) => { onModelsChange = fn; };
 
 /**
  * Register what to do when the model or voice lists have been re-read.
@@ -81,25 +93,44 @@ function voiceCount(m) {
   return m.cloning ? "upload one" : "—";
 }
 
+const KIND_LABEL = { builtin: "built-in", designed: "designed", reference: "cloned" };
+
+/** The real-time factors this host measured, one per kind of voice. */
+function rtf(m) {
+  const measured = m.rtf || [];
+  if (!measured.length) {
+    // The heading already says whose host; this only has to say "none yet".
+    return `<p class="qual rtf-none">Not measured yet.</p>`;
+  }
+  const rows = measured.map((r) => {
+    const runs = r.samples === 1 ? "1 run" : `${r.samples} runs`;
+    return `<span class="rtf-kind">${esc(KIND_LABEL[r.kind] || r.kind)}</span>
+      <span class="val">${Number(r.rtf).toFixed(2)}</span>
+      <span class="qual">${runs}</span>`;
+  }).join("");
+  return `<div class="rtf-rows">${rows}</div>`;
+}
+
 function renderCards() {
   $("models").innerHTML = models.map((m) => `
     <div class="card${m.loaded ? " loaded" : ""}">
       <div class="card-head">
         <strong>${esc(m.name)}</strong>
-        ${m.recommended ? '<span class="pill ok">recommended</span>' : ""}
         ${statePill(m)}
       </div>
       <p>${esc(m.description)}</p>
       ${detail(m)}
-      <div class="grid4">
+      <div class="grid3">
         <span class="cap">Size</span>
-        <span class="cap">RTF</span>
         <span class="cap">Memory</span>
         <span class="cap">Voices</span>
         <span class="val">${Number(m.size_mb)} MB</span>
-        <span class="val">${m.rtf_hint ? Number(m.rtf_hint) : "—"}</span>
         <span class="val">${m.rss_hint_mb ? `${Number(m.rss_hint_mb)} MB` : "—"}</span>
         <span class="val">${esc(voiceCount(m))}</span>
+      </div>
+      <div class="measured">
+        <span class="cap">RTF on this host</span>
+        ${rtf(m)}
       </div>
       <div class="actions">${actions(m)}</div>
     </div>`).join("");
@@ -143,33 +174,140 @@ function selectedModel() {
   return models.find((m) => m.id === $("model").value) || null;
 }
 
+/**
+ * Every language a cloning model reads, in catalog order.
+ *
+ * What the upload form offers, so a recording is labelled from the same
+ * vocabulary the pickers above use — it had its own hard-coded three, which
+ * stopped covering the models two of them ago.
+ */
+/** The language the reader filtered the voices by, or "" for any. */
+export const selectedLanguage = () => $("language").value;
+
+export function cloningLanguages() {
+  const seen = [];
+  for (const model of models) {
+    if (!model.cloning) continue;
+    for (const code of model.languages || []) {
+      if (!seen.includes(code)) seen.push(code);
+    }
+  }
+  return seen;
+}
+
+/**
+ * The fields a request may carry beyond text, model and voice.
+ *
+ * Only what the selected model declares: sending a field it does not take is
+ * a 400, and the caller never asked for one.
+ */
+export function delivery() {
+  const model = selectedModel();
+  const out = {};
+  if (model && model.language_choice && $("language").value) {
+    out.language = $("language").value;
+  }
+  if (model && model.style_instruction && $("instruct").value.trim()) {
+    out.instruct = $("instruct").value.trim();
+  }
+  return out;
+}
+
+function renderDeliveryFields() {
+  const model = selectedModel();
+  const spoken = !!(model && model.language_choice);
+  const instruct = !!(model && model.style_instruction);
+
+  // Shown only where it does something. One model takes an instruction, so a
+  // permanent dead field would be dead on five cards out of six.
+  $("instructField").hidden = !instruct;
+  $("voiceRow").classList.toggle("lone", !instruct);
+  if (!instruct) $("instruct").value = "";
+  $("instructHint").textContent =
+    "Plain language, beside the voice. Left empty the speaker reads it as it normally would.";
+
+  // The language field stays on every model: it narrows the voice list
+  // whatever the model does with it, and only some are additionally told
+  // which language to read.
+  $("languageHint").textContent = spoken
+    ? "Narrows the voices below, and tells the model which language to read it in."
+    : "Narrows the voices below. This model reads whichever language its voice does.";
+
+  const codes = model ? model.languages || [] : [];
+  fillPicker(
+    $("language"),
+    '<option value="">— any —</option>' + languageOptions(codes),
+    (id) => id === "" || codes.includes(id),
+    "",
+  );
+}
+
+/**
+ * The selected model's voices, narrowed to the chosen language.
+ *
+ * Two kinds survive any filter. A voice with no language of its own —
+ * OmniVoice's designed ones — reads whatever it is given. So does a clone:
+ * the language on a reference labels what was said in the recording, not
+ * what the voice may be asked to say, and hiding somebody's own uploaded
+ * voice behind a filter is the one case that would actually annoy.
+ *
+ * When nothing matches, the whole list comes back rather than an empty one:
+ * Qwen3-TTS reads ten languages with nine speakers, so asking for German
+ * names no voice and is still a sensible request. There the timbre and the
+ * language are separate things.
+ */
+function narrowed(all) {
+  const code = $("language").value;
+  if (!code) return all;
+  const base = code.split("-")[0];
+  const matching = all.filter(
+    (v) =>
+      !v.language ||
+      v.source === "reference" ||
+      v.language.split("-")[0] === base,
+  );
+  return matching.length ? matching : all;
+}
+
 function renderVoicePicker() {
   const model = selectedModel();
   const cloning = model ? model.cloning : false;
-  const mine = voices.filter((v) => v.model_id === $("model").value);
+  // Before the voice list, which it shapes.
+  renderDeliveryFields();
+  const all = voices.filter((v) => v.model_id === $("model").value);
+  const mine = narrowed(all);
   fillPicker(
     $("voice"),
     mine.length
-      ? mine.map(voiceOption).join("")
+      ? voiceGroups(mine, model ? model.languages || [] : [], languageName)
       : `<option value="">— ${cloning ? "upload a recording below" : "no voices"} —</option>`,
     (id) => mine.some((v) => v.id === id),
     defaults.voice,
   );
 
-  // Capabilities are independent: a model may have bundled voices
-  // AND clone. Reading either one as a kind mislabels the model that has both.
-  const kinds = [];
-  if (model && model.builtin_voices) kinds.push("built in");
-  if (cloning) kinds.push("cloned");
+  // Read the kinds off the voices rather than off the capability flags. A
+  // model may have more than one, the flags have been wrong before — adding
+  // `designed_voices` left this saying "cloned" for a model with nine
+  // designed voices — and a list cannot disagree with itself.
+  const order = ["builtin", "designed", "reference"];
+  const kinds = order
+    .filter((kind) => mine.some((v) => v.source === kind))
+    .map((kind) => KIND_LABEL[kind]);
   $("voiceLabel").textContent = kinds.length
     ? `Voice — ${kinds.join(" + ")}${mine.length ? ` (${mine.length})` : ""}`
     : "Voice";
   onVoiceChange();
 
   $("clones").classList.toggle("idle", !cloning);
+  // Naming them matters here and nowhere else: this line is only read by
+  // someone looking for cloning on a model that has none, and "does not
+  // clone" on its own leaves them to guess which one does.
+  const others = models.filter((m) => m.cloning).map((m) => m.name);
   $("clonesNote").textContent = cloning
     ? `Feeding ${model ? model.name : "the selected model"}.`
-    : "Idle — the selected model does not clone.";
+    : others.length
+      ? `Idle — this model does not clone. These do: ${others.join(", ")}.`
+      : "Idle — the selected model does not clone.";
 }
 
 function renderModelPicker() {
@@ -182,6 +320,7 @@ function renderModelPicker() {
     (id) => usable.some((m) => m.id === id),
     defaults.model,
   );
+  onModelsChange();
   renderVoicePicker();
 }
 
@@ -213,6 +352,7 @@ const ENDPOINTS = {
 
 export function init() {
   $("model").addEventListener("change", renderVoicePicker);
+  $("language").addEventListener("change", renderVoicePicker);
   $("voice").addEventListener("change", () => onVoiceChange());
 
   $("models").addEventListener("click", async (e) => {

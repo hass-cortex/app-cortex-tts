@@ -234,7 +234,13 @@ class TestTranscriptEditing:
         from cortex_speech.references import ReferenceStore
 
         store = ReferenceStore(tmp_path)
-        tone = (0.2 * np.sin(np.linspace(0, 900, 24000 * 5))).astype("float32")
+        # Ends in silence: the validator refuses a recording cut mid-word.
+        tone = np.concatenate(
+            [
+                0.2 * np.sin(np.linspace(0, 900, int(24000 * 4.5))),
+                np.zeros(24000 // 2),
+            ]
+        ).astype("float32")
         buffer = __import__("io").BytesIO()
         sf.write(buffer, tone, 24000, format="WAV", subtype="PCM_16")
         reference = store.add(

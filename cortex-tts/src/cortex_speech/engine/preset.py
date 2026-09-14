@@ -12,6 +12,7 @@ import numpy as np
 from ..providers import ExecutionProvider, in_use, requested, sessions_of, verify
 from ..vendor.hojo40 import VOICES_NPZ_NAME, HojoTTSLightOnnx
 from .base import (
+    Delivery,
     NoAudioError,
     Synthesis,
     UnknownVoiceError,
@@ -52,7 +53,7 @@ def _describe(voice_id: str) -> Voice:
     )
 
 
-def builtin_voices(directory: Path) -> list[Voice]:
+def own_voices(directory: Path) -> list[Voice]:
     """Read the bundle's voice ids off disk, opening no ONNX session.
 
     Named separately from the engine because listing voices must not load a
@@ -131,22 +132,17 @@ class PresetEngine:
         return render_with_retries(text, self.sample_rate, generate)
 
     def synthesize(
-        self, segments: list[str], voice: str, *, temperature: float | None = None
+        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
     ) -> Synthesis:
         """Render segments with a bundled voice."""
         if voice not in {v.id for v in self._voices}:
             raise UnknownVoiceError(f"unknown voice {voice!r}")
 
         started = time.perf_counter()
-        waves: list[np.ndarray] = []
-        for text in segments:
-            waves.append(
-                self._render(
-                    text,
-                    voice,
-                    self._temperature if temperature is None else temperature,
-                )
-            )
+        temperature = (
+            self._temperature if delivery.temperature is None else delivery.temperature
+        )
+        waves = [self._render(text, voice, temperature) for text in segments]
 
         if not waves:
             raise NoAudioError("no segments to synthesize")

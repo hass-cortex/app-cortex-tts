@@ -18,6 +18,9 @@ from cortex_tts import preferences
 from cortex_tts.app import create_app
 from cortex_tts.preferences import FILE_NAME
 
+INGRESS = {"X-Ingress-Path": "/api/hassio_ingress/x"}
+"""What the Supervisor adds; `is_ingress` wants it and the peer both."""
+
 AUTH = {"Authorization": "Bearer test-key"}
 
 
@@ -411,3 +414,77 @@ class TestReferenceValidation:
         )
         assert response.status_code == 201, response.text
         assert "recording.This" not in response.json()["transcript"]
+
+
+class TestAKnobTheModelDoesNotHave:
+    """A field a model cannot honour is refused, never silently dropped.
+
+    The same reasoning as `NO_TEMPERATURE`: accepting `language` on a model
+    whose voice decides the language would be indistinguishable from having
+    worked, and the caller would go looking for the fault in the audio.
+    Answered from the catalog, so it does not wait behind a download.
+    """
+
+    def test_a_language_on_a_voice_bound_model_is_refused(
+        self, ingress_client: TestClient
+    ) -> None:
+        response = ingress_client.post(
+            "/api/speak",
+            json={"text": "你好。", "model": "hojo-40m", "language": "ja"},
+            headers=INGRESS,
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "NO_LANGUAGE_CHOICE"
+
+    def test_an_instruction_on_a_model_without_one_is_refused(
+        self, ingress_client: TestClient
+    ) -> None:
+        response = ingress_client.post(
+            "/api/speak",
+            json={
+                "text": "你好。",
+                "model": "moss-nano",
+                "instruct": "speak slowly, in a warm tone",
+            },
+            headers=INGRESS,
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "NO_STYLE_INSTRUCTION"
+
+    def test_the_cloning_checkpoint_refuses_an_instruction(
+        self, ingress_client: TestClient
+    ) -> None:
+        """Upstream's own feature gate: instruct is a CustomVoice feature and
+        the Base checkpoint raises on it."""
+        response = ingress_client.post(
+            "/api/speak",
+            json={
+                "text": "你好。",
+                "model": "qwen3-tts-0.6b-clone",
+                "instruct": "speak slowly, in a warm tone",
+            },
+            headers=INGRESS,
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "NO_STYLE_INSTRUCTION"
+
+    def test_the_refusal_beats_not_downloaded(self, ingress_client: TestClient) -> None:
+        """No model is on disk in the tests, so a 409 here would mean the
+        check moved behind the download and stopped being answerable."""
+        response = ingress_client.post(
+            "/api/speak",
+            json={"text": "你好。", "model": "omnivoice", "instruct": "speak slowly"},
+            headers=INGRESS,
+        )
+        assert response.status_code == 400
+
+    def test_the_capabilities_are_reported(self, ingress_client: TestClient) -> None:
+        """The UI shows a field only where one means something."""
+        models = {
+            m["id"]: m
+            for m in ingress_client.get("/api/models", headers=INGRESS).json()
+        }
+        assert models["qwen3-tts-0.6b"]["style_instruction"] is True
+        assert models["qwen3-tts-0.6b"]["language_choice"] is True
+        assert models["hojo-40m"]["language_choice"] is False
+        assert models["omnivoice"]["style_instruction"] is False

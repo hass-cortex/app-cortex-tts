@@ -33,6 +33,25 @@ INDEX_NAME = "references.json"
 MIN_SECONDS = 2.0
 MAX_SECONDS = 20.0
 
+# How loud the last of the clip may be, against the clip's own average, before
+# it is judged to have been cut rather than to have finished. A recording that
+# ends in speech was stopped by a clock, not by the speaker.
+#
+# Measured on eight real uploads: the seven cut at a recorder's 7.00s limit
+# ended between -7.1 and +7.5 dB — one of them louder than its own average,
+# which is what stopping mid-vowel looks like — and the single clip that ran
+# to its own end was at -25.3 dB. The threshold sits in the gap, nearer the
+# bad side, since the cost of a false accept (a clone that drifts, silently)
+# is higher than that of asking for a cleaner take.
+END_SILENCE_WINDOW_SECONDS = 0.1
+END_SILENCE_DB = -15.0
+
+# Peak below this and there is nothing in the file to clone. Checked before
+# the ending is judged, because that judgement is a ratio against the clip's
+# own level: silence has no level, the ratio is 0 dB, and the reader would be
+# told its recording "is still speaking when it ends".
+SILENT_PEAK_DBFS = -45.0
+
 _ID_SAFE = re.compile(r"[^a-z0-9_-]+")
 
 
@@ -194,6 +213,17 @@ class ReferenceStore:
                 f"reference is {seconds:.1f}s; trim it to {MAX_SECONDS:.0f}s or less "
                 "— longer clips inflate every prompt without improving the clone"
             )
+        peak = float(np.max(np.abs(samples))) if samples.size else 0.0
+        if 20.0 * np.log10(peak + 1e-12) < SILENT_PEAK_DBFS:
+            raise ReferenceError("the recording is silent — nothing in it to clone")
+        tail = _tail_db(samples, sample_rate)
+        if tail > END_SILENCE_DB:
+            raise ReferenceError(
+                f"the recording is still speaking when it ends ({tail:+.0f} dB in "
+                f"the last {END_SILENCE_WINDOW_SECONDS * 1000:.0f} ms against its "
+                "own average), so it was cut rather than finished — re-cut it to "
+                "end on a completed sentence, with the silence after it"
+            )
 
         reference_id = self._unique_id(slugify(name))
         audio_path = self._root / f"{reference_id}.wav"
@@ -279,6 +309,34 @@ class ReferenceStore:
 def _fingerprint(audio_path: Path) -> str:
     """Identify a stored recording by its bytes."""
     return hashlib.sha256(audio_path.read_bytes()).hexdigest()[:16]
+
+
+def _tail_db(samples: np.ndarray, sample_rate: int) -> float:
+    """How loud the clip's last moments are, against its own average.
+
+    The models that clone best read the whole recording as a worked example
+    before they speak, so a clip cut mid-word teaches one: that is how this
+    speaker ends a sentence. Nothing downstream can tell — the clone renders,
+    and simply drifts and clips its endings.
+
+    Only meaningful on a clip that has speech in it: the measure is a ratio
+    against the clip's own level, so a silent file reads 0 dB — "as loud at
+    the end as anywhere", which is true and useless. `add` rejects silence
+    before asking.
+
+    Returns:
+        Decibels relative to the clip's own RMS. Around zero means it ended at
+        full speech; well below means it ended in silence, as a finished
+        sentence does.
+    """
+    window = int(sample_rate * END_SILENCE_WINDOW_SECONDS)
+    if window <= 0 or samples.size < window * 2:
+        return 0.0
+    overall = float(np.sqrt(np.mean(np.square(samples))))
+    tail = float(np.sqrt(np.mean(np.square(samples[-window:]))))
+    if overall <= 0.0:
+        return 0.0
+    return 20.0 * float(np.log10((tail + 1e-12) / overall))
 
 
 def _decode(audio: bytes) -> tuple[np.ndarray, int]:

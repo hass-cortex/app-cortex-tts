@@ -125,22 +125,24 @@ the build otherwise.
 
 ## Adding a Model
 
-The catalog is hand-written (`src/cortex_speech/catalog.py`): three models,
-each one or more Hugging Face repos plus the list of files in its bundle, and
-the capabilities it actually has. A new model is a `ModelSpec` naming an
+The catalog is hand-written (`src/cortex_speech/catalog.py`): one entry per
+model, each naming one or more Hugging Face repos plus the list of files in
+its bundle, and the capabilities it actually has. A new model is a `ModelSpec` naming an
 existing backend, or a new backend registered with `backends.register` — the
 steps are in [`AGENTS.md`](../AGENTS.md) under **Add an engine**, and nothing
 in the registry, the API layer or the integration needs to change for either.
 
-Mind the cost figures on the entry (`size_mb`, `rtf_hint`, `rss_hint_mb`): the
-admin UI and the documentation show them so a reader can compare models with
-each other. Nothing decides with `rtf_hint` any more — the integration defaults
-every model to buffered and leaves streaming to someone who has measured their
-own host — but a figure from another machine still misleads whoever is
-choosing. `rtf_hint` is therefore measured, never copied from upstream: run
-`scripts/bench_rtf.py` against the reference host (a 4-core Home Assistant OS
-VM at two threads) with the new model added to its list, and record the median
-it prints, then update the tables in `docs/models.md` and `DOCS.md`.
+Mind the cost figures on the entry (`size_mb`, `rss_hint_mb`): the admin UI
+shows them so a reader can weigh a model before downloading a gigabyte of it.
+
+**There is no speed figure on the entry.** A real-time factor belongs to a
+host, not to a model — see the guarantee in [`AGENTS.md`](../AGENTS.md) — so
+the card shows what *this* machine measured (`cortex_tts/stats.py`) or says it
+has none yet. `scripts/bench_rtf.py` still exists, and what it produces is
+documentation: add the model to its list, run it against one host, and put the
+result in `docs/models.md` beside the others so the models stay comparable
+*with each other*. Never copy a figure from upstream, and never put one where
+a reader could take it for their own.
 
 For a quantised model, name the CPU too. Full-precision weights compute the
 same thing anywhere; a dynamically quantised one picks a kernel per host, and

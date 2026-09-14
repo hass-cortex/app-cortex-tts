@@ -13,9 +13,67 @@ export function esc(value) {
 
 export const pressed = (el) => el.getAttribute("aria-pressed") === "true";
 
+// What a language code is called. The catalog ships codes; a list of bare
+// codes is not a thing anyone can choose from. Shared rather than per-panel
+// so the voice picker, the language picker and the upload form cannot end up
+// offering three different vocabularies for the same thing.
+export const LANGUAGE_NAMES = {
+  zh: "Chinese", en: "English", ja: "Japanese", ko: "Korean", de: "German",
+  fr: "French", it: "Italian", pt: "Portuguese", ru: "Russian", es: "Spanish",
+};
+
+export const languageName = (code) =>
+  code ? LANGUAGE_NAMES[code] || code : "Any language";
+
+/** `<option>`s for language codes, in the order given. */
+export const languageOptions = (codes) =>
+  codes
+    .map((c) => `<option value="${esc(c)}">${esc(languageName(c))}</option>`)
+    .join("");
+
 /** The one way a voice is written into a picker, whichever panel asks. */
-export const voiceOption = (v) =>
-  `<option value="${esc(v.id)}">${esc(v.name)}${v.language ? ` · ${esc(v.language)}` : ""}</option>`;
+export const voiceOption = (v, withLanguage = true) =>
+  `<option value="${esc(v.id)}">${esc(v.name)}` +
+  `${withLanguage && v.language ? ` · ${esc(v.language)}` : ""}</option>`;
+
+/**
+ * Voices as language groups, in the order given.
+ *
+ * MOSS-TTS-Nano offers twenty-six in one list across three languages and two
+ * kinds; grouping is what makes that a thing to pick from rather than scroll.
+ * Language stays a control of its own — these groups say what a voice reads
+ * by default, not what it may be asked to read.
+ *
+ * Voices that declare no language lead: they are not a leftover but the
+ * language-agnostic kind, OmniVoice's designed voices, which read whatever
+ * the text is.
+ */
+export function voiceGroups(voices, order, label) {
+  const byLanguage = new Map();
+  for (const voice of voices) {
+    const key = voice.language || "";
+    if (!byLanguage.has(key)) byLanguage.set(key, []);
+    byLanguage.get(key).push(voice);
+  }
+  const keys = [
+    ...(byLanguage.has("") ? [""] : []),
+    ...order.filter((code) => byLanguage.has(code)),
+    // Anything the catalog did not list still has to appear.
+    ...[...byLanguage.keys()].filter((k) => k && !order.includes(k)),
+  ];
+  // One group is no grouping: a flat list reads better than a lone heading —
+  // and with one language left there is nothing for the suffix to tell apart.
+  if (keys.length < 2) return voices.map((v) => voiceOption(v, false)).join("");
+  return keys
+    .map(
+      (key) =>
+        `<optgroup label="${esc(label(key))}">` +
+        // No ` · zh` inside a group headed "Chinese".
+        byLanguage.get(key).map((v) => voiceOption(v, false)).join("") +
+        "</optgroup>",
+    )
+    .join("");
+}
 
 /**
  * Put a message in a slot. Every failure in this UI lands in one of these,

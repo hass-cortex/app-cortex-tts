@@ -51,7 +51,7 @@ class TestBuiltinVoices:
 
         monkeypatch.setattr(EngineRegistry, "acquire", refuse)
         monkeypatch.setattr(
-            "cortex_speech.engine.preset.builtin_voices", lambda _directory: FAKE
+            "cortex_speech.engine.preset.own_voices", lambda _directory: FAKE
         )
         _pretend_downloaded(tmp_path, "hojo-40m")
 
@@ -64,7 +64,7 @@ class TestBuiltinVoices:
         """A reader pointed at the data root would find no manifest."""
         seen: list[Path] = []
         monkeypatch.setattr(
-            "cortex_speech.engine.moss.builtin_voices",
+            "cortex_speech.engine.moss.own_voices",
             lambda directory: (seen.append(directory), FAKE)[1],
         )
         _pretend_downloaded(tmp_path, "moss-nano")
@@ -92,7 +92,7 @@ class TestCloningVoices:
     ) -> None:
         """MOSS is the reason `voices` adds rather than chooses."""
         monkeypatch.setattr(
-            "cortex_speech.engine.moss.builtin_voices", lambda _directory: FAKE
+            "cortex_speech.engine.moss.own_voices", lambda _directory: FAKE
         )
         _pretend_downloaded(tmp_path, "moss-nano")
 

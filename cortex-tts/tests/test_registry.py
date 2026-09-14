@@ -13,7 +13,7 @@ import pytest
 
 from cortex_speech import BY_ID
 from cortex_speech.catalog import model_dir
-from cortex_speech.engine.base import Synthesis
+from cortex_speech.engine.base import Delivery, Synthesis
 from cortex_speech.engine.registry import EngineRegistry
 from cortex_speech.references import ReferenceStore
 
@@ -26,11 +26,13 @@ class _Fake:
 
     def __init__(self) -> None:
         self.temperatures: list[float | None] = []
+        self.deliveries: list[Delivery] = []
 
     def synthesize(
-        self, segments: list[str], voice: str, *, temperature: float | None = None
+        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
     ) -> Synthesis:
-        self.temperatures.append(temperature)
+        self.temperatures.append(delivery.temperature)
+        self.deliveries.append(delivery)
         return Synthesis(
             audio=np.zeros(240, dtype=np.float32),
             sample_rate=self.sample_rate,
@@ -95,7 +97,9 @@ class TestReconfigure:
     async def test_a_per_call_temperature_still_wins(
         self, registry: EngineRegistry
     ) -> None:
-        await registry.synthesize("hojo-40m", ["x"], "v", temperature=0.0)
+        await registry.synthesize(
+            "hojo-40m", ["x"], "v", delivery=Delivery(temperature=0.0)
+        )
         engine = (await registry.acquire("hojo-40m")).engine
         assert isinstance(engine, _Fake)
         assert engine.temperatures == [0.0]

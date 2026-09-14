@@ -5,18 +5,18 @@
 [![GitHub License](https://img.shields.io/github/license/hass-cortex/app-cortex-tts)](https://github.com/hass-cortex/app-cortex-tts/blob/main/LICENSE.md)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hass-cortex/app-cortex-tts)
 
-Home Assistant app providing on-device text-to-speech: three ONNX models on
-CPU, with built-in voices or one cloned from a short recording, and the
-Chinese text front-end none of the models ship. No cloud, no per-character
-bill.
+Home Assistant app providing on-device text-to-speech: a catalog of models
+run on your own CPU or GPU, with built-in voices, voices designed from a set
+of attributes, or one cloned from a short recording — plus the Chinese text
+front-end none of the models ship. No cloud, no per-character bill.
 
 ## Features
 
 - **Runs on your hardware** — inference happens locally, on the CPU or on a
   GPU where one answers. No cloud, no API key, no per-character bill.
-- **Built-in voices, or your own** — two of the three models clone a voice
-  from a short reference recording, and a recording is the same voice on every
-  model that can.
+- **Built-in voices, or your own** — most of the models clone a voice from a
+  short reference recording, and a recording is the same voice on every model
+  that can.
 - **The text pipeline the models lack** — Traditional-to-Simplified conversion
   and number, unit, date and clock expansion, without which they are
   unintelligible for Chinese.
@@ -50,9 +50,11 @@ a temperature is the symptom you would otherwise have to guess at.
 ![The composer, and the prepared text beside it](images/composer.png)
 
 It also manages the models — download, load, evict — and the cloned voices,
-including the transcript each reference recording is bound to.
+including the transcript each reference recording is bound to. A card carries
+what the model costs to keep, and the real-time factor **this** host has
+measured, or says it has none yet: no figure from anyone else's machine.
 
-![The models, with what each costs](images/models.png)
+![A model card: what it costs, and what this host measured](images/models.png)
 
 ## Installation
 

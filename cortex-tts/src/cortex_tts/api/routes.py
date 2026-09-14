@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -26,6 +27,7 @@ from cortex_speech import (
     MAX_REFERENCE_SECONDS,
     STREAM_ENCODERS,
     AudioFormat,
+    Delivery,
     EngineError,
     ModelNotReadyError,
     ModelSpec,
@@ -37,6 +39,7 @@ from cortex_speech import (
     TextOptions,
     UnknownModelError,
     UnknownVoiceError,
+    UnsupportedLanguageError,
     encode,
     prepare,
     prepared_text,
@@ -49,6 +52,7 @@ from .schemas import (
     DefaultsResponse,
     ErrorResponse,
     HealthResponse,
+    MeasuredRtf,
     ModelOut,
     OpenAISpeechRequest,
     PreviewRequest,
@@ -162,23 +166,38 @@ async def write_settings(
 # ---------------------------------------------------------------------------
 
 
+def _voice_kind(state: AppState, spec: ModelSpec, voice_id: str) -> str:
+    """Which `Voice.source` a rendered voice belongs to.
+
+    A stored recording is a clone whichever model spoke it; anything else is
+    the model's own, and the catalog says whether those are designed or
+    bundled. No model has both, so the spec settles it without a lookup.
+    """
+    if state.references.get(voice_id) is not None:
+        return "reference"
+    return "designed" if spec.designed_voices else "builtin"
+
+
 def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
     model_state = state.speech.model(spec)
     progress = state.downloads.status(spec.id)
+    measured = state.stats.get(spec.id)
     return ModelOut(
         id=spec.id,
         name=spec.name,
         description=spec.description,
         builtin_voices=spec.builtin_voices,
+        designed_voices=spec.designed_voices,
         cloning=spec.cloning,
         chunk_streaming=spec.chunk_streaming,
         temperature=spec.temperature,
+        language_choice=spec.language_choice,
+        style_instruction=spec.style_instruction,
         languages=list(spec.languages),
         sample_rate=spec.sample_rate,
         size_mb=spec.size_mb,
-        rtf_hint=spec.rtf_hint,
         rss_hint_mb=spec.rss_hint_mb,
-        recommended=spec.recommended,
+        rtf=[MeasuredRtf(kind=m.kind, rtf=m.rtf, samples=m.count) for m in measured],
         downloaded=model_state.downloaded,
         loaded=model_state.loaded,
         provider=state.registry.providers_in_use.get(spec.id),
@@ -221,6 +240,7 @@ async def delete_model(model_id: str, state: AppState = Depends(get_state)) -> M
     await state.registry.unload(model_id)
     # Up to two gigabytes of files; not on the event loop.
     await asyncio.to_thread(state.speech.delete_model, spec)
+    state.stats.forget(model_id)
     await fire_models_changed(f"deleted:{model_id}")
     return _model_out(state, spec)
 
@@ -331,7 +351,7 @@ async def _resolve(
     voice: str | None,
     normalize_text: bool,
     convert_script: bool,
-    temperature: float | None = None,
+    delivery: Delivery = Delivery(),
 ) -> _Resolved:
     """Turn a request into everything a synthesis needs, or raise.
 
@@ -346,11 +366,24 @@ async def _resolve(
     # Answered from the catalog, so it does not wait behind a model that has
     # not been downloaded — a caller asking for a knob this model does not
     # have should hear that, not "not downloaded".
-    if temperature is not None and not spec.temperature:
+    if delivery.temperature is not None and not spec.temperature:
         raise _http(
             http_status.HTTP_400_BAD_REQUEST,
             "NO_TEMPERATURE",
             f"{spec.name} has no sampling temperature to set",
+        )
+    if delivery.language and not spec.language_choice:
+        raise _http(
+            http_status.HTTP_400_BAD_REQUEST,
+            "NO_LANGUAGE_CHOICE",
+            f"{spec.name} takes no language; its voice decides which one it "
+            "reads, so pick the voice instead",
+        )
+    if delivery.instruct and not spec.style_instruction:
+        raise _http(
+            http_status.HTTP_400_BAD_REQUEST,
+            "NO_STYLE_INSTRUCTION",
+            f"{spec.name} takes no style instruction",
         )
 
     segments = prepare(
@@ -405,7 +438,7 @@ async def _synthesize(
     normalize_text: bool = True,
     convert_script: bool = True,
     normalize_level: bool = True,
-    temperature: float | None = None,
+    delivery: Delivery = Delivery(),
 ) -> tuple[bytes, SpeakStats]:
     spec, segments, voice_id = await _resolve(
         state,
@@ -414,12 +447,12 @@ async def _synthesize(
         voice=voice,
         normalize_text=normalize_text,
         convert_script=convert_script,
-        temperature=temperature,
+        delivery=delivery,
     )
 
     with _engine_errors():
         result = await state.registry.synthesize(
-            spec.id, segments, voice_id, temperature=temperature
+            spec.id, segments, voice_id, delivery=delivery
         )
 
     audio = encode(result.audio, result.sample_rate, fmt, normalize=normalize_level)
@@ -433,6 +466,13 @@ async def _synthesize(
         inference_ms=round(result.inference_ms, 1),
         rtf=round(result.inference_ms / 1000 / seconds, 3) if seconds else 0.0,
         prepared_text=prepared_text(segments),
+    )
+    # What the card shows, split by the kind of voice this was — a clone
+    # costs about twice what a designed voice does on the same model. The
+    # store is asked rather than the voice list, because that is a dict
+    # lookup and the list is a disk read on the hot path.
+    state.stats.record(
+        spec.id, _voice_kind(state, spec, voice_id), stats.rtf, stats.audio_seconds
     )
     _LOGGER.info(
         "spoke %d chars as %s/%s -> %.2fs audio in %.0fms (RTF %.2f)",
@@ -474,7 +514,7 @@ async def speak(body: SpeakRequest, state: AppState = Depends(get_state)) -> Res
         normalize_text=body.normalize_text,
         convert_script=body.convert_script,
         normalize_level=body.normalize_level,
-        temperature=body.temperature,
+        delivery=body.delivery(),
     )
     return _audio_response(audio, body.format or "wav", stats)
 
@@ -535,7 +575,7 @@ async def speak_stream(
         voice=body.voice,
         normalize_text=body.normalize_text,
         convert_script=body.convert_script,
-        temperature=body.temperature,
+        delivery=body.delivery(),
     )
 
     # Loading is the last thing that can fail, and it must fail here: once the
@@ -546,12 +586,30 @@ async def speak_stream(
 
     async def frames() -> AsyncIterator[bytes]:
         gain = StreamGain()
+        samples = 0
+        started = time.perf_counter()
         yield encoder.open(spec.sample_rate)
         async for chunk in state.registry.synthesize_stream(
-            spec.id, segments, voice_id
+            spec.id, segments, voice_id, body.delivery()
         ):
+            samples += len(chunk)
             yield encoder.encode(gain.frames(chunk))
         yield encoder.close()
+        # This path has no `inference_ms` to report — nothing here renders a
+        # whole utterance — so the clock is the wall, which for a stream is
+        # the honest number anyway: the listener waits on it. Recorded after
+        # the last chunk because that is when the duration is finally known,
+        # and not at all when the consumer went away mid-reply, which would
+        # bank a real-time factor for a reply nobody heard the end of.
+        seconds = samples / spec.sample_rate
+        if seconds:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            state.stats.record(
+                spec.id,
+                _voice_kind(state, spec, voice_id),
+                round(elapsed_ms / 1000 / seconds, 3),
+                round(seconds, 3),
+            )
 
     return StreamingResponse(
         frames(),
@@ -720,6 +778,11 @@ async def reference_audio(
 _WIRE_ERRORS: tuple[tuple[type[Exception], int, str], ...] = (
     (ModelNotReadyError, http_status.HTTP_409_CONFLICT, "MODEL_NOT_READY"),
     (UnknownVoiceError, http_status.HTTP_404_NOT_FOUND, "UNKNOWN_VOICE"),
+    (
+        UnsupportedLanguageError,
+        http_status.HTTP_400_BAD_REQUEST,
+        "UNSUPPORTED_LANGUAGE",
+    ),
     (NoAudioError, http_status.HTTP_422_UNPROCESSABLE_CONTENT, "NO_AUDIO"),
     (
         ProviderUnavailableError,

@@ -3,7 +3,7 @@
 import { call } from "./api.js";
 import { $, msg, pressed } from "./dom.js";
 import { play, showStats } from "./player.js";
-import { hasVoice, refreshModels } from "./models.js";
+import { delivery, hasVoice, refreshModels } from "./models.js";
 
 let inFlight = false;
 
@@ -26,6 +26,7 @@ async function speak() {
         voice: $("voice").value,
         normalize_text: pressed($("norm")),
         convert_script: pressed($("conv")),
+        ...delivery(),
       }),
     });
     play(URL.createObjectURL(await res.blob()), { revokable: true });

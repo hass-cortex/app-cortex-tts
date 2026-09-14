@@ -61,6 +61,8 @@ stays unpublished.
 | `convert_script`  | `true`      | Traditional → Simplified glyph conversion                                 |
 | `normalize_level` | `true`      | Peak-normalise the finished waveform                                      |
 | `temperature`     | the setting | Sampling temperature 0–1, for models that have one                        |
+| `language`        | the voice's | Which language to read the text as, for models that take one              |
+| `instruct`        | none        | A plain-language instruction beside the voice, for the one model that does |
 
 The response is the audio, with the measurements in headers:
 `X-Cortex-Model`, `X-Cortex-Voice`, `X-Cortex-Inference-Ms`,
@@ -89,6 +91,16 @@ are refused.
 `POST /api/preview` takes `text`, `normalize_text` and `convert_script` and
 returns `original`, `prepared` and `segments` without touching a model.
 
+`language` is sent whole — `zh-TW`, not `zh`. How much of a tag means anything
+is the model's to decide: Qwen3-TTS names two Chinese dialects apart from
+Chinese, OmniVoice names 646 languages including Cantonese, and reducing the
+tag in the caller would throw that away before either got to say it mattered.
+The engine tries the whole tag, then its shorter forms, and refuses what it
+does not read. Which models take `language` and `instruct` at all is
+`language_choice` and `style_instruction` in `/api/models`; a model that
+declares neither refuses the field rather than accepting it and doing nothing
+with it, because an ignored field is indistinguishable from a working one.
+
 ## Errors
 
 Every error, whatever raised it, is a JSON body of `{"code", "message"}` —
@@ -98,9 +110,12 @@ a route's own refusal, an unknown path, and a request body pydantic rejected
 | Status | Code                   | When                                                            |
 | ------ | ---------------------- | --------------------------------------------------------------- |
 | 400    | `EMPTY_TEXT`           | Nothing left to say once punctuation was stripped               |
-| 400    | `NO_TEMPERATURE`       | A temperature for a model that has none (MOSS)                  |
+| 400    | `NO_TEMPERATURE`       | A temperature for a model that has none (MOSS, OmniVoice)       |
+| 400    | `NO_LANGUAGE_CHOICE`   | A `language` for a model whose voice decides it                 |
+| 400    | `NO_STYLE_INSTRUCTION` | An `instruct` for a model that takes none                       |
+| 400    | `UNSUPPORTED_LANGUAGE` | A `language` the model does not read                            |
 | 400    | `UNSUPPORTED_FORMAT`   | `flac` or `ogg` asked of the stream                             |
-| 400    | `BAD_REFERENCE`        | Unreadable audio, wrong length, or an empty transcript          |
+| 400    | `BAD_REFERENCE`        | Unreadable audio, wrong length, an empty transcript, or a recording cut mid-word |
 | 401    | `AUTH_REQUIRED`        | No key, or the wrong one                                        |
 | 404    | `UNKNOWN_MODEL`        | No such model id                                                |
 | 404    | `UNKNOWN_VOICE`        | The model does not offer that voice (ids are case-sensitive)    |

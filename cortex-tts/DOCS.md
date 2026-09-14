@@ -1,20 +1,26 @@
 # Cortex TTS
 
-On-device text-to-speech for Home Assistant. Three ONNX models running locally —
-on the CPU, or on a GPU where one answers — no cloud, no API bill, with the
-Chinese text front-end none of them ship.
+On-device text-to-speech for Home Assistant. A catalog of models running
+locally — on the CPU, or on a GPU where one answers — no cloud, no API bill,
+with the Chinese text front-end none of them ship.
 
-| Model         | Voices                            | Languages  | RTF on a 4-core HA VM | Memory  | Disk   |
-| ------------- | --------------------------------- | ---------- | --------------------- | ------- | ------ |
-| **Hojo 40M**  | 15 built in (2 zh, 13 en)         | zh, en     | **0.67**              | ~780 MB | 241 MB |
-| **Hojo 80M**  | clones only                       | zh, en     | 1.42                  | ~2 GB   | 437 MB |
-| **MOSS Nano** | 18 built in (6 zh) **and** clones | zh, en, ja | 1.06                  | ~2 GB   | 729 MB |
+| Model               | Voices                            | Languages  | Relative cost | Memory  | Disk   |
+| ------------------- | --------------------------------- | ---------- | -------- | ------- | ------ |
+| **Hojo 40M**        | 15 built in (2 zh, 13 en)         | zh, en     | **0.55** | ~780 MB | 241 MB |
+| **MOSS Nano**       | 18 built in (6 zh) **and** clones | zh, en, ja | 1.07     | ~2 GB   | 729 MB |
+| **Hojo 80M**        | clones only                       | zh, en     | 1.51     | ~2 GB   | 437 MB |
+| **OmniVoice**       | 9 designed **and** clones         | 800+       | 3.83     | ~1.1 GB | 1.4 GB |
+| **Qwen3-TTS**       | 9 built in (5 zh)                 | 10         | 6.72     | ~1.6 GB | 1.0 GB |
+| **Qwen3-TTS clone** | clones only                       | 10         | 6.87     | ~2.1 GB | 1.3 GB |
 
-RTF is render time over audio time, measured for all three on the same host
-— a Home Assistant OS VM with 4 vCPU of an Intel Core i7-9750H and 8 GB, two inference threads, CPU —
-so the column compares the models with each other; below 1 outruns playback. Start with the **40M**, the only one
-that does on that class of host. Which model suits what, how each one clones,
-and what a faster CPU or a GPU changes is in [Models][models].
+**That column is not a prediction about your machine.** It is render time over
+audio time with every model measured on one host — a VM with 4 vCPU of an
+Intel Core i7-9750H, two inference threads, CPU — so it ranks the models
+against each other and nothing else; below 1 means the model outran playback
+*there*. Once the app is running, each model's card shows what **your** host
+measured, or says it has none yet. Start at the top of the table; the lower
+entries want a faster machine or a GPU. Which model suits what, how each one
+clones, and what a faster CPU or a GPU changes is in [Models][models].
 
 None of these models can pronounce Traditional Chinese glyphs or an Arabic
 numeral, so the app rewrites both before synthesis — 32% character error rate
@@ -58,9 +64,10 @@ model becomes its own TTS entity (`tts.hojo_tts_light_40m`,
 [![Open your Home Assistant instance and manage your voice assistants.][va-badge]][va]
 
 Pick (or create) a pipeline → **Text-to-speech** → choose the Cortex TTS entity,
-then the voice. The voice is what picks the language: the model takes no
-language parameter, so a Chinese voice is the only thing that makes it read
-Chinese.
+then the voice. On most models the voice is what picks the language — a
+Chinese voice is the only thing that makes them read Chinese. Qwen3-TTS and
+OmniVoice take a language of their own, and there the pipeline's language is
+sent with every reply, so the speaker is a timbre rather than a language.
 
 How to call it from `tts.speak`, find a voice id, and choose a speaking mode
 per model is the [integration's documentation][integration]. Uploading a
@@ -148,15 +155,18 @@ empty always takes the first.
 
 ### Sampling temperature
 
-How randomly the model picks each step. Default `0.8`. It stops speaking only
-when it _samples_ its end-of-speech token, so a higher value occasionally
-over-runs the text with an invented syllable. `0` is greedy: reproducible,
-never over-runs, at the cost of flatter delivery.
+How randomly the model picks each step. Default `0.8`. A model stops speaking
+only when it _samples_ its end-of-speech token, so a higher value occasionally
+over-runs the text with an invented syllable.
 
-Only the two Hojo models read it. MOSS fuses its sampling into a dedicated ONNX
-graph and has no temperature at all: this setting is ignored for it, and a
-request that names a `temperature` for MOSS over the API is refused rather than
-silently ignored.
+`0` is greedy: reproducible, flatter, and on the Hojo models it never
+over-runs. **Not on Qwen3-TTS** — there, greedy decoding often fails to sample
+end-of-speech at all, and the reply is cut off at the model's own ceiling
+instead.
+
+The Hojo models and Qwen3-TTS read this setting. MOSS and OmniVoice fuse their
+sampling into a dedicated graph and have no temperature at all, so a request
+naming one for those is refused rather than silently ignored.
 
 ### Load the default model at startup
 

@@ -66,6 +66,14 @@ class TestCapabilities:
         mute = [s.id for s in CATALOG if not (s.builtin_voices or s.cloning)]
         assert not mute, f"models that can never produce a voice: {mute}"
 
+    def test_no_model_has_both_kinds_of_its_own_voices(self) -> None:
+        """`routes._voice_kind` decides "builtin" or "designed" from the spec
+        alone, without looking the voice up — it can do that only while no
+        model declares both. An entry that did would mislabel every
+        measurement it made, silently, so the build refuses it here."""
+        both = [s.id for s in CATALOG if s.builtin_voices and s.designed_voices]
+        assert both == []
+
 
 class TestBackendTable:
     def test_every_catalog_backend_is_registered(self) -> None:
@@ -115,7 +123,7 @@ class TestListingVoicesLoadsNothing:
     def test_a_backend_without_a_reader_says_so(self) -> None:
         """The 80M has no built-in voices, so it registers none."""
         with pytest.raises(backends.UnknownBackendError) as err:
-            backends.builtin_voices("hojo-clone", Path("/nowhere"))
+            backends.own_voices("hojo-clone", Path("/nowhere"))
         assert "hojo-clone" in str(err.value)
 
     def test_a_reader_is_optional_at_registration(self) -> None:

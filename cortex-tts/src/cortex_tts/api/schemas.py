@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from cortex_speech import AudioFormat
+from cortex_speech import AudioFormat, Delivery
 
 API_VERSION = 1
 """Bumped when a route, field or header the integration reads changes shape.
@@ -57,6 +57,16 @@ class VoiceOut(BaseModel):
     model_id: str
 
 
+class MeasuredRtf(BaseModel):
+    """A real-time factor this host measured, for one kind of voice."""
+
+    kind: str
+    """`builtin`, `designed` or `reference` — see `Voice.source`."""
+    rtf: float
+    samples: int
+    """How many syntheses `rtf` is the median of."""
+
+
 class ModelOut(BaseModel):
     """A catalog entry with its runtime state."""
 
@@ -64,15 +74,22 @@ class ModelOut(BaseModel):
     name: str
     description: str
     builtin_voices: bool
+    designed_voices: bool
     cloning: bool
     chunk_streaming: bool
     temperature: bool
+    language_choice: bool
+    """Whether a request may name the language. False where the voice decides."""
+    style_instruction: bool
+    """Whether a request may carry a free-text instruction beside the voice."""
     languages: list[str]
     sample_rate: int
     size_mb: int
-    rtf_hint: float
     rss_hint_mb: int
-    recommended: bool
+    rtf: list[MeasuredRtf] = []
+    """What this host measured, one entry per kind of voice; empty until it has.
+
+    Never a figure from anywhere else — see `cortex_tts.stats`."""
     downloaded: bool
     loaded: bool
     provider: str | None = None
@@ -108,6 +125,33 @@ class SpeakRequest(BaseModel):
     convert_script: bool = True
     normalize_level: bool = True
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
+    language: str | None = Field(default=None, max_length=32)
+    """Which language to read the text as: a whole tag, `zh-TW` or `zh`.
+
+    Sent whole rather than reduced by the caller, because how much of it means
+    anything is the model's to say — one of these names two Chinese dialects,
+    another names 646 languages including several narrower than `zh`. The
+    engine tries the tag, then its shorter forms.
+
+    Only models declaring `language_choice`; the rest are told the voice
+    decides, rather than accepting it and doing nothing with it."""
+    instruct: str | None = Field(default=None, max_length=200)
+    """A free-text instruction beside the voice: "speak slowly, in a warm tone".
+
+    Only models declaring `style_instruction`."""
+
+    def delivery(self) -> Delivery:
+        """The three fields as the one object the engines read.
+
+        Built here, once, rather than carried as three parameters down to
+        wherever an engine is finally called: three is where a widening
+        signature starts costing every function in between, which is the
+        reason `Delivery` exists at all."""
+        return Delivery(
+            temperature=self.temperature,
+            language=self.language,
+            instruct=self.instruct,
+        )
 
 
 class SpeakStats(BaseModel):

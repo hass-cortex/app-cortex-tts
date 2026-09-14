@@ -141,6 +141,7 @@ FACADE = {
     # synthesis value types
     "Voice",
     "Synthesis",
+    "Delivery",
     "EngineRegistry",
     "StreamingEngine",
     # references
@@ -176,6 +177,7 @@ FACADE = {
     "EngineError",
     "NoAudioError",
     "UnknownVoiceError",
+    "UnsupportedLanguageError",
     "UnknownModelError",
     "ModelNotReadyError",
     "ReferenceError",

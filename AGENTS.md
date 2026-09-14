@@ -60,7 +60,7 @@ rootfs.
     ├── Dockerfile             uv-installed venv baked in; source copied on top
     ├── DOCS.md                HA App Store documentation page
     ├── docs/                  reference pages DOCS.md and the integration link to
-    ├── scripts/bench_rtf.py   where every rtf_hint comes from (one host, one text set)
+    ├── scripts/bench_rtf.py   where docs/models.md's figures come from (one host, one text set)
     ├── README.md              Supervisor reads this as `long_description`
     ├── CONTEXT.md             domain vocabulary
     ├── CONTRIBUTING.md
@@ -86,6 +86,8 @@ src/cortex_tts/       ── THE HOME ASSISTANT APP ──
 ├── __main__.py       uvicorn entrypoint
 ├── config.py         what must be settled before the process starts, from the environment
 ├── preferences.py    what the user changes while it runs, stored beside the models
+├── stats.py          what this host measured, per model — a card shows its own
+│                     real-time factor or none, never another machine's
 ├── app.py            assembly: lifespan, state, routes, ingress UI mount
 ├── supervisor.py     best-effort POSTs to the Supervisor, and having none
 ├── discovery.py      announce so HA finds the app by itself
@@ -114,6 +116,13 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 │   ├── preset.py     40M: fixed voices
 │   ├── clone.py      80M: every voice is a reference recording
 │   ├── moss.py       MOSS-TTS-Nano: both, with cached prompt conditioning
+│   ├── qwen3.py      Qwen3-TTS: nine speakers on one checkpoint, cloning on
+│   │                 the other; two catalog entries, one engine
+│   ├── qwen_tokenizer.py  that checkpoint ships no tokenizer.json — assemble
+│   │                 one from vocab.json + merges.txt rather than pull in
+│   │                 transformers to do it
+│   ├── omni.py       OmniVoice: designed voices from a closed attribute
+│   │                 vocabulary, and cloning
 │   └── join.py       stitching per-segment waveforms into one utterance
 ├── catalog.py        the models, their capabilities, and where they come from
 ├── download.py       Hugging Face fetch in a worker thread, pollable progress
@@ -122,7 +131,9 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 │                     levelling, and the header a chunked stream opens with
 ├── providers.py      which ONNX Runtime provider was asked for, and got
 ├── notifications.py  publish "the voice set changed"; the app decides what that means
-└── vendor/           upstream inference code, kept diffable (ruff: ALL ignored)
+└── vendor/           upstream inference code, kept diffable — exempt from ruff
+                      and pyright file by file, never as `vendor/**`, because
+                      two files in there are ours; see vendor/NOTICE.md
 ```
 
 ### Cross-module guarantees
@@ -154,7 +165,14 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   audio, in the previous voice.
 - **A reference is audio _and_ transcript.** Neither alone defines a voice, and
   a wrong transcript degrades the clone with no error — so it is validated on
-  the way in (2–20 s, non-empty, pronounceable).
+  the way in (2–20 s, non-empty, pronounceable, and ending in silence). The
+  last of those is the same class of silent failure: the models that clone
+  best read the whole recording as a worked example, so a clip cut by a clock
+  teaches one that sentences end mid-word, and the clone then drifts and clips
+  its own endings. Measured on eight real uploads, the seven cut at a
+  recorder's 7.00 s limit ended between −7.1 and +7.5 dB against their own
+  average and the one that finished ended at −25.3 dB, so the threshold is
+  −15 dB over the last 100 ms.
 - **An addon option is what a restart is the only way to change.** `config.yaml`
   carries the log level and the discovery key, and nothing else; everything a
   user tunes is a stored setting in `preferences.py`, changed in the admin UI
@@ -182,10 +200,27 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 - **The library never reaches for Home Assistant.** It publishes to listeners
   via `notifications.py`; `cortex_tts/events.py` is what turns that into an
   event on the HA bus. Enforced by `tests/test_architecture.py`.
+- **A real-time factor belongs to a host, not to a model.** The catalog used
+  to carry an `rtf_hint` measured on the project's reference machine and the
+  UI showed it as plain "RTF"; the integration's own comments record it being
+  "out by 3x here". It is gone. `cortex_tts/stats.py` keeps what this host
+  measured — the median of the last dozen syntheses over a second of audio,
+  **kept per voice kind** — and a card shows that or says "not measured". The
+  kinds are split because the cost is: on OmniVoice a clone measured 7.17
+  against 3.46 for a designed voice on one host, since the reference's codec
+  frames rejoin the prompt on every synthesis. `scripts/bench_rtf.py` still
+  exists, and what it produces is documentation rather than a figure the app
+  repeats back to someone else's machine.
 - **A model declares capabilities, not a category.** `builtin_voices`,
-  `cloning`, `chunk_streaming` and `temperature` are independent, so a model
-  can have bundled voices _and_ clone. `EngineRegistry.voices` concatenates
-  both sources rather than choosing.
+  `designed_voices`, `cloning`, `chunk_streaming`, `temperature`,
+  `language_choice` and `style_instruction` are independent, so a model can
+  have bundled voices _and_ clone. `EngineRegistry.voices` concatenates both
+  sources rather than choosing. **One pair is the exception**, and it is an
+  exception the code relies on: `builtin_voices` and `designed_voices` are
+  mutually exclusive, because `routes._voice_kind` settles which kind a
+  rendered voice was from the spec alone rather than looking the voice up.
+  `tests/test_catalog.py` pins it, so a future entry that sets both fails the
+  build instead of silently mislabelling every measurement it makes.
 - **A stream has its own level control.** `encode` peak-normalises a finished
   waveform; a stream has none, so `StreamGain` holds a gain that only ever
   falls, far enough to keep each chunk under the same ceiling. Scaling a chunk
@@ -229,8 +264,10 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   nobody.
 - **Listing voices loads nothing.** Both kinds are files: built-in voices live
   in the bundle's manifest or voices npz, reference voices in the store's
-  index. A backend whose models declare `builtin_voices` registers a reader
-  alongside its builder, so `/api/voices` never constructs an engine — at the
+  index. A backend whose models bring voices of their own registers an
+  `own_voices(directory)` reader alongside its builder — "own" rather than
+  "built-in" because the bundled kind and OmniVoice's designed kind are both
+  read this way, and a name for one of them lies about the other — so `/api/voices` never constructs an engine — at the
   default of one resident model, doing so evicted whatever was speaking, and
   the integration asks for every model's voices at startup.
 
@@ -258,8 +295,32 @@ matters to the code is:
   whole recording. Not measured against the model's own encoder; the
   conclusion rests on the representation size and on our path matching
   upstream's `generate` step for step.
-- **No model takes a language parameter.** The prompt is the text plus a
-  speaker slot; picking the voice is picking the language.
+- **Whether a language can be named is a capability, not a rule.** On most
+  models the prompt is the text plus a speaker slot, so picking the voice is
+  picking the language; those declare `language_choice = False` and the API
+  refuses a `language` rather than accepting one it would ignore. Qwen3-TTS
+  and OmniVoice do take one, so a request may name it and the engine narrows
+  the whole tag against that model's own list (`_narrowing` in
+  `engine/base.py`). Unset, the engine still supplies one: Qwen3-TTS from the
+  speaker's own language (upstream's recommendation) or the reference's, and
+  OmniVoice from the script the text reads as.
+- **A designed voice is a third kind of voice.** OmniVoice has no bundled
+  speakers and no free-text style prompt: it takes a short instruction built
+  from a closed vocabulary (`vendor/omnivoice/voice_design.py`), and refuses
+  anything outside it. The nine on offer are chosen in `engine/omni.py`, so
+  its voice reader opens nothing — and `tests/test_omnivoice.py` checks each
+  one against the model's own vocabulary, because a typo there is a
+  `ValueError` in the middle of a reply rather than a worse voice.
+- **Qwen3-TTS must not be run greedy.** It stops by sampling end-of-speech and
+  at temperature 0 reliably fails to: a ten-character line ran to the model's
+  own 2048-frame limit, 2.7 minutes of invented audio. `engine/qwen3.py` caps
+  each segment from the duration the text needs.
+- **OmniVoice's transformer is never materialised.** The int4 ONNX graph
+  replaces `forward` outright, so the checkpoint's 2.45 GB of weights are
+  neither downloaded nor loaded; the module is built on the meta device.
+  Measured peak resident 1.1 GB against 4.7 GB. The cost is that anything
+  reading a weight outside `forward` fails with "Cannot copy out of meta
+  tensor" — loudly, at first synthesis.
 
 ## Build
 
@@ -269,10 +330,12 @@ uv sync --frozen          # dependencies
 uv run cortex-tts           # run it (STATIC_DIR + DATA_DIR from the environment)
 ```
 
-The `hojo-80m` extra pulls torch and librosa for that model's mel front-end and
-roughly triples the image; the Dockerfile installs it deliberately. It is named
-for the model, not for cloning — MOSS clones without any of it, through
-`audio.decode_reference`.
+Two extras carry the models that are not pure ONNX Runtime, and the Dockerfile
+installs both deliberately. `hojo-80m` pulls torch and librosa for that model's
+mel front-end; `omnivoice` adds torchaudio, transformers and pydub for the half
+of OmniVoice the ONNX graph does not replace. Together they are most of the
+image. Both are named for the model rather than for a capability — MOSS and
+Qwen3-TTS clone without touching either, through `audio.decode_reference`.
 
 The admin UI has **no build step** — `web/` is plain ES modules and CSS, served
 by `StaticFiles`. Edit and reload.
@@ -280,7 +343,7 @@ by `StaticFiles`. Edit and reload.
 ## Testing
 
 ```bash
-uv run pytest -q          # 357 tests, no model weights needed
+uv run pytest -q          # 422 tests, no model weights needed
 ```
 
 `tests/test_text.py` and `tests/test_english.py` pin the text path — the part
@@ -341,8 +404,8 @@ so `km/h` is matched before `km`; nothing else needs to change.
 Four declarations, across two files:
 
 1. A module under `engine/` implementing the `Engine` protocol — and, if the
-   model declares `builtin_voices`, a module-level `builtin_voices(directory)`
-   that reads the list off disk, opening nothing.
+   model declares `builtin_voices` or `designed_voices`, a module-level
+   `own_voices(directory)` that reads the list off disk, opening nothing.
 2. A builder closure in `engine/backends.py`, importing the engine inside the
    call so a heavy backend costs nothing until it is used.
 3. A voice-reader closure there too, when there is one.

@@ -2,9 +2,9 @@
 // transcripts that tell it which sounds map to which text.
 
 import { call, json } from "./api.js";
-import { $, confirmStep, esc, msg } from "./dom.js";
+import { $, confirmStep, esc, languageName, languageOptions, msg } from "./dom.js";
 import { play } from "./player.js";
-import { refreshVoices } from "./models.js";
+import { cloningLanguages, refreshVoices, selectedLanguage } from "./models.js";
 
 // A transcript must be readable in full without an inner scrollbar, so the
 // box is sized to its content rather than to a fixed row count.
@@ -26,7 +26,7 @@ const row = (r) => `
     <div class="ref-head">
       <span class="ref-name">${esc(r.name)}</span>
       <span class="ref-id">${esc(r.id)}${r.gender === "unknown" ? "" : ` · ${esc(r.gender)}`}</span>
-      <span class="ref-meta">${Number(r.seconds).toFixed(1)}s · ${esc(r.language)}</span>
+      <span class="ref-meta">${Number(r.seconds).toFixed(1)}s · ${esc(languageName(r.language))}</span>
     </div>
     <textarea class="tr-edit" data-ref-tr="${esc(r.id)}" rows="1"
       aria-label="Transcript of ${esc(r.name)}" spellcheck="false">${esc(r.raw_transcript)}</textarea>
@@ -37,6 +37,32 @@ const row = (r) => `
       <button class="sm danger" data-ref-del="${esc(r.id)}">${deleteLabel(r.id)}</button>
     </div>
   </div>`;
+
+// Set once the reader picks a language for an upload themselves, after which
+// the field stops following the one above it: they have said something more
+// specific than the filter could.
+let refLangChosen = false;
+
+/**
+ * Offer the languages the cloning models actually read, and follow the
+ * Language control above until the reader overrides it here.
+ *
+ * Two links to that control. The vocabulary is the same one — which languages
+ * can be cloned into changes when the line-up does, so it is read off the
+ * models rather than hard-coded. And the value follows it, because someone
+ * who has just filtered the voices to Japanese is usually about to upload a
+ * Japanese recording.
+ */
+export function syncLanguages() {
+  const codes = cloningLanguages();
+  const picker = $("refLang");
+  // Read the wanted value before replacing the options: assigning innerHTML
+  // drops the old `<option>`s and resets `value` to the first of the new
+  // ones, so asking afterwards returns what we are about to overwrite.
+  const wanted = refLangChosen ? picker.value : selectedLanguage();
+  picker.innerHTML = languageOptions(codes);
+  picker.value = codes.includes(wanted) ? wanted : codes[0] || "";
+}
 
 export async function refresh() {
   const refs = await json("/references");
@@ -118,6 +144,7 @@ async function add() {
 }
 
 export function init() {
+  $("refLang").addEventListener("change", () => { refLangChosen = true; });
   $("refs").addEventListener("input", (e) => {
     const box = e.target.closest("textarea[data-ref-tr]");
     if (!box) return;

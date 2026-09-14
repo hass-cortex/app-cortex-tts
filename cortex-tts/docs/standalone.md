@@ -63,18 +63,26 @@ environment and set the execution provider to `cuda` in the admin UI, which
 refuses to fall back rather than run on the CPU behind the label:
 
 ```bash
-uv pip install --python .venv/bin/python "onnxruntime-gpu==1.22.0" \
+uv pip install --python .venv/bin/python "onnxruntime-gpu==1.26.0" \
   nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 \
   nvidia-curand-cu12 nvidia-cuda-nvrtc-cu12 nvidia-cudnn-cu12
 ```
 
 The wheels ship the CUDA and cuDNN libraries and the app loads them before
-creating a session, so only the driver has to be on the host. The version is
-pinned on purpose: the CUDA 13 builds (1.29, 1.30) crashed on session
-creation on the development laptop, and 1.22 is the last CUDA 12 build. A driver too old for
-the wheel's CUDA is the usual failure; the app reports it as
+creating a session, so only the driver has to be on the host. A driver too old
+for the wheel's CUDA is the usual failure; the app reports it as
 `PROVIDER_UNAVAILABLE` rather than silently landing on the CPU, and `/health`
 shows what each loaded model actually got beside what was asked for.
+
+**The version is a narrow window, and both edges are measured.** Below it,
+Qwen3-TTS does not load at all: its int4 export uses `GatherBlockQuantized`
+with a `bits` attribute, and 1.22 — the version this page recommended until
+Qwen3-TTS arrived, because it is the last CUDA 12 build — rejects the graph
+outright with `INVALID_GRAPH ... Unrecognized attribute: bits`. Above it, the
+CUDA 13 builds (1.29, 1.30) crashed on session creation on the development
+laptop and want a driver newer than the 575 this project's GTX 1650 host runs.
+1.26.0 is CUDA 12, loads the int4 graphs and is what the figures on this page
+were measured with.
 
 Measure before you trust it. Beside a 4-vCPU i7-9750H a GTX 1650 took the
 40M from 0.54 to 0.31 and MOSS from 1.04 to 0.37; beside a 16-core Ryzen an

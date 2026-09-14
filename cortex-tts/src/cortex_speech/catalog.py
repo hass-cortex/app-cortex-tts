@@ -53,6 +53,11 @@ class ModelSpec:
             up in a table each engine module registers itself in, so a new
             model is a new module and a new key, never a new branch.
         builtin_voices: Whether the bundle ships selectable voices.
+        designed_voices: Whether the model's own voices are built from an
+            attribute vocabulary instead of shipped in the bundle. Separate
+            from `builtin_voices` because the two cost different amounts to
+            render and a caller has to be able to tell them apart — see
+            `Voice.source`. No model has both.
         cloning: Whether a reference recording can condition it. Independent
             of ``builtin_voices``: a model may have both, one, or neither.
         chunk_streaming: Whether the engine can emit audio before the whole
@@ -61,16 +66,19 @@ class ModelSpec:
             fuses its sampling into a dedicated ONNX graph and cannot read one,
             and silently ignoring the parameter is indistinguishable from
             honouring it — so a caller is told instead.
+        language_choice: Whether the caller may say which language the text is
+            read as. False where the voice decides it and nothing else can —
+            the Hojo models and MOSS take no language at all, so a request
+            naming one would be quietly ignored.
+        style_instruction: Whether it takes a free-text instruction beside the
+            voice ("speak slowly, in a warm tone"). Distinct from
+            `language_choice` because
+            a model can take one and not the other, and distinct from
+            OmniVoice's designed voices, which are a closed vocabulary the
+            model validates rather than free text.
         size_mb: Approximate on-disk size once downloaded.
         languages: Base language codes the model was trained on.
         sample_rate: Output sample rate in Hz.
-        rtf_hint: Real-time factor measured on the project's reference host
-            — a 4-core Home Assistant OS VM (KVM), two threads, CPU — with the
-            one Chinese text set in `scripts/bench_rtf.py`, so the figures are
-            comparable with each other. The median over four sentence lengths.
-            Shown in the UI so the cost difference between models is visible
-            before downloading; a user's own host is read from the
-            integration's sensor, never from this.
         rss_hint_mb: Approximate resident memory once loaded.
     """
 
@@ -82,13 +90,14 @@ class ModelSpec:
     size_mb: int
     languages: tuple[str, ...]
     builtin_voices: bool = False
+    designed_voices: bool = False
     cloning: bool = False
     chunk_streaming: bool = False
     temperature: bool = False
+    language_choice: bool = False
+    style_instruction: bool = False
     sample_rate: int = 24000
-    rtf_hint: float = 0.0
     rss_hint_mb: int = 0
-    recommended: bool = False
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -97,6 +106,32 @@ class ModelSpec:
 
 
 _COMMON_FILES = ("config.json", "tokenizer.json", "tokenizer_config.json")
+
+# Qwen3-TTS is assembled from two repositories and one export directory.
+# `cpu_int4` names a precision rather than a device: the export ships the same
+# graphs again under `cuda_int4`, and which provider runs them is this app's
+# decision, not the export's.
+_QWEN3_EXPORT = "cpu_int4"
+_QWEN3_ONNX = tuple(
+    f"{_QWEN3_EXPORT}/{name}.onnx"
+    for name in (
+        "text_embed",
+        "codec_embed",
+        "residual_embed",
+        "talker_cache",
+        "code_predictor",
+        "tok_decoder",
+    )
+)
+# Only the cloning checkpoint exports these: the encoder that turns a
+# recording into codec frames, and the one that turns it into an x-vector.
+_QWEN3_CLONE_ONNX = tuple(
+    f"{_QWEN3_EXPORT}/{name}.onnx" for name in ("tok_encoder", "speaker_encoder")
+)
+# The checkpoint ships no assembled `tokenizer.json`; `engine.qwen_tokenizer`
+# builds one from these. `config.json` carries the talker's token ids and the
+# speaker table beside them.
+_QWEN3_TEXT = ("config.json", "vocab.json", "merges.txt", "tokenizer_config.json")
 
 CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec(
@@ -120,9 +155,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         languages=("zh", "en"),
         builtin_voices=True,
         temperature=True,
-        rtf_hint=0.67,
         rss_hint_mb=780,
-        recommended=True,
     ),
     ModelSpec(
         id="hojo-80m-clone",
@@ -147,7 +180,6 @@ CATALOG: tuple[ModelSpec, ...] = (
         languages=("zh", "en"),
         cloning=True,
         temperature=True,
-        rtf_hint=1.42,
         rss_hint_mb=2050,
     ),
     ModelSpec(
@@ -196,8 +228,101 @@ CATALOG: tuple[ModelSpec, ...] = (
         cloning=True,
         chunk_streaming=True,
         sample_rate=48000,
-        rtf_hint=1.06,
         rss_hint_mb=1990,
+    ),
+    ModelSpec(
+        id="qwen3-tts-0.6b",
+        name="Qwen3-TTS 0.6B (built-in voices)",
+        description="Nine built-in speakers across five languages. The widest "
+        "language coverage here, and the slowest model by a wide margin.",
+        # Two repos: Qwen publishes the checkpoint, onnx-community the export.
+        # Only the int4 graphs are fetched — the export's `cpu_*` and `cuda_*`
+        # directories hold byte-identical files and differ only in a manifest
+        # naming an execution provider this app chooses for itself.
+        sources=(
+            BundleSource(
+                repo_id="onnx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+                files=_QWEN3_ONNX,
+            ),
+            BundleSource(
+                repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+                files=_QWEN3_TEXT,
+            ),
+        ),
+        backend="qwen3-tts",
+        size_mb=1021,
+        languages=("zh", "en", "ja", "ko", "de", "fr", "it", "pt", "ru", "es"),
+        builtin_voices=True,
+        chunk_streaming=True,
+        temperature=True,
+        language_choice=True,
+        style_instruction=True,
+        rss_hint_mb=1580,
+    ),
+    ModelSpec(
+        id="qwen3-tts-0.6b-clone",
+        name="Qwen3-TTS 0.6B (voice cloning)",
+        description="The same model conditioned on a reference recording "
+        "instead of a bundled speaker. No built-in voices.",
+        sources=(
+            BundleSource(
+                repo_id="onnx-community/Qwen3-TTS-12Hz-0.6B-Base",
+                files=(*_QWEN3_ONNX, *_QWEN3_CLONE_ONNX),
+            ),
+            BundleSource(
+                repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+                files=_QWEN3_TEXT,
+            ),
+        ),
+        backend="qwen3-tts",
+        size_mb=1271,
+        languages=("zh", "en", "ja", "ko", "de", "fr", "it", "pt", "ru", "es"),
+        cloning=True,
+        chunk_streaming=True,
+        temperature=True,
+        language_choice=True,
+        rss_hint_mb=2120,
+    ),
+    ModelSpec(
+        id="omnivoice",
+        name="OmniVoice 0.8B",
+        description="Designs a voice from attributes — sex, age, pitch, whisper "
+        "— or clones one from a recording. Reads 800+ languages. The heaviest "
+        "model here: it needs torch, and it is well over real time on a CPU.",
+        # Two repos, and one file deliberately absent from both: the
+        # checkpoint's 2.45 GB `model.safetensors`. The int4 export below
+        # replaces the transformer outright, so those weights would be
+        # downloaded, held in memory and never read — see
+        # `vendor/omnivoice_ort.py`.
+        sources=(
+            BundleSource(
+                repo_id="k2-fsa/OmniVoice",
+                files=(
+                    "config.json",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja",
+                    "audio_tokenizer/config.json",
+                    "audio_tokenizer/model.safetensors",
+                    "audio_tokenizer/preprocessor_config.json",
+                ),
+            ),
+            BundleSource(
+                repo_id="rhasspy/omnivoice-onnx",
+                # The graph and its external weights, which onnxruntime expects
+                # to find beside it under the name the graph records.
+                files=("omnivoice.int4.onnx", "omnivoice.int4.onnx.data"),
+            ),
+        ),
+        backend="omnivoice",
+        size_mb=1384,
+        # The model reads far more than these; this is what the project has
+        # exercised, and `docs/models.md` says so.
+        languages=("zh", "en", "ja", "ko", "de", "fr", "it", "pt", "ru", "es"),
+        designed_voices=True,
+        cloning=True,
+        language_choice=True,
+        rss_hint_mb=1140,
     ),
 )
 

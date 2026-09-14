@@ -35,6 +35,7 @@ from ..providers import (
 from ..references import Reference, ReferenceStore
 from ..vendor.moss_runtime import OnnxTtsRuntime
 from .base import (
+    Delivery,
     NoAudioError,
     Synthesis,
     UnknownVoiceError,
@@ -97,7 +98,7 @@ def _describe(entry: dict[str, Any]) -> Voice:
     )
 
 
-def builtin_voices(directory: Path) -> list[Voice]:
+def own_voices(directory: Path) -> list[Voice]:
     """Read the bundle's voice table from its manifest, loading no sessions.
 
     Named separately from the engine because listing voices must not load a
@@ -219,10 +220,10 @@ class MossEngine:
         self._runtime.rng = np.random.default_rng(_SAMPLING_SEED)
 
     def synthesize(
-        self, segments: list[str], voice: str, *, temperature: float | None = None
+        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
     ) -> Synthesis:
         """Render segments with a bundled voice or a cloned one."""
-        del temperature  # declared unsupported; see __init__
+        del delivery  # nothing in it applies; see __init__ and the catalog
         if not segments:
             raise NoAudioError("no segments to synthesize")
 
@@ -249,7 +250,7 @@ class MossEngine:
         )
 
     def synthesize_stream(
-        self, segments: list[str], voice: str
+        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
     ) -> Generator[np.ndarray, None, None]:
         """Yield audio as the codec produces it, rather than per segment.
 
@@ -261,6 +262,7 @@ class MossEngine:
         segment first and produce a generator that streams nothing — which is
         the failure this shape exists to avoid.
         """
+        del delivery  # nothing in it applies; see __init__ and the catalog
         if not segments:
             raise NoAudioError("no segments to synthesize")
 

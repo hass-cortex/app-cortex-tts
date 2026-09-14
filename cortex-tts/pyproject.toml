@@ -40,6 +40,25 @@ hojo-80m = [
     "torch>=2.4",
     "librosa>=0.10",
 ]
+# OmniVoice's pipeline is PyTorch, and only its transformer is replaced by the
+# ONNX graph — the audio tokenizer, the prompt handling and the iterative
+# decoder all stay in torch. `transformers` is not optional for it either: the
+# Higgs Audio V2 tokenizer is a model class that ships there.
+#
+# The `omnivoice` package on PyPI is not used. It requires gradio, accelerate,
+# webdataset and tensorboardx for its demo, training loop and data pipeline,
+# none of which inference touches; the six modules that do are vendored under
+# `cortex_speech/vendor/omnivoice/`.
+omnivoice = [
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "transformers>=5.17",
+    # Silence trimming on reference recordings.
+    "pydub>=0.25",
+    # pydub imports `audioop`, which PEP 594 removed from the standard library
+    # in 3.13. The image is older than that; a source checkout need not be.
+    "audioop-lts>=0.2; python_version >= '3.13'",
+]
 
 [project.scripts]
 cortex-tts = "cortex_tts.__main__:main"
@@ -73,6 +92,7 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
 
 [tool.ruff]
 line-length = 88
@@ -84,14 +104,32 @@ ignore = ["E501", "B008", "SIM108"]
 
 [tool.ruff.lint.per-file-ignores]
 # Vendored upstream code is kept diffable against its source, not restyled.
-"src/cortex_speech/vendor/**/*.py" = ["ALL"]
+# Listed file by file rather than as `vendor/**`: two files in that directory
+# are ours — `qwen3_tts_ort.py` is a derivation that upstream would not
+# recognise and `omnivoice_ort.py` is original glue — and a blanket ignore
+# put 726 lines of our own code outside both linters without anyone deciding
+# to.
+"src/cortex_speech/vendor/hojo40.py" = ["ALL"]
+"src/cortex_speech/vendor/hojo80.py" = ["ALL"]
+"src/cortex_speech/vendor/moss_ort.py" = ["ALL"]
+"src/cortex_speech/vendor/moss_runtime.py" = ["ALL"]
+"src/cortex_speech/vendor/omnivoice/**/*.py" = ["ALL"]
 
 [tool.pyright]
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
 include = ["src"]
-exclude = ["tests", "src/cortex_speech/vendor", "**/__pycache__"]
+exclude = [
+    "tests",
+    # Upstream code only; the two derived files in that directory are checked.
+    "src/cortex_speech/vendor/hojo40.py",
+    "src/cortex_speech/vendor/hojo80.py",
+    "src/cortex_speech/vendor/moss_ort.py",
+    "src/cortex_speech/vendor/moss_runtime.py",
+    "src/cortex_speech/vendor/omnivoice",
+    "**/__pycache__",
+]
 typeCheckingMode = "standard"
 useLibraryCodeForTypes = true
 

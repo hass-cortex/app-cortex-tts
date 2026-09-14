@@ -80,9 +80,10 @@ _Avoid_: "built-in model" (nothing is built in)
 
 **Engine**:
 A loaded model behind the `Engine` protocol (`PresetEngine` for the 40M,
-`CloneEngine` for the 80M, `MossEngine` for MOSS-TTS-Nano, which also satisfies
-`StreamingEngine`). One engine serves one synthesis at a time: the
-ONNX sessions drive a stateful per-token loop.
+`CloneEngine` for the 80M, `MossEngine` for MOSS-TTS-Nano and `Qwen3TtsEngine`
+for both Qwen3-TTS entries, which also satisfy `StreamingEngine`, and
+`OmniVoiceEngine` for OmniVoice). One engine serves one synthesis at a time:
+the ONNX sessions drive a stateful per-token loop.
 _Avoid_: "model" for the loaded thing — a _model_ is files on disk, an _engine_
 is the runtime holding ~780 MB or ~2 GB of it
 
@@ -95,10 +96,24 @@ _Avoid_: "cached" (eviction is about memory, not staleness)
 **Voice**:
 A selectable speaker, always belonging to exactly one model. On the 40M a
 built-in slot (`hojo_zh_f_01`); on the 80M a **Reference recording**; on MOSS
-either (`Yuewen`, or a reference). The voice
-is also the only place a language is declared — the model takes no language
-parameter, so picking the voice is picking the language.
+and Qwen3-TTS either (`Yuewen`, `vivian`, or a reference); on OmniVoice a
+**Designed voice** or a reference. The voice is also the only place a language
+is declared — the model takes no language parameter, so picking the voice is
+picking the language.
 _Avoid_: "speaker" (that is the embedding slot inside the model)
+
+**Designed voice**:
+OmniVoice's third kind. Not a slot in the bundle and not a recording: a short
+instruction built from the model's **closed** attribute vocabulary — a sex, an
+age band, a pitch band, whisper, an accent or a dialect. The nine on offer are
+chosen in `engine/omni.py` rather than read off disk, and the model refuses an
+attribute outside its vocabulary instead of approximating it. They are
+reported as `source: designed`, a third value beside `builtin` and
+`reference`, because the three cost different amounts to render — a clone
+measured 7.17 against 3.46 for a designed voice on the same model and host —
+and a caller comparing them has to know which it is looking at.
+_Avoid_: "prompt", "style" (the model validates them as a fixed list, not free
+text), "preset" (that is the 40M's word)
 
 **Reference recording**:
 An audio file _and_ the words spoken in it — both, always. The recording

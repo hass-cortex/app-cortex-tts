@@ -44,14 +44,31 @@
       <label for="text">Text</label>
       <textarea id="text">好的，客廳的燈已經打開了。目前室內溫度是 26.5°C，濕度 68%。</textarea>
     </div>
+    <!-- Model, then language, then voice: the language narrows the voice list,
+         so it has to be answered before the list it shapes. Style sits beside
+         the voice because it is the other half of how one sounds, and only
+         on the model that takes one. Language stays whatever the model does
+         with it — it filters the voices below on all of them. -->
     <div class="row">
       <div class="field">
         <label for="model">Model</label>
         <select id="model"></select>
       </div>
       <div class="field">
+        <label for="language">Language</label>
+        <select id="language"></select>
+        <p class="sub" id="languageHint"></p>
+      </div>
+    </div>
+    <div class="row" id="voiceRow">
+      <div class="field">
         <label for="voice" id="voiceLabel">Voice</label>
         <select id="voice"></select>
+      </div>
+      <div class="field" id="instructField" hidden>
+        <label for="instruct">Style instruction</label>
+        <input id="instruct" type="text" placeholder="speak slowly, in a warm tone">
+        <p class="sub" id="instructHint"></p>
       </div>
     </div>
     <div class="actions">
@@ -115,8 +132,9 @@
       <input id="setThreads" type="number" min="0" max="16" step="1">
       <p class="sub">0 lets the runtime decide. Resident models adopt it on
       their next load; BLAS and OpenMP only on an app restart. More is not
-      faster: measured on four cores, 1.17x real time at one thread, 1.05x at
-      two, 1.80x at four.</p>
+      always faster, and the models disagree with each other — some are slower
+      at four threads than at two. Change it, then read the card's measured
+      figure for the model you use.</p>
     </div>
     <div class="field">
       <label for="setProvider">Execution provider <span class="tag">reload</span></label>
@@ -129,16 +147,19 @@
     <div class="field">
       <label for="setLoaded">Models kept in memory</label>
       <input id="setLoaded" type="number" min="1" step="1">
-      <p class="sub">The 40M needs about 780 MB, the 80M and MOSS about 2 GB
-      each. At 1 they swap on demand; lowering it evicts the least recently
-      used at once.</p>
+      <p class="sub">The 40M needs about 780 MB, OmniVoice about 1.1 GB,
+      Qwen3-TTS about 1.5 GB, the 80M and MOSS about 2 GB each. At 1 they swap
+      on demand; lowering it evicts the least recently used at once.</p>
     </div>
     <div class="field">
       <label for="setTemp">Sampling temperature</label>
       <input id="setTemp" type="number" min="0" max="1" step="0.05">
       <p class="sub">The model stops only when it samples its end-of-speech
       token, so a high value sometimes appends an invented syllable. 0 is
-      reproducible and never over-runs, at the cost of flatter delivery.</p>
+      reproducible and never over-runs on the Hojo models — but not on
+      Qwen3-TTS, where greedy decoding often fails to stop at all and the
+      reply is cut off at its ceiling instead. MOSS and OmniVoice ignore this
+      setting and say so.</p>
     </div>
   </div>
   <div class="actions">
@@ -154,17 +175,23 @@
     <span class="pill idle" id="clonesModels">cloning models</span>
     <span class="note" id="clonesNote"></span>
   </div>
-  <p class="hint">A reference recording is a voice on every model that can
-  clone, under the same id. Upload 6–20 seconds of clean speech that starts
-  talking straight away — the 80M reads only the first six seconds, MOSS
-  uses the whole recording, so keep it clean rather than long — plus exactly
-  what is said in it, because the transcript is what tells the model which
-  sounds map to which text.</p>
+  <p class="hint">One recording becomes a voice on every model that clones,
+  under the same id.</p>
+  <ul class="guide">
+    <li><b>6–20 seconds</b> of clean speech that starts talking straight away.</li>
+    <li><b>End on a finished sentence.</b> A clip cut by a clock is refused: it
+    teaches the model that sentences end mid-word.</li>
+    <li><b>Clean beats long.</b> The 80M reads only the first six seconds;
+    MOSS, OmniVoice and Qwen3-TTS read all of it.</li>
+    <li><b>Type exactly what is said.</b> The transcript is what tells the
+    model which sounds map to which text.</li>
+  </ul>
   <div id="refs" class="refs"></div>
   <div class="addform">
     <div class="grow"><label for="refName">Name</label><input id="refName" placeholder="客廳女聲"></div>
+    <!-- Filled from the cloning models' own languages; see clones.js. -->
     <div class="fixed"><label for="refLang">Language</label>
-      <select id="refLang"><option value="zh">Chinese</option><option value="en">English</option><option value="ja">Japanese</option></select></div>
+      <select id="refLang"></select></div>
     <div class="fixed"><label for="refGender">Gender label</label>
       <select id="refGender"><option value="female">female</option><option value="male">male</option><option value="unknown">unknown</option></select></div>
   </div>

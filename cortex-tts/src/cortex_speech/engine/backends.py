@@ -66,7 +66,7 @@ def register(
         backend: The key catalog entries use.
         builder: Called with a `BuildContext` to construct the engine.
         voices: Reads the bundle's built-in voice list straight from disk.
-            Required of any backend a `builtin_voices` model names, and
+            Required of any backend whose models bring their own voices, and
             omitted by one whose voices are all reference recordings.
 
     Raises:
@@ -93,8 +93,12 @@ def build(backend: str, context: BuildContext) -> Engine:
     return builder(context)
 
 
-def builtin_voices(backend: str, directory: Path) -> list[Voice]:
-    """Return a bundle's built-in voices without constructing its engine.
+def own_voices(backend: str, directory: Path) -> list[Voice]:
+    """Return the voices a model brings itself, without constructing it.
+
+    "Own" rather than "built-in": the bundled kind and OmniVoice's designed
+    kind are both the model's own, read the same way and listed side by side,
+    and a reader named for one of them lies about the other.
 
     Raises:
         UnknownBackendError: Nothing registered that key, or what registered
@@ -103,7 +107,7 @@ def builtin_voices(backend: str, directory: Path) -> list[Voice]:
     reader = _VOICE_READERS.get(backend)
     if reader is None:
         raise UnknownBackendError(
-            f"backend {backend!r} registered no way to list built-in voices"
+            f"backend {backend!r} registered no way to list its own voices"
         )
     return reader(directory)
 
@@ -159,21 +163,58 @@ def _register_builtin_backends() -> None:
             execution_provider=context.execution_provider,
         )
 
-    def hojo_preset_voices(directory: Path) -> list[Voice]:
-        from .preset import builtin_voices
+    def qwen3_tts(context: BuildContext) -> Engine:
+        from .qwen3 import Qwen3TtsEngine
 
-        return builtin_voices(directory)
+        return Qwen3TtsEngine(
+            context.directory,
+            context.references,
+            num_threads=context.num_threads,
+            temperature=context.temperature,
+            execution_provider=context.execution_provider,
+        )
+
+    def omnivoice(context: BuildContext) -> Engine:
+        from .omni import OmniVoiceEngine
+
+        return OmniVoiceEngine(
+            context.directory,
+            context.references,
+            num_threads=context.num_threads,
+            temperature=context.temperature,
+            execution_provider=context.execution_provider,
+        )
+
+    def hojo_preset_voices(directory: Path) -> list[Voice]:
+        from .preset import own_voices
+
+        return own_voices(directory)
 
     def moss_voices(directory: Path) -> list[Voice]:
-        from .moss import builtin_voices
+        from .moss import own_voices
 
-        return builtin_voices(directory)
+        return own_voices(directory)
+
+    def qwen3_tts_voices(directory: Path) -> list[Voice]:
+        from .qwen3 import own_voices
+
+        return own_voices(directory)
+
+    def omnivoice_voices(directory: Path) -> list[Voice]:
+        from .omni import own_voices
+
+        return own_voices(directory)
 
     register("hojo-preset", hojo_preset, voices=hojo_preset_voices)
     # No reader: every 80M voice is a reference recording, which the registry
     # lists from the store without asking any backend.
     register("hojo-clone", hojo_clone)
     register("moss", moss, voices=moss_voices)
+    # One backend, two catalog entries: the cloning checkpoint lists no
+    # built-in voices, but the reader is harmless there and the registry only
+    # calls it for a model that declares them.
+    register("qwen3-tts", qwen3_tts, voices=qwen3_tts_voices)
+    register("omnivoice", omnivoice, voices=omnivoice_voices)
 
 
 _register_builtin_backends()

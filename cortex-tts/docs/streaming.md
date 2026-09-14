@@ -13,25 +13,30 @@ performance model behind it.
   arrives.
 - **Sentences in groups**: the same, but sentences written while a request is
   in flight are sent together, so there are fewer joins. On a model that emits
-  audio while a request is still rendering (only MOSS-TTS-Nano) that removes
-  the pauses outright; on one that returns each request whole it trades several
-  short waits for fewer longer ones.
+  audio while a request is still rendering (MOSS-TTS-Nano and Qwen3-TTS) that
+  removes the pauses outright; on one that returns each request whole it trades
+  several short waits for fewer longer ones.
 
 Both streamed modes only work if the model renders faster than the audio
 plays. One that does not falls behind a little more with every sentence, and a
-long reply stutters to a halt near the end. Within a request, MOSS-TTS-Nano
-also emits audio before a sentence is finished (chunk streaming); the other
-models send each request's audio whole. See [Models](models.md).
+long reply stutters to a halt near the end. Within a request, MOSS-TTS-Nano and
+Qwen3-TTS also emit audio before a sentence is finished (chunk streaming); the
+other models send each request's audio whole. Chunk streaming is not a cure for
+a slow model, and Qwen3-TTS is the demonstration: it hands over two seconds of
+audio at a time, but on a host where it renders at five times real time the
+first of those blocks is ten seconds away and every one after it arrives later
+than the last. See [Models](models.md).
 
 ## Buffered until you have measured
 
 **Every model is buffered until you say otherwise.** Streaming is not switched
-on by the catalog figure, because that figure is one host's: the reference
-4-core Home Assistant VM, where only the 40M outruns playback (0.67) and MOSS
-(1.06) and the 80M (1.42) do not. A faster CPU runs every model two to three
-times faster, a GPU helps beside a weak CPU and hurts beside a strong one —
-not a constant factor, so no figure from elsewhere predicts yours. A model streamed on a host where it
-cannot keep up is the exact failure the setting exists to prevent.
+on by the catalog figure, because that figure is one host's: a 4-vCPU VM on an
+i7-9750H, where only the 40M outruns playback (0.55). MOSS (1.07), the 80M
+(1.51), OmniVoice (3.83) and Qwen3-TTS (6.72) do not. A faster CPU runs every
+model two to three times faster, a GPU helps beside a weak CPU and hurts
+beside a strong one — not a constant factor, so no figure from elsewhere
+predicts yours. A model streamed on a host where it cannot keep up is the
+exact failure the setting exists to prevent.
 
 Use a model for a while, read `sensor.<model>_real_time_factor`, and turn
 streaming on for that model if it sits comfortably under **0.5** — half of real
@@ -64,7 +69,8 @@ never had a piece that could be late, and reads unknown.
   buffered, where it started. Nothing plays until it is all rendered, so the
   wait is longer, there are no gaps, and repeated text comes back from the
   cache.
-- **Raise the head start** in the same place — but only on MOSS-TTS-Nano. It
+- **Raise the head start** in the same place — but only on a chunk-streaming
+  model (MOSS-TTS-Nano, Qwen3-TTS). It
   banks opening seconds before playback begins, spending wait to buy margin:
   at a rendering rate of R, a reply of L seconds needs (R − 1) × L banked, so
   two seconds covers a 44-second reply at 1.045x. It is only charged to

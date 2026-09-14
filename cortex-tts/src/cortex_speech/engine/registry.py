@@ -13,6 +13,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
@@ -21,8 +22,9 @@ import numpy as np
 from ..catalog import BY_ID, ModelSpec, inspect, model_dir
 from ..providers import ExecutionProvider
 from ..references import ReferenceStore
-from .backends import BuildContext, build, builtin_voices
+from .backends import BuildContext, build, own_voices
 from .base import (
+    Delivery,
     Engine,
     EngineError,
     StreamingEngine,
@@ -183,7 +185,7 @@ class EngineRegistry:
         """
         spec = self.spec(model_id)
         voices: list[Voice] = []
-        if spec.builtin_voices:
+        if spec.builtin_voices or spec.designed_voices:
             state = inspect(self._data_dir, spec)
             if not state.downloaded:
                 raise ModelNotReadyError(
@@ -192,18 +194,30 @@ class EngineRegistry:
                 )
             voices.extend(
                 await asyncio.to_thread(
-                    builtin_voices, spec.backend, model_dir(self._data_dir, spec.id)
+                    own_voices, spec.backend, model_dir(self._data_dir, spec.id)
                 )
             )
         if spec.cloning:
             voices.extend(reference_voices(self._references))
         return voices
 
+    def _with_default_temperature(self, delivery: Delivery | None) -> Delivery:
+        """Fill in the registry's own default temperature.
+
+        Passed with every call rather than baked into the engine, so a
+        resident engine adopts a changed default without being rebuilt.
+        """
+        delivery = delivery or Delivery()
+        if delivery.temperature is None:
+            return replace(delivery, temperature=self._temperature)
+        return delivery
+
     async def synthesize_stream(
         self,
         model_id: str,
         segments: list[str],
         voice: str,
+        delivery: Delivery | None = None,
     ) -> AsyncIterator[np.ndarray]:
         """Yield mono float32 chunks, as early as the model allows.
 
@@ -216,18 +230,14 @@ class EngineRegistry:
         these ONNX sessions drive a stateful per-token loop and interleaving
         two of them corrupts state rather than merely slowing things down.
         """
+        wanted = self._with_default_temperature(delivery)
         slot = await self.acquire(model_id)
         async with slot.lock:
             slot.last_used = time.monotonic()
             engine = slot.engine
             if not isinstance(engine, StreamingEngine):
                 synthesis = await asyncio.to_thread(
-                    partial(
-                        engine.synthesize,
-                        segments,
-                        voice,
-                        temperature=self._temperature,
-                    )
+                    partial(engine.synthesize, segments, voice, delivery=wanted)
                 )
                 yield synthesis.audio
                 return
@@ -236,7 +246,7 @@ class EngineRegistry:
             # synchronous and blocking it would stall the event loop for the
             # whole render. `None` is the end marker because the contract is
             # arrays, so it cannot collide with a real chunk.
-            chunks = engine.synthesize_stream(segments, voice)
+            chunks = engine.synthesize_stream(segments, voice, delivery=wanted)
 
             def pull() -> np.ndarray | None:
                 return next(chunks, None)
@@ -256,22 +266,15 @@ class EngineRegistry:
         segments: list[str],
         voice: str,
         *,
-        temperature: float | None = None,
+        delivery: Delivery | None = None,
     ) -> Synthesis:
-        """Render text with a model, loading and serialising as needed.
-
-        The registry's default temperature is passed explicitly, so a resident
-        engine adopts a changed default without being rebuilt.
-        """
+        """Render text with a model, loading and serialising as needed."""
+        wanted = self._with_default_temperature(delivery)
         slot = await self.acquire(model_id)
-        if temperature is None:
-            temperature = self._temperature
         async with slot.lock:
             slot.last_used = time.monotonic()
             return await asyncio.to_thread(
-                partial(
-                    slot.engine.synthesize, segments, voice, temperature=temperature
-                )
+                partial(slot.engine.synthesize, segments, voice, delivery=wanted)
             )
 
     def forget_reference(self, reference_id: str) -> None:

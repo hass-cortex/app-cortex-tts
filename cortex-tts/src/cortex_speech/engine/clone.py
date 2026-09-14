@@ -25,6 +25,7 @@ from ..vendor.hojo80 import (
     _wav_from_mag_phase,
 )
 from .base import (
+    Delivery,
     NoAudioError,
     Synthesis,
     UnknownVoiceError,
@@ -145,7 +146,7 @@ class CloneEngine:
         return render_with_retries(text, self.sample_rate, generate)
 
     def synthesize(
-        self, segments: list[str], voice: str, *, temperature: float | None = None
+        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
     ) -> Synthesis:
         """Render segments in a cloned voice."""
         ref = self._references.get(voice)
@@ -154,17 +155,12 @@ class CloneEngine:
 
         prompt = self._prompts.get(ref, self._encode)
         started = time.perf_counter()
-        waves: list[np.ndarray] = []
-
-        for text in segments:
-            waves.append(
-                self._render(
-                    text,
-                    ref.transcript,
-                    prompt,
-                    self._temperature if temperature is None else temperature,
-                )
-            )
+        temperature = (
+            self._temperature if delivery.temperature is None else delivery.temperature
+        )
+        waves = [
+            self._render(text, ref.transcript, prompt, temperature) for text in segments
+        ]
 
         if not waves:
             raise NoAudioError("no segments to synthesize")

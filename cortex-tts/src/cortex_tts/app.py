@@ -23,6 +23,8 @@ from cortex_speech import (
 from . import __version__, config, discovery, events, preferences
 from .api.deps import AppState
 from .api.routes import api, compat, public
+from .stats import FILE_NAME as STATS_FILE
+from .stats import StatsStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,6 +101,7 @@ async def lifespan(app: FastAPI):
         speech=speech,
         version=__version__,
         preferences_path=settings.data_dir,
+        stats=StatsStore(settings.data_dir / STATS_FILE),
         preferences=prefs,
     )
     app.state.cortex = state

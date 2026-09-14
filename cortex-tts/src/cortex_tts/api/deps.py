@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,9 @@ from cortex_speech import (
 
 from ..config import Settings
 from ..preferences import Preferences
+from ..stats import StatsStore
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,6 +40,12 @@ class AppState:
 
     The app owns `data_dir` and translates it in `app.py`; carrying the
     resolved path here keeps the routes from deriving a layout twice."""
+    stats: StatsStore
+    """What this host has measured, per model.
+
+    Held beside the settings rather than inside the speech library: the
+    library renders audio and the app is what decides a measurement is worth
+    remembering."""
     preferences: Preferences
     """How the app behaves, as the user last set it.
 
@@ -110,6 +120,17 @@ async def require_api_key(
     if not supplied or not hmac.compare_digest(
         supplied.encode("utf-8"), expected.encode("utf-8")
     ):
+        # Say so. A refused request is invisible otherwise — there is no
+        # access log — and the admin UI reacts to a 401 by asking for a key,
+        # so "why is it asking?" has to be answerable from here.
+        _LOGGER.warning(
+            "refused %s %s: %s (peer=%s, ingress-path=%s)",
+            request.method,
+            request.url.path,
+            "no key supplied" if not supplied else "key did not match",
+            request.client.host if request.client else "unknown",
+            request.headers.get("X-Ingress-Path") is not None,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_REQUIRED", "message": "authentication required"},

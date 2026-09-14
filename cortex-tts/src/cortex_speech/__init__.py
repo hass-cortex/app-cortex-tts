@@ -35,11 +35,13 @@ from .catalog import (
 )
 from .download import DownloadManager, DownloadProgress, remove_bundle
 from .engine.base import (
+    Delivery,
     EngineError,
     NoAudioError,
     StreamingEngine,
     Synthesis,
     UnknownVoiceError,
+    UnsupportedLanguageError,
     Voice,
 )
 from .engine.registry import EngineRegistry, ModelNotReadyError, UnknownModelError
@@ -72,6 +74,8 @@ __all__ = [
     # synthesis
     "Voice",
     "Synthesis",
+    "Delivery",
+    "UnsupportedLanguageError",
     "EngineRegistry",
     "StreamingEngine",
     # references

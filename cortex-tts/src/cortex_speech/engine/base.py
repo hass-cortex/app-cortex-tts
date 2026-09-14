@@ -19,10 +19,18 @@ class Voice:
     Attributes:
         id: Identifier passed back in a synthesis request.
         name: Human-readable label.
-        language: Base language code, or ``None`` when the voice is
-            language-agnostic (a cloned reference recording).
+        language: Base language code, or ``None`` when the voice reads
+            whatever it is given — OmniVoice's designed voices. A cloned
+            voice carries the language of its recording, which says what was
+            said in it rather than what the voice may be asked to say.
         gender: ``female``, ``male`` or ``unknown``.
-        source: ``builtin`` for bundled voices, ``reference`` for cloned ones.
+        source: ``builtin`` for voices shipped in the bundle, ``designed``
+            for ones the model builds from an attribute vocabulary, and
+            ``reference`` for a cloned recording. Three rather than two
+            because they cost different amounts to render — measured on
+            OmniVoice, a designed voice against a clone of a ten-second
+            recording: RTF 3.46 against 7.17 on the same host — so a caller
+            comparing them has to know which it is looking at.
     """
 
     id: str
@@ -30,6 +38,50 @@ class Voice:
     language: str | None
     gender: str
     source: str
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """How to say it — everything in a request that is neither words nor voice.
+
+    One object rather than three keyword arguments, for the reason
+    `BuildContext` is one: the third of them is where a widening signature
+    starts costing every engine that does not care. An engine reads what it
+    supports and ignores the rest; the API refuses what a model's catalog
+    entry does not declare, so an ignored field is a caller's mistake rather
+    than a silent one.
+
+    Attributes:
+        temperature: Sampling temperature, or ``None`` for the engine's own.
+        language: Which language to read the text as, as a base code
+            (``zh``, ``ja``). ``None`` lets the engine decide — from the
+            voice, or from the script the text reads as. Only models
+            declaring `language_choice` take one.
+        instruct: A free-text instruction beside the voice ("speak slowly,
+            in a warm tone"). Only models declaring `style_instruction` take
+            one.
+    """
+
+    temperature: float | None = None
+    language: str | None = None
+    instruct: str | None = None
+
+
+def narrowing(code: str) -> list[str]:
+    """A language tag and the shorter forms to fall back to, longest first.
+
+    `zh-Hant-TW` before `zh-Hant` before `zh`: the most specific thing the
+    model might know, then the next. The caller sends the tag whole, because
+    how much of it means anything is the model's to decide — one of these
+    names two Chinese dialects, another names Cantonese and Min Nan apart
+    from Chinese — so the narrowing happens here, against each model's own
+    list, and not in whoever wrote the request.
+
+    One rule for every engine: a tag cannot mean different amounts depending
+    on which model reads it.
+    """
+    parts = code.strip().lower().replace("_", "-").split("-")
+    return ["-".join(parts[: n + 1]) for n in reversed(range(len(parts)))]
 
 
 @dataclass(frozen=True)
@@ -62,21 +114,21 @@ class Engine(Protocol):
         ...
 
     def synthesize(
-        self, segments: list[str], voice: str, *, temperature: float | None = None
+        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
     ) -> Synthesis:
         """Render prepared text segments as one continuous waveform.
 
         Args:
             segments: Already normalised and script-converted text.
             voice: A voice id the registry listed for this model.
-            temperature: Overrides the engine's configured sampling
-                temperature for this call. ``None`` uses the configured one.
+            delivery: How to say it. An engine reads the fields it supports.
 
         Returns:
             The rendered utterance.
 
         Raises:
             UnknownVoiceError: The voice id is not available.
+            UnsupportedLanguageError: The language is not one this model reads.
         """
         ...
 
@@ -101,7 +153,7 @@ class StreamingEngine(Protocol):
     """
 
     def synthesize_stream(
-        self, segments: list[str], voice: str
+        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
     ) -> Generator[np.ndarray, None, None]:
         """Yield mono float32 chunks in playback order.
 
@@ -130,6 +182,10 @@ class UnknownVoiceError(EngineError):
 
 class NoAudioError(EngineError):
     """The model produced no audio tokens for the given text."""
+
+
+class UnsupportedLanguageError(EngineError):
+    """The model does not read the language the request named."""
 
 
 def reference_voices(references: ReferenceStore) -> list[Voice]:

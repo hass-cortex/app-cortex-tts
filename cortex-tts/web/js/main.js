@@ -44,12 +44,18 @@ function wire() {
       .then(() => models.refreshModels())
       .catch((err) => msg($("modelMsg"), err.message, "err")));
 
-  // The voice is the only place a language is declared, so the picker is what
-  // moves the passes — and whether there is one is what makes Speak available.
+  // Which passes the preview runs follows the voice's own language, not the
+  // language field: that one says what to read the text as, while the passes
+  // are about the script it is written in. Whether there is a voice at all is
+  // what makes Speak available.
   models.whenVoiceChanges(() => {
     speak.syncButton();
     preview.syncPassesToVoice(models.selectedVoiceLanguage());
   });
+  // The upload form's language list is the models' business, not its own —
+  // and its value follows the Language filter until someone sets it there.
+  models.whenModelsChange(clones.syncLanguages);
+  $("language").addEventListener("change", clones.syncLanguages);
 }
 
 async function load() {

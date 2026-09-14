@@ -49,10 +49,20 @@ def ingress_client(
 
 @pytest.fixture
 def reference_wav() -> bytes:
-    """A quiet three-second tone: long enough to pass the reference validator."""
+    """A quiet three-second tone that ends in silence, as a real take does.
+
+    The trailing silence is not decoration: the validator rejects a recording
+    still speaking at its last sample, because that is a clip cut by a clock
+    rather than a finished sentence.
+    """
     rate = 16000
-    t = np.arange(3 * rate) / rate
-    tone = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    t = np.arange(int(2.5 * rate)) / rate
+    tone = np.concatenate(
+        [
+            0.2 * np.sin(2 * np.pi * 220 * t),
+            np.zeros(int(0.5 * rate)),
+        ]
+    ).astype(np.float32)
     buffer = io.BytesIO()
     sf.write(buffer, tone, rate, format="WAV")
     return buffer.getvalue()
