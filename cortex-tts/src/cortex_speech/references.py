@@ -12,11 +12,13 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 import unicodedata
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import soundfile as sf
@@ -118,6 +120,11 @@ class ReferenceStore:
         self._root.mkdir(parents=True, exist_ok=True)
         self._index = self._root / INDEX_NAME
         self._items: dict[str, Reference] = {}
+        # A plain lock, not an asyncio one: `add` decodes and hashes a
+        # recording, so the API runs it on a worker thread while `update` and
+        # `remove` stay on the event loop. Two real threads reach `_items` and
+        # the index file, and every mutation here is a read-modify-write.
+        self._lock = threading.Lock()
         self._load()
 
     def _load(self) -> None:
@@ -154,16 +161,26 @@ class ReferenceStore:
                 _LOGGER.warning("skipping malformed reference entry: %s", err)
 
     def _save(self) -> None:
+        """Write the index. Callers hold `_lock`.
+
+        The temporary carries a unique name: a fixed one is a second shared
+        mutable thing, and two writers would truncate each other's bytes in it
+        before either renamed.
+        """
         payload = {"references": [ref.to_json() for ref in self._items.values()]}
-        temp = self._index.with_suffix(".json.tmp")
-        temp.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        temp.replace(self._index)
+        temp = self._index.with_suffix(f".json.{uuid4().hex}.tmp")
+        try:
+            temp.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            temp.replace(self._index)
+        finally:
+            temp.unlink(missing_ok=True)
 
     def list(self) -> list[Reference]:
         """Return every stored reference, oldest first."""
-        return sorted(self._items.values(), key=lambda r: r.created)
+        with self._lock:
+            return sorted(self._items.values(), key=lambda r: r.created)
 
     def get(self, reference_id: str) -> Reference | None:
         """Return one reference, or ``None`` when it does not exist."""
@@ -225,25 +242,30 @@ class ReferenceStore:
                 "end on a completed sentence, with the silence after it"
             )
 
-        reference_id = self._unique_id(slugify(name))
-        audio_path = self._root / f"{reference_id}.wav"
-        sf.write(audio_path, samples, sample_rate, subtype="PCM_16")
-        fingerprint = _fingerprint(audio_path)
+        # Held from the moment an id is chosen: the id names the file, so
+        # picking one and taking it have to be a single step. Two uploads of
+        # the same name otherwise agree on a slug, and the second overwrites
+        # the first's recording and its entry with no error on either.
+        with self._lock:
+            reference_id = self._unique_id(slugify(name))
+            audio_path = self._root / f"{reference_id}.wav"
+            sf.write(audio_path, samples, sample_rate, subtype="PCM_16")
+            fingerprint = _fingerprint(audio_path)
 
-        reference = Reference(
-            id=reference_id,
-            name=name.strip() or reference_id,
-            transcript=prepared,
-            raw_transcript=transcript.strip(),
-            language=language,
-            gender=gender,
-            seconds=round(seconds, 2),
-            created=time.time(),
-            audio_path=audio_path,
-            fingerprint=fingerprint,
-        )
-        self._items[reference_id] = reference
-        self._save()
+            reference = Reference(
+                id=reference_id,
+                name=name.strip() or reference_id,
+                transcript=prepared,
+                raw_transcript=transcript.strip(),
+                language=language,
+                gender=gender,
+                seconds=round(seconds, 2),
+                created=time.time(),
+                audio_path=audio_path,
+                fingerprint=fingerprint,
+            )
+            self._items[reference_id] = reference
+            self._save()
         _LOGGER.info(
             "stored reference %s (%.1fs, %s)", reference_id, seconds, reference.name
         )
@@ -268,31 +290,32 @@ class ReferenceStore:
             KeyError: No reference with that id.
             ReferenceError: The transcript is empty.
         """
-        existing = self._items.get(reference_id)
-        if existing is None:
-            raise KeyError(reference_id)
         if not transcript.strip():
             raise ReferenceError("a reference needs the transcript of what is said")
-
         prepared = prepared_text(prepare(transcript, TextOptions()))
         if not prepared:
             raise ReferenceError("the transcript has no pronounceable content")
 
-        updated = replace(
-            existing, transcript=prepared, raw_transcript=transcript.strip()
-        )
-        self._items[reference_id] = updated
-        self._save()
+        with self._lock:
+            existing = self._items.get(reference_id)
+            if existing is None:
+                raise KeyError(reference_id)
+            updated = replace(
+                existing, transcript=prepared, raw_transcript=transcript.strip()
+            )
+            self._items[reference_id] = updated
+            self._save()
         _LOGGER.info("updated transcript for reference %s", reference_id)
         return updated
 
     def remove(self, reference_id: str) -> bool:
         """Delete a reference and its audio. Returns whether it existed."""
-        reference = self._items.pop(reference_id, None)
-        if reference is None:
-            return False
-        reference.audio_path.unlink(missing_ok=True)
-        self._save()
+        with self._lock:
+            reference = self._items.pop(reference_id, None)
+            if reference is None:
+                return False
+            reference.audio_path.unlink(missing_ok=True)
+            self._save()
         _LOGGER.info("removed reference %s", reference_id)
         return True
 

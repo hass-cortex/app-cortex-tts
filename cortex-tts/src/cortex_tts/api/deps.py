@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fastapi import Header, HTTPException, Request, status
@@ -52,6 +53,12 @@ class AppState:
     Mutable on purpose: `PUT /api/settings` replaces it and the next request
     reads the new value. The three that are bound when a session is created
     are applied by dropping what is resident, not by restarting."""
+    settings_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    """Serialises `PUT /api/settings`.
+
+    Replacing `preferences` is a read-modify-write that spans an await, so
+    without this two saves overlapping in that window each write over the
+    other's fields and both answer 200."""
 
     @property
     def registry(self) -> EngineRegistry:

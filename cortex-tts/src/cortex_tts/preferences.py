@@ -21,6 +21,7 @@ import logging
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 from cortex_speech import BY_ID, CATALOG, EXECUTION_PROVIDERS, ExecutionProvider
 
@@ -182,8 +183,13 @@ def save(data_dir: Path, preferences: Preferences) -> None:
     """
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / FILE_NAME
-    temp = path.with_suffix(".json.tmp")
-    temp.write_text(
-        json.dumps(asdict(preferences), indent=2, sort_keys=True), encoding="utf-8"
-    )
-    temp.replace(path)
+    # Unique temporary: this runs on a worker thread now, so a fixed name is
+    # something two writers share and truncate under each other.
+    temp = path.with_suffix(f".json.{uuid4().hex}.tmp")
+    try:
+        temp.write_text(
+            json.dumps(asdict(preferences), indent=2, sort_keys=True), encoding="utf-8"
+        )
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)

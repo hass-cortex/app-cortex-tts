@@ -135,26 +135,34 @@ async def write_settings(
     rejecting the whole form, so one bad number cannot discard the model
     someone chose in another box. What comes back is what is now in force.
     """
-    updated, ignored = state.preferences.validated(body.model_dump(exclude_none=True))
-    try:
-        save_preferences(state.preferences_path, updated)
-    except OSError as err:
-        raise _http(
-            http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "SETTINGS_NOT_WRITTEN",
-            f"could not store the settings: {err}",
-        ) from err
+    # One writer at a time, and the new settings are published before the
+    # registry is told: this is a read-modify-write over `state.preferences`,
+    # and `reconfigure` waits on a synthesis in flight. A second request
+    # arriving inside that wait would otherwise read the settings this one
+    # replaced and write them back over it, having answered 200.
+    async with state.settings_lock:
+        updated, ignored = state.preferences.validated(
+            body.model_dump(exclude_none=True)
+        )
+        try:
+            await asyncio.to_thread(save_preferences, state.preferences_path, updated)
+        except OSError as err:
+            raise _http(
+                http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "SETTINGS_NOT_WRITTEN",
+                f"could not store the settings: {err}",
+            ) from err
+        state.preferences = updated
 
-    # The registry knows which of these a resident engine can adopt and
-    # drops only for the ones it cannot.
-    reloaded = await state.registry.reconfigure(
-        num_threads=updated.num_threads,
-        max_loaded=updated.max_loaded_models,
-        temperature=updated.temperature,
-        execution_provider=updated.execution_provider,
-    )
+        # The registry knows which of these a resident engine can adopt and
+        # drops only for the ones it cannot.
+        reloaded = await state.registry.reconfigure(
+            num_threads=updated.num_threads,
+            max_loaded=updated.max_loaded_models,
+            temperature=updated.temperature,
+            execution_provider=updated.execution_provider,
+        )
 
-    state.preferences = updated
     _LOGGER.info("settings changed%s", " (models unloaded)" if reloaded else "")
     return SettingsSaved(
         settings=SettingsOut(**asdict(updated)), reloaded=reloaded, ignored=ignored
@@ -240,7 +248,7 @@ async def delete_model(model_id: str, state: AppState = Depends(get_state)) -> M
     await state.registry.unload(model_id)
     # Up to two gigabytes of files; not on the event loop.
     await asyncio.to_thread(state.speech.delete_model, spec)
-    state.stats.forget(model_id)
+    await asyncio.to_thread(state.stats.forget, model_id)
     await fire_models_changed(f"deleted:{model_id}")
     return _model_out(state, spec)
 
@@ -471,8 +479,12 @@ async def _synthesize(
     # costs about twice what a designed voice does on the same model. The
     # store is asked rather than the voice list, because that is a dict
     # lookup and the list is a disk read on the hot path.
-    state.stats.record(
-        spec.id, _voice_kind(state, spec, voice_id), stats.rtf, stats.audio_seconds
+    await asyncio.to_thread(
+        state.stats.record,
+        spec.id,
+        _voice_kind(state, spec, voice_id),
+        stats.rtf,
+        stats.audio_seconds,
     )
     _LOGGER.info(
         "spoke %d chars as %s/%s -> %.2fs audio in %.0fms (RTF %.2f)",
@@ -604,7 +616,8 @@ async def speak_stream(
         seconds = samples / spec.sample_rate
         if seconds:
             elapsed_ms = (time.perf_counter() - started) * 1000
-            state.stats.record(
+            await asyncio.to_thread(
+                state.stats.record,
                 spec.id,
                 _voice_kind(state, spec, voice_id),
                 round(elapsed_ms / 1000 / seconds, 3),
@@ -709,7 +722,7 @@ async def add_reference(
         raise _http(
             http_status.HTTP_400_BAD_REQUEST, "BAD_REFERENCE", str(err)
         ) from err
-    state.registry.forget_reference(reference.id)
+    await state.registry.forget_reference(reference.id)
     await fire_models_changed(f"reference-added:{reference.id}")
     return _reference_out(reference)
 
@@ -748,7 +761,7 @@ async def delete_reference(
     """Delete a reference recording and the cloned voice it backed."""
     if not state.references.remove(reference_id):
         raise _no_reference(reference_id)
-    state.registry.forget_reference(reference_id)
+    await state.registry.forget_reference(reference_id)
     await fire_models_changed(f"reference-removed:{reference_id}")
     return Response(status_code=http_status.HTTP_204_NO_CONTENT)
 

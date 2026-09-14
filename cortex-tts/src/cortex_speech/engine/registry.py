@@ -307,10 +307,16 @@ class EngineRegistry:
                 partial(slot.engine.synthesize, segments, voice, delivery=wanted)
             )
 
-    def forget_reference(self, reference_id: str) -> None:
-        """Tell loaded cloning engines a reference changed or was removed."""
-        for slot in self._slots.values():
-            slot.engine.forget(reference_id)
+    async def forget_reference(self, reference_id: str) -> None:
+        """Tell loaded cloning engines a reference changed or was removed.
+
+        Takes each engine's lock. A synthesis on a worker thread may be inside
+        the conditioning cache's `get`, and forgetting between its miss and
+        its insert puts the stale encoding straight back.
+        """
+        for slot in list(self._slots.values()):
+            async with slot.lock:
+                slot.engine.forget(reference_id)
 
     async def reconfigure(
         self,
@@ -328,34 +334,41 @@ class EngineRegistry:
         travels with each call and needs nothing dropped; a smaller resident
         bound evicts the least recently used down to it.
 
+        Taken under the load lock, because a build in flight is holding the
+        settings this is replacing: without it, `_slots` is still empty when
+        the sweep looks, the engine lands afterwards carrying the thread count
+        and provider that were just discarded, and the caller is told nothing
+        needed dropping.
+
         Returns:
             Whether anything was unloaded, which is what the caller reports as
             "this takes effect on the next reply" rather than "now".
         """
-        rebuild = False
-        if num_threads is not None and num_threads != self._num_threads:
-            self._num_threads = num_threads
-            rebuild = True
-        if (
-            execution_provider is not None
-            and execution_provider != self._execution_provider
-        ):
-            self._execution_provider = execution_provider
-            rebuild = True
-        if max_loaded is not None:
-            self._max_loaded = max(1, max_loaded)
-        if temperature is not None:
-            self._temperature = temperature
+        async with self._load_lock:
+            rebuild = False
+            if num_threads is not None and num_threads != self._num_threads:
+                self._num_threads = num_threads
+                rebuild = True
+            if (
+                execution_provider is not None
+                and execution_provider != self._execution_provider
+            ):
+                self._execution_provider = execution_provider
+                rebuild = True
+            if max_loaded is not None:
+                self._max_loaded = max(1, max_loaded)
+            if temperature is not None:
+                self._temperature = temperature
 
-        dropped = False
-        if rebuild:
-            for model_id in list(self._slots):
-                dropped |= await self._drop(model_id)
+            dropped = False
+            if rebuild:
+                for model_id in list(self._slots):
+                    dropped |= await self._drop(model_id)
+                return dropped
+            while len(self._slots) > self._max_loaded:
+                victim_id = min(self._slots, key=lambda k: self._slots[k].last_used)
+                dropped |= await self._drop(victim_id)
             return dropped
-        while len(self._slots) > self._max_loaded:
-            victim_id = min(self._slots, key=lambda k: self._slots[k].last_used)
-            dropped |= await self._drop(victim_id)
-        return dropped
 
     @property
     def providers_in_use(self) -> dict[str, str]:

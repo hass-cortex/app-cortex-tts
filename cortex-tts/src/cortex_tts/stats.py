@@ -17,8 +17,10 @@ from __future__ import annotations
 import json
 import logging
 import statistics
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,8 +66,10 @@ class ModelStats:
 class StatsStore:
     """Per-model measurements, in memory and on disk.
 
-    Every method is synchronous and the app runs one worker, so a record and
-    the write that follows it cannot interleave with another request.
+    Every method is synchronous, and recording one writes the file, so the API
+    runs it on a worker thread rather than stalling the event loop mid-reply.
+    That makes a record-and-write reachable from more than one thread, which
+    the lock is for.
     """
 
     def __init__(self, path: Path) -> None:
@@ -73,6 +77,7 @@ class StatsStore:
         self._path = path
         # model id -> voice kind -> samples.
         self._samples: dict[str, dict[str, list[float]]] = {}
+        self._lock = threading.Lock()
         self._read()
 
     def _read(self) -> None:
@@ -103,9 +108,10 @@ class StatsStore:
                     ]
 
     def _write(self) -> None:
+        """Write the file. Callers hold `_lock`."""
+        temp = self._path.with_suffix(f".json.{uuid4().hex}.tmp")
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            temp = self._path.with_suffix(".json.tmp")
             temp.write_text(
                 json.dumps(self._samples, indent=2, sort_keys=True), encoding="utf-8"
             )
@@ -115,6 +121,8 @@ class StatsStore:
             # of it across a restart is lost, which is not worth an error to
             # the caller who only asked for audio.
             _LOGGER.warning("could not write stats: %s", err)
+        finally:
+            temp.unlink(missing_ok=True)
 
     def record(
         self, model_id: str, kind: str, rtf: float, audio_seconds: float
@@ -129,22 +137,24 @@ class StatsStore:
         """
         if rtf <= 0 or audio_seconds < MIN_AUDIO_SECONDS:
             return
-        samples = self._samples.setdefault(model_id, {}).setdefault(kind, [])
-        samples.append(round(float(rtf), 3))
-        del samples[:-MAX_SAMPLES]
-        self._write()
+        with self._lock:
+            samples = self._samples.setdefault(model_id, {}).setdefault(kind, [])
+            samples.append(round(float(rtf), 3))
+            del samples[:-MAX_SAMPLES]
+            self._write()
 
     def get(self, model_id: str) -> list[ModelStats]:
         """Return what this host measured for a model, one entry per kind.
 
         Empty when it never has. Ordered so a card renders the same way twice.
         """
-        by_kind = self._samples.get(model_id) or {}
-        return [
-            ModelStats(kind=kind, samples=tuple(samples))
-            for kind, samples in sorted(by_kind.items())
-            if samples
-        ]
+        with self._lock:
+            by_kind = self._samples.get(model_id) or {}
+            return [
+                ModelStats(kind=kind, samples=tuple(samples))
+                for kind, samples in sorted(by_kind.items())
+                if samples
+            ]
 
     def forget(self, model_id: str) -> None:
         """Drop a model's measurements, when its weights are deleted.
@@ -153,5 +163,6 @@ class StatsStore:
         which is usually right — but the reason to delete a model is often
         that something about it changed.
         """
-        if self._samples.pop(model_id, None) is not None:
-            self._write()
+        with self._lock:
+            if self._samples.pop(model_id, None) is not None:
+                self._write()
