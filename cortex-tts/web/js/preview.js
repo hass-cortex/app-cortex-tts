@@ -46,25 +46,25 @@ function hint(active) {
   const parts = [];
   parts.push(
     active.normalize_text
-      ? "Units, times and dates are written out in the language's own words, which no model here can read as digits."
-      : "Numbers stay as digits, which no model here can pronounce.",
+      ? "Units, times and dates are written out in words."
+      : "Numbers stay as digits.",
   );
   if (active.normalize_text) {
     parts.push(
       active.expand_numbers
-        ? "A number on its own is read as a quantity too: on by default only for a model that cannot say a digit at all."
-        : "A number on its own stays as digits: it may be a room, a phone number or a model, and a wrong reading would mislead.",
+        ? "A bare number is read as a quantity too."
+        : "A bare number stays as digits: it may be a room, a phone number or a model.",
     );
   }
   if ("convert_script" in active) {
     parts.push(
       active.convert_script
-        ? "Traditional glyphs are converted to Simplified, the only script the models read."
-        : "Traditional glyphs are left as written; the models will read them as the wrong words.",
+        ? "Traditional glyphs are converted to Simplified."
+        : "Traditional glyphs are left as written; the model will misread them.",
     );
   }
   if (active.taiwan_readings) {
-    parts.push("Words Taiwan reads differently are respelled with homophones the model reads the Taiwan way.");
+    parts.push("Words Taiwan reads differently are respelled with homophones.");
   }
   return parts.join(" ");
 }

@@ -13,6 +13,7 @@
   base.href = `${location.pathname.replace(/\/+$/, "")}/`;
   document.head.appendChild(base);
 </script>
+<link rel="icon" type="image/png" href="icon.png">
 <link rel="stylesheet" href="app.css">
 <script type="module" src="js/main.js"></script>
 </head>
@@ -61,17 +62,18 @@
       </div>
     </div>
     <div class="row" id="voiceRow">
-      <div class="field">
-        <label for="voice" id="voiceLabel">Voice</label>
-        <select id="voice"></select>
-      </div>
       <div class="field fixed">
         <label for="gender">Gender</label>
         <select id="gender">
           <option value="">— any —</option>
           <option value="female">female</option>
           <option value="male">male</option>
+          <option value="unknown">unknown</option>
         </select>
+      </div>
+      <div class="field">
+        <label for="voice" id="voiceLabel">Voice</label>
+        <select id="voice"></select>
       </div>
       <div class="field" id="instructField" hidden>
         <label for="instruct">Style instruction</label>
@@ -117,12 +119,10 @@
     <h2>Settings</h2>
     <span class="note" id="providerNote"></span>
   </div>
-  <p class="hint">Saved here, not in the app's configuration — a change takes
-  effect on the next request. Those marked <span class="tag">reload</span>
-  are fixed when a model is loaded, so adopting one drops what is resident and
-  the next reply loads it again. The one marked <span class="tag">restart</span>
-  also sizes the maths libraries' thread pools when the app starts, so its
-  full effect needs an app restart.</p>
+  <p class="hint">Stored by the app; a change takes effect on the next request.
+  <span class="tag">reload</span> settings are bound when a model loads, so
+  changing one drops what is resident. <span class="tag">restart</span> also
+  sizes the maths libraries' thread pools at start-up.</p>
   <div class="group">
     <h3>Defaults</h3>
     <div class="row">
@@ -134,8 +134,8 @@
       <div class="field">
         <label for="setVoice">Default voice</label>
         <select id="setVoice"></select>
-        <p class="sub">Picking the voice is picking the language; no model takes
-        a language parameter.</p>
+        <p class="sub">A request that names no language is read in this
+        voice's; OmniVoice and Qwen3-TTS can also be told one outright.</p>
       </div>
     </div>
     <div class="row">
@@ -146,33 +146,25 @@
           <span class="track"></span>
           <span>load the default model at startup</span>
         </label>
-        <p class="sub">Off, the first request after a start pays the load —
-        several seconds on the larger models. On, the app holds that model's
-        memory from the moment it comes up, whether or not anything asks it to
-        speak.</p>
+        <p class="sub">Off, the first request after a start pays the load; on, the
+        model's memory is held from start-up.</p>
       </div>
       <div class="field">
         <label for="setTemp">Sampling temperature</label>
         <input id="setTemp" type="number" min="0" max="1" step="0.05">
-        <p class="sub">A request may send its own. The model stops only when it
-        samples its end-of-speech token, so a high value sometimes appends an
-        invented syllable. 0 is reproducible and never over-runs on the Hojo
-        models — but not on Qwen3-TTS, where greedy decoding often fails to stop
-        at all and the reply is cut off at its ceiling instead. MOSS and
-        OmniVoice ignore this setting and say so.</p>
+        <p class="sub">A request may send its own. High values sometimes append an
+        invented syllable; 0 is reproducible on Hojo but makes Qwen3-TTS fail
+        to stop. MOSS and OmniVoice ignore it.</p>
       </div>
     </div>
   </div>
 
   <div class="group">
     <h3>Text switches, per model and language</h3>
-    <p class="sub">What a request gets when it does not say. Each switch is
-    normally the pipeline's call — bare numbers by the model (on only for one
-    that cannot say a digit), the two Chinese rewrites by the language — and a
-    rule here answers instead. The most specific rule that says something wins:
-    model and language over either alone, either over a rule for everything.
-    A language matches any tag it prefixes (<code>zh</code> covers
-    <code>zh-TW</code>).</p>
+    <p class="sub">What a request gets for a switch it leaves out. Left alone,
+    each is the pipeline's call: bare numbers by the model, the Chinese
+    rewrites by the language. The most specific rule wins; a language covers
+    every tag it prefixes (<code>zh</code> covers <code>zh-TW</code>).</p>
     <div class="rules" id="setRules"></div>
     <datalist id="setLangList"></datalist>
     <button id="setRuleAdd">Add rule</button>
@@ -184,26 +176,22 @@
       <div class="field">
         <label for="setThreads">Inference threads <span class="tag">restart</span></label>
         <input id="setThreads" type="number" min="0" max="16" step="1">
-        <p class="sub">0 lets the runtime decide. Resident models adopt it on
-        their next load; BLAS and OpenMP only on an app restart. More is not
-        always faster, and the models disagree with each other — some are slower
-        at four threads than at two. Change it, then read the card's measured
-        figure for the model you use.</p>
+        <p class="sub">0 lets the runtime decide. More is not always faster — some
+        models are slower at four than at two; check the card's measured
+        figure after changing it.</p>
       </div>
       <div class="field">
         <label for="setProvider">Execution provider <span class="tag">reload</span></label>
         <select id="setProvider"></select>
-        <p class="sub">MOSS measured 1.025 on a laptop CPU against 0.354 on a
-        GTX 1650. What the sessions actually got is shown on each loaded card.</p>
+        <p class="sub">What the sessions actually got is shown on each loaded card.</p>
       </div>
     </div>
     <div class="row lone">
       <div class="field">
         <label for="setLoaded">Models kept in memory</label>
         <input id="setLoaded" type="number" min="1" step="1">
-        <p class="sub">The 40M needs about 780 MB, OmniVoice about 1.1 GB,
-        Qwen3-TTS about 1.5 GB, the 80M and MOSS about 2 GB each. At 1 they swap
-        on demand; lowering it evicts the least recently used at once.</p>
+        <p class="sub">Roughly 0.8 GB for the 40M, 1.1 GB OmniVoice, 1.5 GB Qwen3-TTS,
+        2 GB each for the 80M and MOSS. At 1 they swap on demand.</p>
       </div>
     </div>
     <div class="row lone">
@@ -211,8 +199,7 @@
         <label for="setIdle">Unload when idle (seconds)</label>
         <input id="setIdle" type="number" min="0" max="86400" step="1">
         <p class="sub">Drop a model this long after its last request; 0 keeps it
-        until something evicts it. The next reply pays the load again — about
-        4 s for MOSS on a GPU — which is worth it on a card shared with another
+        until something evicts it. Worth setting on a GPU shared with another
         workload.</p>
       </div>
     </div>
@@ -220,10 +207,9 @@
       <div class="field">
         <label for="setMaxSynth">Refuse over-long replies (seconds)</label>
         <input id="setMaxSynth" type="number" min="0" max="3600" step="1">
-        <p class="sub">Refuse a reply whose estimated render, on this model's
-        measured speed, would take longer than this; 0 accepts any length. It
-        stops a reply so long it renders past the caller's timeout into audio
-        nobody hears. Judged only once the model has been measured here.</p>
+        <p class="sub">Refuse a reply whose estimated render would take longer than
+        this; 0 accepts any length. Needs the model measured on this host
+        first.</p>
       </div>
     </div>
   </div>
@@ -250,6 +236,8 @@
     MOSS, OmniVoice and Qwen3-TTS read all of it.</li>
     <li><b>Type exactly what is said.</b> The transcript is what tells the
     model which sounds map to which text.</li>
+    <li><b>Label the language whole.</b> A voice tagged zh-TW is Taiwanese, so
+    text read in it gets Taiwan readings by default; zh promises only Chinese.</li>
   </ul>
   <div id="refs" class="refs"></div>
   <div class="addform">
