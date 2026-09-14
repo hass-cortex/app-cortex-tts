@@ -3,7 +3,7 @@
 // this is where they are changed.
 
 import { call, json } from "./api.js";
-import { $, esc, fillPicker, msg, pressed, voiceOption } from "./dom.js";
+import { $, esc, fillPicker, msg, voiceOption } from "./dom.js";
 
 let current = null;
 let models = [];
@@ -27,7 +27,7 @@ const LABELS = {
   execution_provider: "Execution provider",
   max_loaded_models: "Models kept in memory",
   temperature: "Sampling temperature",
-  preload: "Load the default model at startup",
+  preload: "Preload",
 };
 
 /** Voices the chosen default model offers, plus the stored one if nothing downloaded offers it. */
@@ -72,7 +72,7 @@ function render() {
     ([id, label]) =>
       `<option value="${id}"${id === current.execution_provider ? " selected" : ""}>${label}</option>`,
   ).join("");
-  $("setPreload").setAttribute("aria-pressed", String(current.preload));
+  $("setPreload").checked = current.preload;
   // What is stored is the truth here — just read, or just saved — so the
   // pickers are rebuilt rather than kept on whatever they were showing.
   $("setModel").innerHTML = "";
@@ -117,7 +117,7 @@ async function save() {
         execution_provider: $("setProvider").value,
         max_loaded_models: numberOrOmit("setLoaded"),
         temperature: numberOrOmit("setTemp"),
-        preload: pressed($("setPreload")),
+        preload: $("setPreload").checked,
       }),
     });
     const body = await res.json();
@@ -147,8 +147,5 @@ export async function load() {
 
 export function init() {
   $("setModel").addEventListener("change", renderPickers);
-  $("setPreload").addEventListener("click", () => {
-    $("setPreload").setAttribute("aria-pressed", String(!pressed($("setPreload"))));
-  });
   $("setSave").addEventListener("click", save);
 }

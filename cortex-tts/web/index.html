@@ -113,58 +113,79 @@
   the next reply loads it again. The one marked <span class="tag">restart</span>
   also sizes the maths libraries' thread pools when the app starts, so its
   full effect needs an app restart.</p>
-  <div class="row">
-    <div class="field">
-      <label for="setModel">Default model</label>
-      <select id="setModel"></select>
-      <p class="sub">Used when a request names none.</p>
+  <div class="group">
+    <h3>Defaults</h3>
+    <div class="row">
+      <div class="field">
+        <label for="setModel">Default model</label>
+        <select id="setModel"></select>
+        <p class="sub">Used when a request names none.</p>
+      </div>
+      <div class="field">
+        <label for="setVoice">Default voice</label>
+        <select id="setVoice"></select>
+        <p class="sub">Picking the voice is picking the language; no model takes
+        a language parameter.</p>
+      </div>
     </div>
-    <div class="field">
-      <label for="setVoice">Default voice</label>
-      <select id="setVoice"></select>
-      <p class="sub">Picking the voice is picking the language; no model takes
-      a language parameter.</p>
-    </div>
-  </div>
-  <div class="row">
-    <div class="field">
-      <label for="setThreads">Inference threads <span class="tag">restart</span></label>
-      <input id="setThreads" type="number" min="0" max="16" step="1">
-      <p class="sub">0 lets the runtime decide. Resident models adopt it on
-      their next load; BLAS and OpenMP only on an app restart. More is not
-      always faster, and the models disagree with each other — some are slower
-      at four threads than at two. Change it, then read the card's measured
-      figure for the model you use.</p>
-    </div>
-    <div class="field">
-      <label for="setProvider">Execution provider <span class="tag">reload</span></label>
-      <select id="setProvider"></select>
-      <p class="sub">MOSS measured 1.025 on a laptop CPU against 0.354 on a
-      GTX 1650. What the sessions actually got is shown on each loaded card.</p>
-    </div>
-  </div>
-  <div class="row">
-    <div class="field">
-      <label for="setLoaded">Models kept in memory</label>
-      <input id="setLoaded" type="number" min="1" step="1">
-      <p class="sub">The 40M needs about 780 MB, OmniVoice about 1.1 GB,
-      Qwen3-TTS about 1.5 GB, the 80M and MOSS about 2 GB each. At 1 they swap
-      on demand; lowering it evicts the least recently used at once.</p>
-    </div>
-    <div class="field">
-      <label for="setTemp">Sampling temperature</label>
-      <input id="setTemp" type="number" min="0" max="1" step="0.05">
-      <p class="sub">The model stops only when it samples its end-of-speech
-      token, so a high value sometimes appends an invented syllable. 0 is
-      reproducible and never over-runs on the Hojo models — but not on
-      Qwen3-TTS, where greedy decoding often fails to stop at all and the
-      reply is cut off at its ceiling instead. MOSS and OmniVoice ignore this
-      setting and say so.</p>
+    <div class="row">
+      <div class="field">
+        <span class="lbl">Preload</span>
+        <label class="switch">
+          <input type="checkbox" role="switch" id="setPreload">
+          <span class="track"></span>
+          <span>load the default model at startup</span>
+        </label>
+        <p class="sub">Off, the first request after a start pays the load —
+        several seconds on the larger models. On, the app holds that model's
+        memory from the moment it comes up, whether or not anything asks it to
+        speak.</p>
+      </div>
+      <div class="field">
+        <label for="setTemp">Sampling temperature</label>
+        <input id="setTemp" type="number" min="0" max="1" step="0.05">
+        <p class="sub">A request may send its own. The model stops only when it
+        samples its end-of-speech token, so a high value sometimes appends an
+        invented syllable. 0 is reproducible and never over-runs on the Hojo
+        models — but not on Qwen3-TTS, where greedy decoding often fails to stop
+        at all and the reply is cut off at its ceiling instead. MOSS and
+        OmniVoice ignore this setting and say so.</p>
+      </div>
     </div>
   </div>
+
+  <div class="group">
+    <h3>How this host runs them</h3>
+    <div class="row">
+      <div class="field">
+        <label for="setThreads">Inference threads <span class="tag">restart</span></label>
+        <input id="setThreads" type="number" min="0" max="16" step="1">
+        <p class="sub">0 lets the runtime decide. Resident models adopt it on
+        their next load; BLAS and OpenMP only on an app restart. More is not
+        always faster, and the models disagree with each other — some are slower
+        at four threads than at two. Change it, then read the card's measured
+        figure for the model you use.</p>
+      </div>
+      <div class="field">
+        <label for="setProvider">Execution provider <span class="tag">reload</span></label>
+        <select id="setProvider"></select>
+        <p class="sub">MOSS measured 1.025 on a laptop CPU against 0.354 on a
+        GTX 1650. What the sessions actually got is shown on each loaded card.</p>
+      </div>
+    </div>
+    <div class="row lone">
+      <div class="field">
+        <label for="setLoaded">Models kept in memory</label>
+        <input id="setLoaded" type="number" min="1" step="1">
+        <p class="sub">The 40M needs about 780 MB, OmniVoice about 1.1 GB,
+        Qwen3-TTS about 1.5 GB, the 80M and MOSS about 2 GB each. At 1 they swap
+        on demand; lowering it evicts the least recently used at once.</p>
+      </div>
+    </div>
+  </div>
+
   <div class="actions">
     <button class="primary" id="setSave">Save settings</button>
-    <button class="chip" id="setPreload" aria-pressed="true">load the default model at startup</button>
   </div>
   <div class="msg" id="setMsg" aria-live="polite" hidden></div>
 </section>

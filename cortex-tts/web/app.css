@@ -74,6 +74,29 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);
    kind of control. */
 .row.lone>*{flex:0 1 calc(50% - 6px)}
 .field{margin-bottom:12px}
+/* Settings answer two unrelated questions — what a bare request gets, and what
+   this host spends on answering it — and a flat grid of seven boxes left the
+   reader to work that out from the labels. */
+.group+.group{border-top:1px solid var(--line);margin-top:6px;padding-top:16px}
+.group h3{margin:0 0 12px;font-size:11.5px;font-weight:600;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink-3)}
+/* A stored boolean is not a chip. A chip carries its state in its colour and
+   sits among things you press to make something happen, which is how the one
+   setting here that is simply on or off ended up being the one nobody found.
+   Native checkbox underneath, so the browser owns the state, the keyboard and
+   what a screen reader says; the track is only what it looks like. Sized to
+   stand as tall as the input it shares a row with. */
+.switch{display:flex;align-items:center;gap:10px;min-height:39px;
+  margin:0;cursor:pointer;font-size:13px;color:var(--ink)}
+.switch input{position:absolute;width:1px;height:1px;opacity:0}
+.switch .track{flex:none;position:relative;width:36px;height:20px;border-radius:999px;
+  background:var(--surface-2);border:1px solid var(--line);transition:background .12s,border-color .12s}
+.switch .track::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;
+  border-radius:50%;background:var(--ink-3);transition:transform .12s,background .12s}
+.switch:hover .track{border-color:var(--ink-2)}
+.switch input:checked+.track{background:var(--accent-soft);border-color:var(--accent)}
+.switch input:checked+.track::after{transform:translateX(16px);background:var(--accent)}
+.switch input:focus-visible+.track{outline:2px solid var(--accent);outline-offset:2px}
 button{font:inherit;padding:8px 14px;border-radius:5px;border:1px solid var(--ink-2);
   background:transparent;color:var(--ink);cursor:pointer}
 button:hover:not(:disabled){background:var(--ink);color:var(--ground)}
@@ -197,6 +220,11 @@ audio{width:100%}
   background:var(--warn-soft);color:var(--warn)}
 #settings .row{align-items:start}
 #settings .field{flex:1 1 300px}
+/* A group's odd field out keeps its column; the basis above would otherwise
+   stretch it over both and make it read as a wider kind of control. Below the
+   width where two columns fit, there is no column to keep. */
+#settings .row.lone>.field{flex:0 1 calc(50% - 6px)}
+@media (max-width:684px){ #settings .row.lone>.field{flex:1 1 auto} }
 
 /* Shown only when the API answers 401: the page is on a published port
    rather than behind ingress, and needs the app's key once. */

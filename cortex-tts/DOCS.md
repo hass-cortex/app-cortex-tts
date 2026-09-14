@@ -102,11 +102,40 @@ your network; every request then needs the key above.
 
 ## Settings
 
-Open the app and scroll to **Settings**. Two of these — threads and execution
-provider — are bound when ONNX Runtime creates a session, so changing one drops
-whatever is resident and the next reply loads it again; a smaller **Models kept
-in memory** evicts down to the new bound; the rest are read afresh on every
-request.
+Open the app and scroll to **Settings**, in two groups: the defaults a request
+falls back to when it names none, and what this host spends on answering it.
+Two of these — threads and execution provider — are bound when ONNX Runtime
+creates a session, so changing one drops whatever is resident and the next
+reply loads it again; a smaller **Models kept in memory** evicts down to the
+new bound; the rest are read afresh on every request.
+
+### Default model and voice
+
+Used when a request does not name one. A voice the chosen model does not offer
+is ignored and the first available one is used instead, so leaving the voice
+empty always takes the first.
+
+### Preload
+
+Load the default model when the app starts rather than on the first request.
+It takes that model's memory from the moment the app comes up whether or not
+anything asks it to speak, and in exchange the first reply does not pay the
+load — several seconds on the larger models.
+
+### Sampling temperature
+
+How randomly the model picks each step. Default `0.8`. A model stops speaking
+only when it _samples_ its end-of-speech token, so a higher value occasionally
+over-runs the text with an invented syllable.
+
+`0` is greedy: reproducible, flatter, and on the Hojo models it never
+over-runs. **Not on Qwen3-TTS** — there, greedy decoding often fails to sample
+end-of-speech at all, and the reply is cut off at the model's own ceiling
+instead.
+
+The Hojo models and Qwen3-TTS read this setting. MOSS and OmniVoice fuse their
+sampling into a dedicated graph and have no temperature at all, so a request
+naming one for those is refused rather than silently ignored.
 
 ### Inference threads
 
@@ -147,33 +176,6 @@ How many models may stay in memory at once. The 40M needs about 780 MB, the
 demand. Raise it to `2` only if the host can hold two — about 2.8 GB for the
 40M beside either of the others, about 4 GB for the 80M beside MOSS.
 
-### Default model and voice
-
-Used when a request does not name one. A voice the chosen model does not offer
-is ignored and the first available one is used instead, so leaving the voice
-empty always takes the first.
-
-### Sampling temperature
-
-How randomly the model picks each step. Default `0.8`. A model stops speaking
-only when it _samples_ its end-of-speech token, so a higher value occasionally
-over-runs the text with an invented syllable.
-
-`0` is greedy: reproducible, flatter, and on the Hojo models it never
-over-runs. **Not on Qwen3-TTS** — there, greedy decoding often fails to sample
-end-of-speech at all, and the reply is cut off at the model's own ceiling
-instead.
-
-The Hojo models and Qwen3-TTS read this setting. MOSS and OmniVoice fuse their
-sampling into a dedicated graph and have no temperature at all, so a request
-naming one for those is refused rather than silently ignored.
-
-### Load the default model at startup
-
-Load the default model when the app starts rather than on the first request.
-Costs about a second of startup and roughly 780 MB of memory, and removes that
-delay from the first thing you ask it to say.
-
 ## Troubleshooting
 
 **No voices in the pipeline picker.** The model is probably not downloaded —
@@ -207,7 +209,7 @@ when it samples an end-of-speech token, so stopping is probabilistic. Set
 never over-runs.
 
 **First request is slow, later ones are fast.** That is the model load. Turn on
-**Load the default model at startup**, or raise **Models kept in memory** if
+**Preload**, or raise **Models kept in memory** if
 you switch between models often.
 
 **Memory pressure.** Keep **Models kept in memory** at 1, and prefer the 40M.
