@@ -22,7 +22,8 @@ API_KEY= PORT=8799 \
 ```
 
 The environment carries only what must be settled before the process starts
-(`HOST`, `PORT`, `DATA_DIR`, `STATIC_DIR`, `API_KEY`). Everything else is a
+(`HOST`, `PORT`, `DATA_DIR`, `STATIC_DIR`, `API_KEY`, and `REFERENCES_DIR`,
+which defaults to `<DATA_DIR>/references`). Everything else is a
 stored setting in `<DATA_DIR>/settings.json`, and one of them matters here:
 `preload` defaults to `true`, so a fresh data directory downloads the 241 MB
 40M bundle on first start. To work without weights, write
@@ -137,11 +138,11 @@ shows them so a reader can weigh a model before downloading a gigabyte of it.
 
 **There is no speed figure on the entry.** A real-time factor belongs to a
 host, not to a model — see the guarantee in [`AGENTS.md`](../AGENTS.md) — so
-the card shows what *this* machine measured (`cortex_tts/stats.py`) or says it
+the card shows what _this_ machine measured (`cortex_tts/stats.py`) or says it
 has none yet. `scripts/bench_rtf.py` still exists, and what it produces is
 documentation: add the model to its list, run it against one host, and put the
 result in `docs/models.md` beside the others so the models stay comparable
-*with each other*. Never copy a figure from upstream, and never put one where
+_with each other_. Never copy a figure from upstream, and never put one where
 a reader could take it for their own.
 
 For a quantised model, name the CPU too. Full-precision weights compute the

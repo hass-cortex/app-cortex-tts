@@ -49,8 +49,9 @@ DATA_DIR=/srv/cortex-tts STATIC_DIR="$PWD/web" HOST=0.0.0.0 PORT=8771 \
   uv run python -m cortex_tts
 ```
 
-`DATA_DIR` receives the model bundles, the reference recordings and
-`settings.json`; the first start downloads the default model unless
+`DATA_DIR` receives the model bundles, `settings.json` and — unless
+`REFERENCES_DIR` points elsewhere — the reference recordings; the first start
+downloads the default model unless
 `{"preload": false}` is written there first. Open `http://<host>:8771/` for the
 admin UI, then add the integration in Home Assistant with that address and
 `API_KEY`.

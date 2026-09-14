@@ -25,43 +25,43 @@ stays unpublished.
 
 ## Endpoints
 
-| Method | Path                         | Purpose                                                            |
-| ------ | ---------------------------- | ------------------------------------------------------------------ |
+| Method | Path                         | Purpose                                                                     |
+| ------ | ---------------------------- | --------------------------------------------------------------------------- |
 | GET    | `/health`                    | liveness; version, `api_version`, resident count, what is loading, provider |
-| GET    | `/api/defaults`              | the configured default model and voice                             |
-| GET    | `/api/settings`              | every stored setting, as it is now in force                        |
-| PUT    | `/api/settings`              | change some of them; omitted fields keep their value               |
-| GET    | `/api/models`                | catalog + per-model state (downloaded/loaded/progress)             |
-| POST   | `/api/models/{id}/download`  | start a download; poll `/api/models`                               |
-| DELETE | `/api/models/{id}`           | remove the bundle from disk; 409 while it is downloading           |
-| POST   | `/api/models/{id}/load`      | make it resident                                                   |
-| POST   | `/api/models/{id}/unload`    | evict it                                                           |
-| GET    | `/api/voices`                | voices across downloaded models, or one model's (`?model=`)        |
-| POST   | `/api/preview`               | run the text path only; no model is loaded                         |
-| POST   | `/api/speak`                 | synthesise; the requested format (wav/flac/ogg/mp3) + `X-Cortex-*` |
-| POST   | `/api/speak/stream`          | the same, sent as it is produced (chunked MP3)                     |
-| POST   | `/v1/audio/speech`           | the same, OpenAI-shaped                                            |
-| GET    | `/api/references`            | cloned-voice reference recordings                                  |
-| POST   | `/api/references`            | add one (multipart: audio + transcript + metadata)                 |
-| PATCH  | `/api/references/{id}`       | correct a transcript and/or the gender label                       |
-| DELETE | `/api/references/{id}`       | remove it, and the voice it defined                                |
-| GET    | `/api/references/{id}/audio` | play the recording back                                            |
+| GET    | `/api/defaults`              | the configured default model and voice                                      |
+| GET    | `/api/settings`              | every stored setting, as it is now in force                                 |
+| PUT    | `/api/settings`              | change some of them; omitted fields keep their value                        |
+| GET    | `/api/models`                | catalog + per-model state (downloaded/loaded/progress)                      |
+| POST   | `/api/models/{id}/download`  | start a download; poll `/api/models`                                        |
+| DELETE | `/api/models/{id}`           | remove the bundle from disk; 409 while it is downloading                    |
+| POST   | `/api/models/{id}/load`      | make it resident                                                            |
+| POST   | `/api/models/{id}/unload`    | evict it                                                                    |
+| GET    | `/api/voices`                | voices across downloaded models, or one model's (`?model=`)                 |
+| POST   | `/api/preview`               | run the text path only; no model is loaded                                  |
+| POST   | `/api/speak`                 | synthesise; the requested format (wav/flac/ogg/mp3) + `X-Cortex-*`          |
+| POST   | `/api/speak/stream`          | the same, sent as it is produced (chunked MP3)                              |
+| POST   | `/v1/audio/speech`           | the same, OpenAI-shaped                                                     |
+| GET    | `/api/references`            | cloned-voice reference recordings                                           |
+| POST   | `/api/references`            | add one (multipart: audio + transcript + metadata)                          |
+| PATCH  | `/api/references/{id}`       | correct a transcript and/or the gender label                                |
+| DELETE | `/api/references/{id}`       | remove it, and the voice it defined                                         |
+| GET    | `/api/references/{id}/audio` | play the recording back                                                     |
 
 ## Speaking
 
 `POST /api/speak` takes JSON:
 
-| Field             | Default     | Meaning                                                                   |
-| ----------------- | ----------- | ------------------------------------------------------------------------- |
-| `text`            | required    | Up to 4000 characters, in whatever script you write                       |
-| `model`           | the default | A model id from `/api/models`                                             |
-| `voice`           | the default | A voice id the model offers; the first available when it does not         |
-| `format`          | `wav`       | `wav`, `flac`, `ogg` or `mp3`                                             |
-| `normalize_text`  | `true`      | Expand numbers, units, dates and clock literals ([why](text-pipeline.md)) |
-| `convert_script`  | `true`      | Traditional → Simplified glyph conversion                                 |
-| `normalize_level` | `true`      | Peak-normalise the finished waveform                                      |
-| `temperature`     | the setting | Sampling temperature 0–1, for models that have one                        |
-| `language`        | the voice's | Which language to read the text as, for models that take one              |
+| Field             | Default     | Meaning                                                                    |
+| ----------------- | ----------- | -------------------------------------------------------------------------- |
+| `text`            | required    | Up to 4000 characters, in whatever script you write                        |
+| `model`           | the default | A model id from `/api/models`                                              |
+| `voice`           | the default | A voice id the model offers; the first available when it does not          |
+| `format`          | `wav`       | `wav`, `flac`, `ogg` or `mp3`                                              |
+| `normalize_text`  | `true`      | Expand numbers, units, dates and clock literals ([why](text-pipeline.md))  |
+| `convert_script`  | `true`      | Traditional → Simplified glyph conversion                                  |
+| `normalize_level` | `true`      | Peak-normalise the finished waveform                                       |
+| `temperature`     | the setting | Sampling temperature 0–1, for models that have one                         |
+| `language`        | the voice's | Which language to read the text as, for models that take one               |
 | `instruct`        | none        | A plain-language instruction beside the voice, for the one model that does |
 
 The response is the audio, with the measurements in headers:
@@ -107,28 +107,28 @@ Every error, whatever raised it, is a JSON body of `{"code", "message"}` —
 a route's own refusal, an unknown path, and a request body pydantic rejected
 (422) alike.
 
-| Status | Code                   | When                                                            |
-| ------ | ---------------------- | --------------------------------------------------------------- |
-| 400    | `EMPTY_TEXT`           | Nothing left to say once punctuation was stripped               |
-| 400    | `NO_TEMPERATURE`       | A temperature for a model that has none (MOSS, OmniVoice)       |
-| 400    | `NO_LANGUAGE_CHOICE`   | A `language` for a model whose voice decides it                 |
-| 400    | `NO_STYLE_INSTRUCTION` | An `instruct` for a model that takes none                       |
-| 400    | `UNSUPPORTED_LANGUAGE` | A `language` the model does not read                            |
-| 400    | `UNSUPPORTED_FORMAT`   | `flac` or `ogg` asked of the stream                             |
+| Status | Code                   | When                                                                             |
+| ------ | ---------------------- | -------------------------------------------------------------------------------- |
+| 400    | `EMPTY_TEXT`           | Nothing left to say once punctuation was stripped                                |
+| 400    | `NO_TEMPERATURE`       | A temperature for a model that has none (MOSS, OmniVoice)                        |
+| 400    | `NO_LANGUAGE_CHOICE`   | A `language` for a model whose voice decides it                                  |
+| 400    | `NO_STYLE_INSTRUCTION` | An `instruct` for a model that takes none                                        |
+| 400    | `UNSUPPORTED_LANGUAGE` | A `language` the model does not read                                             |
+| 400    | `UNSUPPORTED_FORMAT`   | `flac` or `ogg` asked of the stream                                              |
 | 400    | `BAD_REFERENCE`        | Unreadable audio, wrong length, an empty transcript, or a recording cut mid-word |
-| 401    | `AUTH_REQUIRED`        | No key, or the wrong one                                        |
-| 404    | `UNKNOWN_MODEL`        | No such model id                                                |
-| 404    | `UNKNOWN_VOICE`        | The model does not offer that voice (ids are case-sensitive)    |
-| 404    | `UNKNOWN_REFERENCE`    | No such reference id                                            |
-| 409    | `MODEL_NOT_READY`      | The model is not downloaded                                     |
-| 409    | `NO_VOICE`             | The model has no voices yet — upload a reference                |
-| 409    | `DOWNLOAD_RUNNING`     | Delete refused while the bundle is still arriving               |
-| 413    | `BAD_REFERENCE`        | An upload larger than any legal reference                       |
-| 422    | `VALIDATION`           | The request body failed validation; the message names the field |
-| 422    | `NO_AUDIO`             | The model produced nothing for that text                        |
-| 500    | `ENGINE_ERROR`         | The model failed in a way not listed above                      |
-| 500    | `SETTINGS_NOT_WRITTEN` | The settings file could not be stored                           |
-| 503    | `PROVIDER_UNAVAILABLE` | `cuda` was required and did not answer                          |
+| 401    | `AUTH_REQUIRED`        | No key, or the wrong one                                                         |
+| 404    | `UNKNOWN_MODEL`        | No such model id                                                                 |
+| 404    | `UNKNOWN_VOICE`        | The model does not offer that voice (ids are case-sensitive)                     |
+| 404    | `UNKNOWN_REFERENCE`    | No such reference id                                                             |
+| 409    | `MODEL_NOT_READY`      | The model is not downloaded                                                      |
+| 409    | `NO_VOICE`             | The model has no voices yet — upload a reference                                 |
+| 409    | `DOWNLOAD_RUNNING`     | Delete refused while the bundle is still arriving                                |
+| 413    | `BAD_REFERENCE`        | An upload larger than any legal reference                                        |
+| 422    | `VALIDATION`           | The request body failed validation; the message names the field                  |
+| 422    | `NO_AUDIO`             | The model produced nothing for that text                                         |
+| 500    | `ENGINE_ERROR`         | The model failed in a way not listed above                                       |
+| 500    | `SETTINGS_NOT_WRITTEN` | The settings file could not be stored                                            |
+| 503    | `PROVIDER_UNAVAILABLE` | `cuda` was required and did not answer                                           |
 
 ## Settings over the API
 

@@ -122,6 +122,15 @@ text. A wrong transcript degrades the clone with no error, which is why it is
 validated on the way in.
 _Avoid_: "sample" (suggests something disposable), "voice file"
 
+**Conditioning** / **Sidecar**:
+What an engine derives from a Reference recording before it can clone it —
+codec frames, a speaker vector, a prompt. Encoding it is the dominant cost of a
+cloned utterance, so it is cached by reference id and, per engine, written
+beside the recording as `<id>.<fingerprint>.<engine>.*`: the _sidecar_. The
+fingerprint in the name is the invalidation; a replaced recording misses by
+construction. Sidecars are disposable.
+_Avoid_: "cache file" (says nothing about what is in it or when it is stale)
+
 **Raw transcript** / **Transcript**:
 Two fields, deliberately. The _raw transcript_ is what a person typed; the
 _transcript_ is what the model is told, after the Text path has run over it.

@@ -5,19 +5,19 @@ locally — on the CPU, or on a GPU where one answers — no cloud, no API bill,
 with the Chinese text front-end none of them ship.
 
 | Model               | Voices                            | Languages  | Relative cost | Memory  | Disk   |
-| ------------------- | --------------------------------- | ---------- | -------- | ------- | ------ |
-| **Hojo 40M**        | 15 built in (2 zh, 13 en)         | zh, en     | **0.55** | ~780 MB | 241 MB |
-| **MOSS Nano**       | 18 built in (6 zh) **and** clones | zh, en, ja | 1.07     | ~2 GB   | 729 MB |
-| **Hojo 80M**        | clones only                       | zh, en     | 1.51     | ~2 GB   | 437 MB |
-| **OmniVoice**       | 9 designed **and** clones         | 800+       | 3.83     | ~1.1 GB | 1.4 GB |
-| **Qwen3-TTS**       | 9 built in (5 zh)                 | 10         | 6.72     | ~1.6 GB | 1.0 GB |
-| **Qwen3-TTS clone** | clones only                       | 10         | 6.87     | ~2.1 GB | 1.3 GB |
+| ------------------- | --------------------------------- | ---------- | ------------- | ------- | ------ |
+| **Hojo 40M**        | 15 built in (2 zh, 13 en)         | zh, en     | **0.55**      | ~780 MB | 241 MB |
+| **MOSS Nano**       | 18 built in (6 zh) **and** clones | zh, en, ja | 1.07          | ~2 GB   | 729 MB |
+| **Hojo 80M**        | clones only                       | zh, en     | 1.51          | ~2 GB   | 437 MB |
+| **OmniVoice**       | 9 designed **and** clones         | 800+       | 3.83          | ~1.1 GB | 1.4 GB |
+| **Qwen3-TTS**       | 9 built in (5 zh)                 | 10         | 6.72          | ~1.6 GB | 1.0 GB |
+| **Qwen3-TTS clone** | clones only                       | 10         | 6.87          | ~2.1 GB | 1.3 GB |
 
 **That column is not a prediction about your machine.** It is render time over
 audio time with every model measured on one host — a VM with 4 vCPU of an
 Intel Core i7-9750H, two inference threads, CPU — so it ranks the models
 against each other and nothing else; below 1 means the model outran playback
-*there*. Once the app is running, each model's card shows what **your** host
+_there_. Once the app is running, each model's card shows what **your** host
 measured, or says it has none yet. Start at the top of the table; the lower
 entries want a faster machine or a GPU. Which model suits what, how each one
 clones, and what a faster CPU or a GPU changes is in [Models][models].
@@ -71,7 +71,9 @@ sent with every reply, so the speaker is a timbre rather than a language.
 
 How to call it from `tts.speak`, find a voice id, and choose a speaking mode
 per model is the [integration's documentation][integration]. Uploading a
-recording to clone a voice is [Cloned voices][cloning].
+recording to clone a voice is [Cloned voices][cloning]; the recordings live in
+`/share/cortex-tts/references`, so they are part of your backups and can be
+copied off over the `share` folder.
 
 ## Configuration
 

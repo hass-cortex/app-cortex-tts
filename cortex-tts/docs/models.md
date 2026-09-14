@@ -42,15 +42,15 @@ two.
 
 ### The reference host
 
-|              |                                                                                                                                                                                                              |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Machine      | Ubuntu virtual machine, KVM, 4 vCPU on an Intel Core i7-9750H, 11 GB RAM, amd64 — the second VM on the host the Home Assistant VM itself runs on                                                              |
-| App          | Cortex TTS 0.2.2, ONNX Runtime 1.29.0, CPU execution provider                                                                                                                                                 |
-| Settings     | Inference threads 2, one model resident, temperature 0.8 where the model takes one                                                                                                                            |
-| Load         | Nothing else running; 1-minute load 0.0 before the run                                                                                                                                                        |
-| Method       | `scripts/bench_rtf.py`, 2026-09-13: one model at a time, a warm-up synthesis discarded so model load and reference conditioning are not counted, then three runs per sentence, the server's own `X-Cortex-Rtf` |
-| Text         | Four Chinese sentences of 10, 31, 44 and 92 characters (2–21 s of audio)                                                                                                                                      |
-| Voices       | `hojo_zh_f_01` (40M), `Yuewen` (MOSS), `vivian` (Qwen3-TTS), `female-young` (OmniVoice), a 10-second `zh` reference for all three cloning entries                                                              |
+|          |                                                                                                                                                                                                                |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Machine  | Ubuntu virtual machine, KVM, 4 vCPU on an Intel Core i7-9750H, 11 GB RAM, amd64 — the second VM on the host the Home Assistant VM itself runs on                                                               |
+| App      | Cortex TTS 0.2.2, ONNX Runtime 1.29.0, CPU execution provider                                                                                                                                                  |
+| Settings | Inference threads 2, one model resident, temperature 0.8 where the model takes one                                                                                                                             |
+| Load     | Nothing else running; 1-minute load 0.0 before the run                                                                                                                                                         |
+| Method   | `scripts/bench_rtf.py`, 2026-09-13: one model at a time, a warm-up synthesis discarded so model load and reference conditioning are not counted, then three runs per sentence, the server's own `X-Cortex-Rtf` |
+| Text     | Four Chinese sentences of 10, 31, 44 and 92 characters (2–21 s of audio)                                                                                                                                       |
+| Voices   | `hojo_zh_f_01` (40M), `Yuewen` (MOSS), `vivian` (Qwen3-TTS), `female-young` (OmniVoice), a 10-second `zh` reference for all three cloning entries                                                              |
 
 The median of three runs per sentence:
 
@@ -86,14 +86,14 @@ what you can actually run there.
 The same script, the same text, four environments. Every figure is the median
 over the four sentences above; the reference host is the first column.
 
-| Model                | 4 vCPU of an i7-9750H, CPU | Ryzen 9 9955HX, CPU | RTX 5070 Ti Laptop, CUDA | GTX 1650, CUDA |
-| -------------------- | -------------------------- | ------------------- | ------------------------ | -------------- |
-| **Hojo 40M**         | 0.67                       | **0.28**            | 0.50                     | 0.31           |
-| **MOSS Nano**        | 1.06                       | **0.38**            | 0.58                     | 0.37           |
-| **Hojo 80M**         | 1.42                       | **0.70**            | not loadable             | not loadable   |
-| **OmniVoice**        | 3.83                       | 1.72                | —                        | **0.80**       |
-| **Qwen3-TTS**        | 6.72                       | 2.89                | —                        | **2.84**       |
-| **Qwen3-TTS clone**  | 6.87                       | 2.99                | —                        | **3.07**       |
+| Model               | 4 vCPU of an i7-9750H, CPU | Ryzen 9 9955HX, CPU | RTX 5070 Ti Laptop, CUDA | GTX 1650, CUDA |
+| ------------------- | -------------------------- | ------------------- | ------------------------ | -------------- |
+| **Hojo 40M**        | 0.67                       | **0.28**            | 0.50                     | 0.31           |
+| **MOSS Nano**       | 1.06                       | **0.38**            | 0.58                     | 0.37           |
+| **Hojo 80M**        | 1.42                       | **0.70**            | not loadable             | not loadable   |
+| **OmniVoice**       | 3.83                       | 1.72                | —                        | **0.80**       |
+| **Qwen3-TTS**       | 6.72                       | 2.89                | —                        | **2.84**       |
+| **Qwen3-TTS clone** | 6.87                       | 2.99                | —                        | **3.07**       |
 
 The first column is two VMs on that one CPU — the Home Assistant OS VM for the
 first three rows, the VM beside it for the last three, which is the difference
@@ -274,7 +274,7 @@ cloning** carries the two encoders a reference needs and no speakers at all.
   (Beijing) and Eric (Sichuan), Ryan and Aiden (English), Ono_Anna (Japanese),
   Sohee (Korean) — or every uploaded reference on the cloning entry.
 - **It is the one model that takes a style instruction.** A plain-language
-  note beside the speaker — *speak slowly, in a warm tone* — carried as
+  note beside the speaker — _speak slowly, in a warm tone_ — carried as
   `instruct` on
   `/api/speak`, offered in the admin UI on this model alone, and reaching Home
   Assistant as a `tts.speak` option on its entity. The cloning checkpoint
@@ -288,7 +288,7 @@ cloning** carries the two encoders a reference needs and no speakers at all.
   upstream's recommendation, and a cloned voice in the one its reference
   declares; a request naming a `language` overrides either.
 - **How it clones**: an ECAPA speaker encoder turns the recording into one
-  x-vector, *and* the recording's codec frames join the prompt beside its
+  x-vector, _and_ the recording's codec frames join the prompt beside its
   transcript as a worked example. Both, unlike the 80M, which has only the
   first, and unlike MOSS, which has only the second.
 - **Sampling temperature** applies. Do not set it to 0: greedy decoding here
@@ -360,15 +360,15 @@ stutters to a halt near the end. [Keeping up](streaming.md) is about that.
 
 Putting both together:
 
-| You want                                 | Use                                                  | Because                                                                       |
-| ---------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Announcements, notifications, timers     | **Hojo 40M**                                         | Cheapest by a wide margin, and 15 voices without uploading anything           |
-| A voice assistant that answers questions | **Hojo 40M**, or **MOSS Nano** if you want the voice | The wait is what you feel; both are usable, MOSS costs 2 GB                   |
-| Japanese                                 | **MOSS Nano**                                        | The 40M and 80M speak Chinese and English only, MOSS adds Japanese            |
-| Korean, German, French, Russian, …       | **Qwen3-TTS**, on a fast machine                     | Ten languages against three, and it is the only one that reads most of them   |
-| One specific person's voice              | **MOSS Nano**                                        | Clones, and still has built-in voices to fall back on                         |
-| A voice nobody has recorded              | **OmniVoice**                                        | Sex, age, pitch, whisper, an accent or a dialect — no upload, no training     |
-| Long replies read aloud without stalling | whichever your host measures **under 0.5**           | Check `sensor.<model>_real_time_factor`, not the table                        |
+| You want                                 | Use                                                  | Because                                                                     |
+| ---------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------- |
+| Announcements, notifications, timers     | **Hojo 40M**                                         | Cheapest by a wide margin, and 15 voices without uploading anything         |
+| A voice assistant that answers questions | **Hojo 40M**, or **MOSS Nano** if you want the voice | The wait is what you feel; both are usable, MOSS costs 2 GB                 |
+| Japanese                                 | **MOSS Nano**                                        | The 40M and 80M speak Chinese and English only, MOSS adds Japanese          |
+| Korean, German, French, Russian, …       | **Qwen3-TTS**, on a fast machine                     | Ten languages against three, and it is the only one that reads most of them |
+| One specific person's voice              | **MOSS Nano**                                        | Clones, and still has built-in voices to fall back on                       |
+| A voice nobody has recorded              | **OmniVoice**                                        | Sex, age, pitch, whisper, an accent or a dialect — no upload, no training   |
+| Long replies read aloud without stalling | whichever your host measures **under 0.5**           | Check `sensor.<model>_real_time_factor`, not the table                      |
 
 The last two rows come with a bill. OmniVoice and Qwen3-TTS measured 3.83 and
 6.72 on the reference host, which is 7x and 12x the 40M — a nine-second answer

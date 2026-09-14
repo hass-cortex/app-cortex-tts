@@ -25,7 +25,7 @@ recording is still speaking when it ends". It is not fussiness. The models
 that clone best read the **whole** recording as a worked example before they
 say anything — Qwen3-TTS puts its codec frames in the prompt beside its
 transcript, OmniVoice has no speaker encoder at all — so a clip that stops
-mid-word teaches one thing above all: *that* is how this speaker finishes a
+mid-word teaches one thing above all: _that_ is how this speaker finishes a
 sentence. Nothing downstream can tell. The clone renders with no error, and
 what comes out drifts, trails off and clips its own endings.
 
@@ -56,7 +56,7 @@ clip matters depends on the model:
   cached. A clean five to ten seconds is a good start. OmniVoice asks for
   3–10 s and warns past 20; that is the band to aim at for both.
 - **Qwen3-TTS**: both at once, and the only model here that does. A speaker
-  encoder turns the recording into one 1024-value x-vector, *and* the whole
+  encoder turns the recording into one 1024-value x-vector, _and_ the whole
   recording joins the prompt as codec frames beside its transcript, as a
   worked example the model reads before the text it has to say. So the
   transcript matters more here than anywhere else, and length costs on every
@@ -69,12 +69,14 @@ stage could undo it. A clean, evenly loud recording is worth more than a long
 one.
 
 WAV, FLAC and OGG are accepted; the recording is stored as 16-bit PCM WAV at
-its original sample rate, downmixed to mono, under `/share/cortex-tts/references/`
-(`<id>.wav` plus a `references.json` index) — so it is in Home Assistant backups
-and reachable over the `share` Samba folder. Each model keeps its encoding of
-the recording beside it (`<id>.<fingerprint>.<model>.*`), so a model that was
-unloaded does not re-encode the reference when it comes back; these files are
-disposable and are recreated on demand.
+its original sample rate, downmixed to mono, as `<id>.wav` beside a
+`references.json` index. The Home Assistant app keeps them in
+`/share/cortex-tts/references/`, which is in its backups and reachable over the
+`share` Samba folder; a [standalone](standalone.md) install keeps them under
+`DATA_DIR/references` unless `REFERENCES_DIR` says otherwise. Each model keeps
+its encoding of the recording beside it (`<id>.<fingerprint>.<model>.*`), so a
+model that was unloaded does not re-encode the reference when it comes back;
+these files are disposable and are recreated on demand.
 
 ## The transcript
 
@@ -83,7 +85,9 @@ at all** — it still produces confident audio, just less like the person. If
 you do not have the text, any decent speech-to-text will do; correcting it
 afterwards costs nothing, because editing a transcript (`PATCH
 /api/references/{id}`, or the panel's **Save transcript**) does not re-upload
-the audio.
+the audio. The same request corrects the gender label (`female`, `male`,
+`unknown`), which the panel shows as a select beside the id; it is a label for
+the voice picker and nothing else reads it.
 
 What you type is the _raw transcript_; what the model is told is the same text
 after the [text pipeline](text-pipeline.md) has run over it, so it is in the

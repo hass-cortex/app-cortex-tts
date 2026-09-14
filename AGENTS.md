@@ -419,7 +419,8 @@ Download completion is the library's: `download.py` calls
 `notifications.notify_models_changed` and the app subscribes at startup. The
 three routes — reference add, reference delete, model delete — call
 `fire_models_changed` from the app directly. `PATCH /api/references/{id}` fires
-nothing: a corrected transcript changes no voice id. The split still matters
+it only when the gender label changed: a corrected transcript changes nothing
+the picker shows, a relabelled voice does. The split still matters
 where it exists: the library states a fact, the app decides that Home Assistant
 is who hears it.
 
