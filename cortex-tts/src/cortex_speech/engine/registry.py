@@ -10,8 +10,10 @@ per-token loop, so each engine serves one request at a time.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import time
+import weakref
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from functools import partial
@@ -151,22 +153,50 @@ class EngineRegistry:
         """Unload least-recently-used engines to make room for ``incoming_id``."""
         while len(self._slots) >= self._max_loaded:
             victim_id = min(self._slots, key=lambda k: self._slots[k].last_used)
-            victim = self._slots[victim_id]
-            # Never yank an engine out from under an in-flight request; wait
-            # for it to finish, which is bounded by one synthesis.
-            async with victim.lock:
-                self._slots.pop(victim_id, None)
+            await self._drop(victim_id)
             _LOGGER.info("unloaded %s to make room for %s", victim_id, incoming_id)
 
-    async def unload(self, model_id: str) -> bool:
-        """Drop a model from memory. Returns whether it was loaded."""
+    async def _drop(self, model_id: str) -> bool:
+        """Remove a model from the resident set and release what it held.
+
+        Callers hold `_load_lock`; `unload` is the entry point that does not.
+
+        Losing the last name for an engine is where a card's memory is meant
+        to come back, so this checks rather than assumes. A reference cycle
+        keeps an ONNX Runtime session — and its arena — alive past the drop,
+        and only the collector breaks one; a weakref says which case this is.
+        An engine still alive after a collection is a leak worth a line in the
+        log, because the next model has to fit underneath it.
+        """
         slot = self._slots.get(model_id)
         if slot is None:
             return False
+        # Never yank an engine out from under an in-flight request; wait for
+        # it to finish, which is bounded by one synthesis.
         async with slot.lock:
             self._slots.pop(model_id, None)
-        _LOGGER.info("unloaded %s", model_id)
+        engine = weakref.ref(slot.engine)
+        del slot
+        if engine() is not None:
+            await asyncio.to_thread(gc.collect)
+            if engine() is not None:
+                _LOGGER.warning(
+                    "%s outlived its slot; its sessions are still resident",
+                    model_id,
+                )
         return True
+
+    async def unload(self, model_id: str) -> bool:
+        """Drop a model from memory. Returns whether it was loaded.
+
+        Takes the load lock so a build already in flight cannot insert the
+        engine this was asked to remove after it has looked.
+        """
+        async with self._load_lock:
+            dropped = await self._drop(model_id)
+        if dropped:
+            _LOGGER.info("unloaded %s", model_id)
+        return dropped
 
     async def voices(self, model_id: str) -> list[Voice]:
         """Return the voices a model offers, loading nothing.
@@ -320,11 +350,11 @@ class EngineRegistry:
         dropped = False
         if rebuild:
             for model_id in list(self._slots):
-                dropped |= await self.unload(model_id)
+                dropped |= await self._drop(model_id)
             return dropped
         while len(self._slots) > self._max_loaded:
             victim_id = min(self._slots, key=lambda k: self._slots[k].last_used)
-            dropped |= await self.unload(victim_id)
+            dropped |= await self._drop(victim_id)
         return dropped
 
     @property

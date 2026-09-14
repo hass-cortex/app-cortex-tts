@@ -69,7 +69,19 @@ uv pip install --python .venv/bin/python "onnxruntime-gpu==1.26.0" \
 ```
 
 The wheels ship the CUDA and cuDNN libraries and the app loads them before
-creating a session, so only the driver has to be on the host. A driver too old
+creating a session, so only the driver has to be on the host.
+
+**A small card needs the arena kept honest.** ONNX Runtime's CUDA allocator
+defaults to `kNextPowerOfTwo`, which rounds every allocation up and then holds
+it for the life of the process — so a model unloaded is not memory returned,
+and the next model finds the card already full. `providers.CUDA_OPTIONS` asks
+for `kSameAsRequested` instead. Measured on a 4 GB GTX 1650: Qwen3-TTS cloning
+fell from 3222 MiB to 1626, a model's residue after unloading from ~750 MiB to
+~100, and the sequence that used to end in `CUBLAS failure 3: the resource
+allocation failed` — any model, then the cloning checkpoint — now completes.
+RTF was unchanged (2.82 against 2.78). The four vendored runtimes build their
+own provider lists and are left as upstream wrote them; only the two files
+this project owns pass the option. A driver too old
 for the wheel's CUDA is the usual failure; the app reports it as
 `PROVIDER_UNAVAILABLE` rather than silently landing on the CPU, and `/health`
 shows what each loaded model actually got beside what was asked for.

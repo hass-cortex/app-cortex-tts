@@ -29,6 +29,8 @@ from typing import Any
 
 import numpy as np
 
+from ..providers import CUDA_OPTIONS
+
 SAMPLE_RATE = 24000
 
 # The codec decoder is exported at a fixed length: 25 frames in, 2 seconds of
@@ -153,7 +155,7 @@ class Qwen3TtsOnnx:
         if num_threads > 0:
             options.intra_op_num_threads = num_threads
         providers = (
-            ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            [("CUDAExecutionProvider", CUDA_OPTIONS), "CPUExecutionProvider"]
             if execution_provider == "cuda"
             else ["CPUExecutionProvider"]
         )

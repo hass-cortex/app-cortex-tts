@@ -28,6 +28,15 @@ insists: it fails rather than fall back. `cpu` never looks.
 EXECUTION_PROVIDERS: tuple[ExecutionProvider, ...] = ("auto", "cpu", "cuda")
 
 _CUDA = "CUDAExecutionProvider"
+
+# What to hand CUDA beside the provider name. `kNextPowerOfTwo` is ONNX
+# Runtime's default: it rounds every allocation up, so the arena ends up
+# holding roughly twice what the sessions asked for and keeps it for the life
+# of the process. Measured on a 4 GB GTX 1650, Qwen3-TTS cloning fell from
+# 3222 MiB to 1626 and a model's residue after unloading from ~750 MiB to
+# ~100 — which is the difference between "cannot load this model after any
+# other" and "switch freely". No measurable cost: RTF 2.82 against 2.78.
+CUDA_OPTIONS = {"arena_extend_strategy": "kSameAsRequested"}
 _CUDA_PRELOADED = False
 
 

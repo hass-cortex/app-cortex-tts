@@ -24,12 +24,13 @@ pipeline whole.
 
 from __future__ import annotations
 
-import types
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+
+from ..providers import CUDA_OPTIONS
 
 
 def _cpu_omnivoice() -> type:
@@ -60,13 +61,18 @@ def _onnx_forward(session: Any) -> Any:
     while the pipeline builds a 4-D block mask — so the real-token mask is
     recovered from the block mask's rows: a key position is real when its row
     attends to more than itself.
+
+    Takes no `self`, and is assigned to the instance as a plain function rather
+    than bound with `types.MethodType`. A bound method stored on its own
+    `__self__` is a reference cycle, and this closure holds the ONNX session,
+    so the model's GPU arena would outlive the last name for it and wait for
+    the collector — 618 MiB, on a card that has 4096.
     """
     from .omnivoice.modeling import OmniVoiceModelOutput
 
     accepted = {spec.name for spec in session.get_inputs()}
 
     def forward(
-        _self: Any,
         input_ids: torch.Tensor,
         audio_mask: torch.Tensor,
         labels: Any = None,
@@ -154,10 +160,10 @@ def load(
     if num_threads > 0:
         options.intra_op_num_threads = num_threads
     providers = (
-        ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        [("CUDAExecutionProvider", CUDA_OPTIONS), "CPUExecutionProvider"]
         if execution_provider == "cuda"
         else ["CPUExecutionProvider"]
     )
     session = ort.InferenceSession(str(directory / onnx_model), options, providers)
-    model.forward = types.MethodType(_onnx_forward(session), model)
+    model.forward = _onnx_forward(session)
     return model, session
