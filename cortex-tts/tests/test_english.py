@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from cortex_speech.text import english
+from cortex_speech.text import en as english
+from cortex_speech.text.options import NormalizeOptions
 from cortex_speech.text.pipeline import TextOptions, prepare
+
+# The number passes are exercised with bare numbers on: the default leaves
+# them as digits, and that default has its own tests.
+NUMBERS = NormalizeOptions(expand_numbers=True)
+WITH_NUMBERS = TextOptions(normalize_options=NUMBERS)
 
 
 class TestCardinal:
@@ -45,11 +51,11 @@ class TestNormalize:
         ],
     )
     def test_constructs(self, raw: str, expected: str) -> None:
-        assert english.normalize(raw) == expected
+        assert english.normalize(raw, NUMBERS) == expected
 
     @pytest.mark.parametrize("dash", ["-", "~", "\u2013", "\u2014"])
     def test_a_dash_between_numbers_is_a_range(self, dash: str) -> None:
-        assert english.normalize(f"48 {dash} 72 hours") == (
+        assert english.normalize(f"48 {dash} 72 hours", NUMBERS) == (
             "forty-eight to seventy-two hours"
         )
 
@@ -63,7 +69,7 @@ class TestNormalize:
     def test_a_number_ending_a_sentence_still_expands(
         self, raw: str, expected: str
     ) -> None:
-        assert english.normalize(raw) == expected
+        assert english.normalize(raw, NUMBERS) == expected
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
@@ -79,29 +85,35 @@ class TestNormalize:
     def test_a_digit_welded_to_a_letter_is_still_spoken(
         self, raw: str, expected: str
     ) -> None:
-        assert english.normalize(raw) == expected
+        assert english.normalize(raw, NUMBERS) == expected
 
 
 class TestPipelineChoosesByScript:
     def test_latin_text_is_normalised_into_english(self) -> None:
         assert prepare(
-            "It usually takes 48 - 72 hours", TextOptions(convert_script=False)
+            "It usually takes 48 - 72 hours",
+            TextOptions(convert_script=False, normalize_options=NUMBERS),
         ) == ["It usually takes forty-eight to seventy-two hours."]
 
     def test_chinese_text_still_gets_the_chinese_normaliser(self) -> None:
-        assert prepare("室外溫度 25-30 度") == ["室外温度二十五到三十度。"]
+        assert prepare("室外溫度 25-30 度", WITH_NUMBERS) == [
+            "室外温度二十五到三十度。"
+        ]
 
     def test_one_chinese_word_does_not_make_a_sentence_chinese(self) -> None:
         assert prepare(
-            "Turn on 3 lights in the 客廳", TextOptions(convert_script=False)
+            "Turn on 3 lights in the 客廳",
+            TextOptions(convert_script=False, normalize_options=NUMBERS),
         ) == ["Turn on three lights in the 客廳."]
 
     def test_a_latin_acronym_does_not_make_a_sentence_english(self) -> None:
-        assert prepare("目前 CPU 使用率 42%") == ["目前 CPU 使用率百分之四十二。"]
+        assert prepare("目前 CPU 使用率 42%", WITH_NUMBERS) == [
+            "目前 CPU 使用率百分之四十二。"
+        ]
 
     def test_a_short_acronym_does_not_outvote_three_chinese_words(self) -> None:
         # Counting letters made this a 3-3 tie and picked the ASCII stop.
-        assert prepare("請檢查 CPU") == ["请检查 CPU。"]
+        assert prepare("請檢查 CPU", WITH_NUMBERS) == ["请检查 CPU。"]
 
 
 class TestRangesAndSeparators:
@@ -116,4 +128,4 @@ class TestRangesAndSeparators:
         ],
     )
     def test_reading(self, raw: str, expected: str) -> None:
-        assert english.normalize(raw) == expected
+        assert english.normalize(raw, NUMBERS) == expected

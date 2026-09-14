@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import re
 
-from . import passes
-from .options import DEFAULT_OPTIONS, NormalizeOptions
-from .passes import Pass
+from .. import passes
+from ..options import DEFAULT_OPTIONS, NormalizeOptions
+from ..passes import Pass
 
 _ONES = (
     "zero",
@@ -230,9 +230,9 @@ _PASSES: tuple[Pass, ...] = (
     Pass(passes.TEMPERATURE, _temperature, "expand_units"),
     Pass(passes.DEGREE, _degree, "expand_units"),
     Pass(passes.VERSION, _version),
-    Pass(passes.RANGE, _range),
-    Pass(_STANDALONE, _number),
-    Pass(_WELDED, _welded),
+    Pass(passes.RANGE, _range, "expand_numbers"),
+    Pass(_STANDALONE, _number, "expand_numbers"),
+    Pass(_WELDED, _welded, "expand_numbers"),
 )
 
 

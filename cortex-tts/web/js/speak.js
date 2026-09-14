@@ -1,9 +1,10 @@
 // Synthesis: hand the composer's text to the model and play what comes back.
 
 import { call } from "./api.js";
-import { $, msg, pressed } from "./dom.js";
+import { $, msg } from "./dom.js";
 import { play, showStats } from "./player.js";
 import { delivery, hasVoice, refreshModels } from "./models.js";
+import { switches } from "./preview.js";
 
 let inFlight = false;
 
@@ -24,8 +25,7 @@ async function speak() {
         text: $("text").value,
         model: $("model").value,
         voice: $("voice").value,
-        normalize_text: pressed($("norm")),
-        convert_script: pressed($("conv")),
+        ...switches(),
         ...delivery(),
       }),
     });

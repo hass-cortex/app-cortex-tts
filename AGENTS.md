@@ -5,10 +5,16 @@ ingress admin UI. Which models it offers is `catalog.py`, and the README's
 **Models** table is the copy written for people; both are edited in one place
 when the line-up changes, which is the point.
 
-The models ship no text front-end, so the app carries one: Traditional-to-Simplified
-glyph conversion and numeral/unit/date normalisation. That pipeline is the
-product, not a detail (32% character error rate against 4%; see
-[`docs/text-pipeline.md`](cortex-tts/docs/text-pipeline.md)).
+The models ship no text front-end, so the app carries one: numeral/unit/date
+normalisation, and for Chinese also Traditional-to-Simplified glyph conversion
+and Taiwan readings by homophone (垃圾 → 乐色, from a generated table — no
+model reads a pinyin hint reliably). That pipeline is the product, not a
+detail (32% character error rate against 4%; see
+[`docs/text-pipeline.md`](cortex-tts/docs/text-pipeline.md)). It is built to
+take languages the way the catalog takes engines: a language is a locale
+added beside the others, and a rewrite only one language needs lives with that
+locale — never a branch in the pipeline or a global switch in the API, the UI
+or the integration.
 
 The outer directory is the HA app shell + repo metadata; the inner `cortex-tts/`
 subdir is the Python backend, the static admin UI, the Dockerfile and the
@@ -100,12 +106,13 @@ src/cortex_tts/       ── THE HOME ASSISTANT APP ──
 src/cortex_speech/    ── THE SPEECH LIBRARY ──
 ├── __init__.py       SpeechService, SpeechConfig — the whole public surface
 ├── text/             ── THE TEXT PATH ──
-│   ├── pipeline.py   prepare(): normalise → convert → segment
-│   ├── passes.py     the ordered pass table both normalisers are built from
-│   ├── normalize.py  Chinese readings
-│   ├── english.py    Latin readings
-│   ├── numbers.py    Chinese numeral rendering
-│   └── options.py    NormalizeOptions, shared so neither normaliser imports the other
+│   ├── pipeline.py   plan()/prepare(): language → locale → normalise → rewrites → segment
+│   ├── locales.py    Locale and Rewrite: what a language is to the pipeline; the registry
+│   ├── generic.py    the locale any unwritten language gets: num2words + CLDR units and dates
+│   ├── passes.py     the ordered pass table the written normalisers are built from
+│   ├── options.py    NormalizeOptions, shared so no normaliser imports another
+│   ├── zh/           Chinese: normalize.py, numbers.py, script.py (t2s), readings.py + taiwan_readings.tsv
+│   └── en/           English: normalize.py
 ├── engine/
 │   ├── base.py       the Engine and StreamingEngine protocols, Voice, errors
 │   ├── backends.py   backend key → builder; how a new engine is added
@@ -146,10 +153,26 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   bundles arrive on first download into `/data/models`, so HA's "remove with
   data" sweeps them up. A failed download leaves partials in place —
   `catalog.inspect` reports not-downloaded and a retry resumes.
+- **The text pipeline is keyed by language, not sniffed from script.** A
+  request's `language` tag picks the locale — its normaliser, and any
+  rewrite that language needs (script conversion and Taiwan readings exist
+  only under `zh`) — and sniffing the text is the fallback for a request that
+  carries no tag. A language the pipeline has no locale for still gets numbers
+  read (`num2words`) and a sentence-final stop, never another language's
+  words.
+- **A pass that can misjudge is opt-in.** Script conversion and Taiwan
+  readings cannot read a word wrong, and a number with a unit, a clock colon
+  or a date around it says what it is; those run by default. A bare number
+  does not say what it is — `撥打 110`, `302號房`, `RTX 4090`, `John 3:16`
+  were all read as quantities — so `expand_numbers` is off unless the caller
+  says otherwise, in every locale. A rule that guesses is not a fix for what
+  a model cannot read: wrong misleads, unread merely goes unheard, and the
+  place to say what a number is remains the caller that knows.
 - **Pass order is a contract.** Normalisation emits Traditional number words,
-  so it must precede script conversion. Within a normaliser, a construct claims
+  so it must precede script conversion, and Taiwan readings are keyed by the
+  Simplified form so they run last. Within a normaliser, a construct claims
   its number before the bare-number pass reads that digit as a quantity.
-  `text/passes.py` owns the order; each script only supplies readings.
+  `text/passes.py` owns the order; each locale only supplies readings.
 - **Every segment ends in sentence-final punctuation.** Without it the model
   misses its cue to stop and invents a syllable.
 - **A model's lifecycle is legible from the log alone.** The registry logs
@@ -428,8 +451,8 @@ is who hears it.
 
 ### Add a unit to the normaliser
 
-`SUFFIX_UNITS` in `text/normalize.py`. The alternation is built longest-first
-so `km/h` is matched before `km`; nothing else needs to change.
+`SUFFIX_UNITS` in `text/zh/normalize.py`. The alternation is built
+longest-first so `km/h` is matched before `km`; nothing else needs to change.
 
 ### Add an engine
 
@@ -442,7 +465,11 @@ Four declarations, across two files:
    call so a heavy backend costs nothing until it is used.
 3. A voice-reader closure there too, when there is one.
 4. `backends.register("your-key", builder, voices=…)`, plus a `ModelSpec` in
-   `catalog.py` naming that backend with the capabilities it actually has.
+   `catalog.py` naming that backend with the capabilities it actually has —
+   including what it does to the text path: `reads_numerals` lets the
+   generic locale stand aside for a model that reads digits itself, and it
+   is declared only after measuring (every model so far, Qwen3-TTS included,
+   read German and Japanese digits as noise on the sentences tried).
 
 Then a `[project.optional-dependencies]` extra and a `--extra` in the
 Dockerfile if the backend needs its own dependencies.
@@ -457,6 +484,17 @@ provider and chunk-streaming contracts without being added to a list.
 be right for any combination of them, but the prose around it — what the
 clones panel says, what the model cards claim about memory — is written by
 hand and has been wrong for a new engine before.
+
+### Add a language
+
+A locale, never a branch: a package beside `text/zh/` and `text/en/` whose
+`LOCALE` names its normaliser, its sentence-final stop and the rewrites only
+it needs, registered in `text/pipeline.py`. Until it exists the language gets
+`text/generic.py` — numbers from `num2words`, nothing else touched — so a
+locale is only worth writing when a language needs more than that. A rewrite
+only that language needs (a script conversion, a readings table) lives with
+the locale and is absent — not switched off — everywhere else: `/api/preview`
+lists only the switches the language has, and the UI's chips follow.
 
 ### Add a pass
 

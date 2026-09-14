@@ -88,6 +88,9 @@ class ModelOut(BaseModel):
     """Whether a request may name the language. False where the voice decides."""
     style_instruction: bool
     """Whether a request may carry a free-text instruction beside the voice."""
+    reads_numerals: bool
+    """Whether the model reads digits itself where the pipeline has no locale
+    written for the language; the generic number expansion then stands aside."""
     languages: list[str]
     sample_rate: int
     size_mb: int
@@ -128,19 +131,25 @@ class SpeakRequest(BaseModel):
     `/api/speak/stream` to mp3, because a stream has to be writable
     without knowing how long the audio will be."""
     normalize_text: bool = True
-    convert_script: bool = True
+    expand_numbers: bool = False
+    """Read a bare number — no unit, clock or date around it — as a quantity.
+    Off unless asked: a bare number is as often a phone number, a room or a
+    model as a count, and a wrong reading misleads."""
+    convert_script: bool | None = None
+    """Chinese only. Left out, the pipeline decides from the language."""
+    taiwan_readings: bool | None = None
+    """Chinese only. Left out, on for `zh-TW` and `zh-Hant`, off otherwise."""
     normalize_level: bool = True
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     language: str | None = Field(default=None, max_length=32)
     """Which language to read the text as: a whole tag, `zh-TW` or `zh`.
 
-    Sent whole rather than reduced by the caller, because how much of it means
-    anything is the model's to say — one of these names two Chinese dialects,
-    another names 646 languages including several narrower than `zh`. The
-    engine tries the tag, then its shorter forms.
-
-    Only models declaring `language_choice`; the rest are told the voice
-    decides, rather than accepting it and doing nothing with it."""
+    It picks the text pipeline's locale on every model — which words numbers
+    become, and which rewrites run. On a model declaring `language_choice` it
+    is also what the model is told to read the text as, sent whole rather than
+    reduced, because how much of a tag means anything is the model's to say:
+    one names two Chinese dialects, another 646 languages. Left out, the
+    voice's language is used, and failing that the text is sniffed."""
     instruct: str | None = Field(default=None, max_length=200)
     """A free-text instruction beside the voice: "speak slowly, in a warm tone".
 
@@ -210,16 +219,38 @@ class PreviewRequest(BaseModel):
     """Dry-run of the text path, with no synthesis."""
 
     text: str = Field(min_length=1, max_length=4000)
+    model: str | None = None
+    """The model the text is meant for, as on `/api/speak`: one that reads
+    digits itself changes what is prepared for a language without a locale.
+    Left out, the default model's answer."""
+    language: str | None = Field(default=None, max_length=32)
+    """The language of the text, as on `/api/speak`; sniffed when left out."""
     normalize_text: bool = True
-    convert_script: bool = True
+    expand_numbers: bool = False
+    convert_script: bool | None = None
+    taiwan_readings: bool | None = None
+
+
+class Reading(BaseModel):
+    """One word rewritten for its Taiwan reading."""
+
+    word: str
+    standin: str
 
 
 class PreviewResponse(BaseModel):
-    """What the model would actually be asked to say."""
+    """What the model would actually be asked to say, and why."""
 
     original: str
     prepared: str
     segments: list[str]
+    language: str
+    """The tag the text was read as — the request's, or sniffed."""
+    passes: dict[str, bool]
+    """Every switch this language has, and whether it ran: `normalize_text`
+    always, `convert_script` and `taiwan_readings` on Chinese only."""
+    readings: list[Reading]
+    """The Taiwan-reading rewrites, in text order; empty when the pass is off."""
 
 
 class ErrorResponse(BaseModel):

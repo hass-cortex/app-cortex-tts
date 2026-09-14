@@ -13,7 +13,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import partial
 from typing import NamedTuple
 
@@ -32,6 +32,7 @@ from cortex_speech import (
     ModelNotReadyError,
     ModelSpec,
     NoAudioError,
+    NormalizeOptions,
     OutOfMemoryError,
     ProviderUnavailableError,
     Reference,
@@ -41,10 +42,16 @@ from cortex_speech import (
     UnknownModelError,
     UnknownVoiceError,
     UnsupportedLanguageError,
+    Voice,
     encode,
     estimated_audio_seconds,
+    plan,
     prepare,
     prepared_text,
+    resolve_language,
+    run,
+    segment,
+    taiwan_readings,
 )
 
 from ..events import fire_models_changed
@@ -60,6 +67,7 @@ from .schemas import (
     OpenAISpeechRequest,
     PreviewRequest,
     PreviewResponse,
+    Reading,
     ReferenceOut,
     ReferenceUpdate,
     SettingsOut,
@@ -206,6 +214,7 @@ def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
         temperature=spec.temperature,
         language_choice=spec.language_choice,
         style_instruction=spec.style_instruction,
+        reads_numerals=spec.reads_numerals,
         languages=list(spec.languages),
         sample_rate=spec.sample_rate,
         size_mb=spec.size_mb,
@@ -350,14 +359,39 @@ async def list_voices(
 
 
 @api.post("/preview", response_model=PreviewResponse)
-async def preview_text(body: PreviewRequest) -> PreviewResponse:
+async def preview_text(
+    body: PreviewRequest, state: AppState = Depends(get_state)
+) -> PreviewResponse:
     """Show what the text pipeline would hand the model, without synthesising."""
-    options = TextOptions(
-        normalize_text=body.normalize_text, convert_script=body.convert_script
+    spec = _spec_or_404(state, body.model or state.preferences.default_model)
+    options = _text_options(
+        body.normalize_text,
+        body.expand_numbers,
+        body.convert_script,
+        body.taiwan_readings,
     )
-    segments = prepare(body.text, options)
+    text = body.text.strip()
+    decided = plan(text, options, body.language, reads_numerals=spec.reads_numerals)
+    prepared = run(text, decided, options.normalize_options)
+    segments = segment(prepared, stop=decided.locale.stop)
+    readings: list[Reading] = []
+    if decided.rewrites.get("taiwan_readings"):
+        # The rewrites are read off the text the pass saw, not diffed back out
+        # of the result — a stand-in is one glyph for one glyph, so a diff
+        # could not tell two adjacent rewrites apart.
+        before = run(
+            text,
+            replace(decided, rewrites={**decided.rewrites, "taiwan_readings": False}),
+            options.normalize_options,
+        )
+        readings = [Reading(word=w, standin=s) for w, s in taiwan_readings(before)]
     return PreviewResponse(
-        original=body.text, prepared=prepared_text(segments), segments=segments
+        original=body.text,
+        prepared=prepared_text(segments),
+        segments=segments,
+        language=decided.language,
+        passes=decided.passes,
+        readings=readings,
     )
 
 
@@ -366,12 +400,30 @@ async def preview_text(body: PreviewRequest) -> PreviewResponse:
 # ---------------------------------------------------------------------------
 
 
+def _text_options(
+    normalize_text: bool,
+    expand_numbers: bool,
+    convert_script: bool | None,
+    taiwan_readings: bool | None,
+) -> TextOptions:
+    """The request's text switches as the pipeline takes them."""
+    return TextOptions(
+        normalize_text=normalize_text,
+        convert_script=convert_script,
+        taiwan_readings=taiwan_readings,
+        normalize_options=NormalizeOptions(expand_numbers=expand_numbers),
+    )
+
+
 class _Resolved(NamedTuple):
     """What both synthesis endpoints need before they can differ."""
 
     spec: ModelSpec
     segments: list[str]
     voice_id: str
+    delivery: Delivery
+    """What the engine is told — the request's, with the language it may not
+    take removed and the one the text was read as filled in where it may."""
 
     @property
     def model_id(self) -> str:
@@ -421,7 +473,9 @@ async def _resolve(
     model: str | None,
     voice: str | None,
     normalize_text: bool,
-    convert_script: bool,
+    expand_numbers: bool,
+    convert_script: bool | None,
+    taiwan_readings: bool | None,
     delivery: Delivery = Delivery(),
 ) -> _Resolved:
     """Turn a request into everything a synthesis needs, or raise.
@@ -443,13 +497,6 @@ async def _resolve(
             "NO_TEMPERATURE",
             f"{spec.name} has no sampling temperature to set",
         )
-    if delivery.language and not spec.language_choice:
-        raise _http(
-            http_status.HTTP_400_BAD_REQUEST,
-            "NO_LANGUAGE_CHOICE",
-            f"{spec.name} takes no language; its voice decides which one it "
-            "reads, so pick the voice instead",
-        )
     if delivery.instruct and not spec.style_instruction:
         raise _http(
             http_status.HTTP_400_BAD_REQUEST,
@@ -457,9 +504,14 @@ async def _resolve(
             f"{spec.name} takes no style instruction",
         )
 
+    options = _text_options(
+        normalize_text, expand_numbers, convert_script, taiwan_readings
+    )
+    # Whether there is anything to say does not depend on the voice, so it is
+    # answered first — before a model with no voices, or one not downloaded,
+    # gets to answer instead.
     segments = prepare(
-        text,
-        TextOptions(normalize_text=normalize_text, convert_script=convert_script),
+        text, options, delivery.language, reads_numerals=spec.reads_numerals
     )
     if not segments:
         raise _http(
@@ -468,11 +520,13 @@ async def _resolve(
             "nothing to say once punctuation was stripped",
         )
 
-    # Resolving the default voice reads the bundle off disk, so a model that
-    # is not downloaded fails here, the same way a synthesis would.
+    # The language the text is read in falls back to the voice's when the
+    # request names none, so the voice is resolved before the text is
+    # prepared for real. Listing the voices reads the bundle off disk, so a
+    # model that is not downloaded fails here, the same way a synthesis would.
     with _engine_errors():
-        voice_id = voice or await _default_voice(state, model_id)
-
+        voices = await state.registry.voices(model_id)
+    voice_id = voice or _default_voice(state, voices)
     if voice_id is None:
         raise _http(
             http_status.HTTP_409_CONFLICT,
@@ -485,20 +539,27 @@ async def _resolve(
     # first frame has gone out — the caller then gets a 200, a header with
     # nothing behind it and no error at all. Voice ids are case-sensitive, so `yuewen`
     # for `Yuewen` is the easy way to hit that.
-    if voice:
-        with _engine_errors():
-            known = {v.id for v in await state.registry.voices(model_id)}
-        if voice not in known:
-            match = next((v for v in known if v.lower() == voice.lower()), None)
-            hint = f"; did you mean {match!r}?" if match else ""
-            raise _http(
-                http_status.HTTP_404_NOT_FOUND,
-                "UNKNOWN_VOICE",
-                f"{spec.name} has no voice {voice!r}{hint}",
-            )
+    chosen = next((v for v in voices if v.id == voice_id), None)
+    if chosen is None:
+        match = next((v.id for v in voices if v.id.lower() == voice_id.lower()), None)
+        hint = f"; did you mean {match!r}?" if match else ""
+        raise _http(
+            http_status.HTTP_404_NOT_FOUND,
+            "UNKNOWN_VOICE",
+            f"{spec.name} has no voice {voice_id!r}{hint}",
+        )
 
+    language = delivery.language or chosen.language
+    if language != delivery.language:
+        segments = prepare(text, options, language, reads_numerals=spec.reads_numerals)
+
+    # The engine is told the language only where the catalog says it takes
+    # one; elsewhere the voice decides, and the tag has done its work in the
+    # pipeline. A sniffed tag is passed on too: what the pipeline read the
+    # text as is what the model should read it as.
+    told = resolve_language(text, language) if spec.language_choice else None
     _guard_render_length(state, spec, segments, voice_id)
-    return _Resolved(spec, segments, voice_id)
+    return _Resolved(spec, segments, voice_id, replace(delivery, language=told))
 
 
 async def _synthesize(
@@ -509,17 +570,21 @@ async def _synthesize(
     voice: str | None,
     fmt: AudioFormat,
     normalize_text: bool = True,
-    convert_script: bool = True,
+    expand_numbers: bool = False,
+    convert_script: bool | None = None,
+    taiwan_readings: bool | None = None,
     normalize_level: bool = True,
     delivery: Delivery = Delivery(),
 ) -> tuple[bytes, SpeakStats]:
-    spec, segments, voice_id = await _resolve(
+    spec, segments, voice_id, delivery = await _resolve(
         state,
         text=text,
         model=model,
         voice=voice,
         normalize_text=normalize_text,
+        expand_numbers=expand_numbers,
         convert_script=convert_script,
+        taiwan_readings=taiwan_readings,
         delivery=delivery,
     )
 
@@ -589,7 +654,9 @@ async def speak(body: SpeakRequest, state: AppState = Depends(get_state)) -> Res
         voice=body.voice,
         fmt=body.format or "wav",
         normalize_text=body.normalize_text,
+        expand_numbers=body.expand_numbers,
         convert_script=body.convert_script,
+        taiwan_readings=body.taiwan_readings,
         normalize_level=body.normalize_level,
         delivery=body.delivery(),
     )
@@ -645,13 +712,15 @@ async def speak_stream(
         )
     encoder = build()
 
-    spec, segments, voice_id = await _resolve(
+    spec, segments, voice_id, delivery = await _resolve(
         state,
         text=body.text,
         model=body.model,
         voice=body.voice,
         normalize_text=body.normalize_text,
+        expand_numbers=body.expand_numbers,
         convert_script=body.convert_script,
+        taiwan_readings=body.taiwan_readings,
         delivery=body.delivery(),
     )
 
@@ -667,7 +736,7 @@ async def speak_stream(
         started = time.perf_counter()
         yield encoder.open(spec.sample_rate)
         async for chunk in state.registry.synthesize_stream(
-            spec.id, segments, voice_id, body.delivery()
+            spec.id, segments, voice_id, delivery
         ):
             samples += len(chunk)
             yield encoder.encode(gain.frames(chunk))
@@ -919,14 +988,13 @@ def _spec_or_404(state: AppState, model_id: str):
         ) from err
 
 
-async def _default_voice(state: AppState, model_id: str) -> str | None:
+def _default_voice(state: AppState, voices: list[Voice]) -> str | None:
     """Pick a voice when the request named none.
 
     The configured default wins when the model actually offers it; otherwise
     the first available voice is used, which is what makes a freshly-uploaded
     cloning reference work without also configuring it as the default.
     """
-    voices = await state.registry.voices(model_id)
     if not voices:
         return None
     ids = {v.id for v in voices}

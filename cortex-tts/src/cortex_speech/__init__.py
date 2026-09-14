@@ -73,7 +73,18 @@ from .references import (
 # this list, so it leaves by it.
 from .store import write_json
 from .text.options import NormalizeOptions
-from .text.pipeline import TextOptions, prepare, prepared_text
+from .text.pipeline import (
+    TextOptions,
+    TextPlan,
+    plan,
+    prepare,
+    prepare_text,
+    prepared_text,
+    resolve_language,
+    run,
+    segment,
+)
+from .text.zh import taiwan_readings
 
 __all__ = [
     # audio encoding
@@ -108,8 +119,13 @@ __all__ = [
     "NormalizeOptions",
     "notify_models_changed",
     "OutOfMemoryError",
+    "plan",
     "prepare",
+    "prepare_text",
     "prepared_text",
+    "resolve_language",
+    "run",
+    "segment",
     "ProviderUnavailableError",
     "Reference",
     "ReferenceError",
@@ -122,6 +138,8 @@ __all__ = [
     "subscribe_models_changed",
     "Synthesis",
     "TextOptions",
+    "TextPlan",
+    "taiwan_readings",
     "UnknownModelError",
     "UnknownVoiceError",
     "UnsupportedLanguageError",

@@ -64,10 +64,11 @@ model becomes its own TTS entity (`tts.hojo_tts_light_40m`,
 [![Open your Home Assistant instance and manage your voice assistants.][va-badge]][va]
 
 Pick (or create) a pipeline → **Text-to-speech** → choose the Cortex TTS entity,
-then the voice. On most models the voice is what picks the language — a
-Chinese voice is the only thing that makes them read Chinese. Qwen3-TTS and
-OmniVoice take a language of their own, and there the pipeline's language is
-sent with every reply, so the speaker is a timbre rather than a language.
+then the voice. The pipeline's language is sent with every reply and decides
+how the text is prepared. On most models the voice is what picks the language
+the model speaks — a Chinese voice is the only thing that makes them read
+Chinese. Qwen3-TTS and OmniVoice take the language themselves, so there the
+speaker is a timbre rather than a language.
 
 How to call it from `tts.speak`, find a voice id, and choose a speaking mode
 per model is the [integration's documentation][integration]. Uploading a
@@ -219,10 +220,22 @@ language is Chinese; a `tts.speak` call can override it under `options:`, and
 that is the only place it can be off. Compare **What the model is asked to
 say** against what you hear.
 
-**Numbers are read as gibberish.** Same check for `normalize_text`, which the
-integration turns on for every language. If the text reaches the app already
-containing an unusual unit, it will pass through unexpanded; the unit table is
-fixed, so an unusual unit needs a code change.
+**A word is read the mainland way (垃圾 as lā jī).** The app respells such
+words with homophones so any model reads them the Taiwan way, and lists each
+one as a `reading` row under **What the model is asked to say**. If the word
+has no row, it is not in the table — the table is generated from a dictionary,
+and a word missing from it needs a code change, not a setting. If you wanted
+the mainland reading, turn `taiwan_readings` off under `options:`.
+
+**Numbers are read as gibberish, or not at all.** A number with a unit, a
+percent sign, a clock colon or a date around it is expanded whenever
+`normalize_text` is on, which the integration keeps on for every language. A
+number with nothing around it is left as digits on purpose — it is as often a
+room, a phone number or a model as a count, and read as a count it would
+mislead — so it goes unread on a model that cannot read digits; a call that
+knows its numbers are counts sets `expand_numbers: true` under `options:`,
+and a template that formats a sensor should write the unit. An unusual unit
+passes through unexpanded; the unit table is fixed, so it needs a code change.
 
 **The voice adds a syllable that is not in the text.** The model stops only
 when it samples an end-of-speech token, so stopping is probabilistic. Set

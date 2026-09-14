@@ -153,9 +153,16 @@ FACADE = {
     "DownloadProgress",
     # text path, which the API exposes directly as /api/preview
     "TextOptions",
+    "TextPlan",
     "NormalizeOptions",
+    "plan",
     "prepare",
+    "prepare_text",
     "prepared_text",
+    "resolve_language",
+    "run",
+    "segment",
+    "taiwan_readings",
     # audio encoding for the HTTP layer
     "AudioFormat",
     "CONTENT_TYPES",

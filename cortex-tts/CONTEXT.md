@@ -19,9 +19,10 @@ models read glyphs, so whatever this produces is what gets spoken.
 _Avoid_: "preprocessing", "cleanup" (both suggest something optional)
 
 **Normalisation**:
-Expanding numerals, units, dates and clock literals into words — `26.5°C` into
-攝氏二十六點五度, `80` into "eighty". Which language the words come out in is
-decided by the text's **Dominant script**, never by a parameter.
+Expanding the fixed shapes a sensor produces — units, percentages, clock
+literals, ISO dates — into words: `26.5°C` into 攝氏二十六點五度. A bare `80`
+is read as "eighty" only when `expand_numbers` asks. Which language the words
+come out in is the **Locale**'s, chosen by the request's language tag.
 _Avoid_: "conversion" (that is the other pass), "normalize the audio" (see
 Flagged ambiguities)
 
@@ -52,12 +53,24 @@ sentences, and one long sentence may be split across several segments.
 _Avoid_: "sentence" (a **Sentence** is what the splitter sees on the way in; a
 segment is what the engine gets on the way out)
 
-**Dominant script**:
-Whether the text reads as Chinese or as Latin — 漢字 counted against Latin
-_words_, not letters. It decides which language a number is spelled in, and
-which sentence-final stop is appended. A request carries flags, never a
-language, so this is the only thing that can answer the question.
-_Avoid_: "language" (the request has none), "detected language"
+**Locale**:
+What the pipeline knows about one language: how its numbers are read, which
+stop ends a sentence, and the rewrites only it has (`text/locales.py`).
+Chinese and English are written (`text/zh/`, `text/en/`); every other language
+gets the generic one — numbers from `num2words`, unit names and date layout
+from CLDR via `babel`, clock literals as hour words then minute words, and
+nothing it is not sure of. Adding a language is
+adding a locale, never a branch in the pipeline. A model that reads digits
+itself (`reads_numerals` in the catalog) makes the generic locale stand
+aside; a written one is kept.
+
+**Sniffed language**:
+The tag the pipeline settles on when a request carries none and the voice
+declares none — kana is `ja`, 漢字 outnumbering Latin _words_ is `zh` (or
+`zh-Hant` in Traditional glyphs), anything else `en`. A fallback, not the
+rule: the request's tag wins when there is one.
+_Avoid_: "dominant script" (the old name, from when the request had no
+language), "detected language"
 
 **Identifier reading** / **Quantity reading**:
 Two ways to say the same digits. A number welded after a letter is a label and
@@ -66,9 +79,20 @@ and stays a quantity (`24V` → "twenty-four V"). Leaving either as digits is no
 neutral — the model speaks no numeral at all, so an unexpanded digit is silent.
 
 **Request flag**:
-`normalize_text` / `convert_script` on the wire. A capability for a caller
-whose text is already prepared, not a preference: turning conversion off for
+`normalize_text` / `expand_numbers` / `convert_script` / `taiwan_readings` on
+the wire. The last two are Chinese's, and absent means the language decides.
+`normalize_text` and `convert_script` are a capability for a caller whose
+text is already prepared, not a preference: turning conversion off for
 ordinary Traditional Chinese makes the voice unintelligible.
+`expand_numbers` is off unless asked — a bare number is as often a room or a
+phone number as a count — and `taiwan_readings` is a preference.
+
+**Taiwan reading** / **Stand-in**:
+A word Taiwan reads differently from the mainland (垃圾 lè sè), and the
+homophone it is respelled with so the model says it that way (乐色). The table
+is generated from the McBopomofo dictionary by `scripts/taiwan_readings.py`,
+never edited by hand.
+_Avoid_: "pinyin hint" (measured fragile; not what the app does)
 
 ### Models and voices
 
@@ -217,7 +241,7 @@ waits for a restart.
 > **Dev:** "The request said `normalize_text: true` but the numbers came out in
 > English. Is that a bug?"
 > **Maintainer:** "Not by itself — the flag says _whether_ to expand, the
-> **Dominant script** says _into what_. If the sentence had more Latin words
+> The **Locale** says _into what_. If the sentence had more Latin words
 > than 漢字, English is the correct reading."
 
 > **Dev:** "Can I turn off **Script conversion** for a Traditional voice?"
@@ -228,7 +252,7 @@ waits for a restart.
 ## Flagged ambiguities
 
 - **"normalise" is two unrelated operations in one request.**
-  `text/normalize.py` rewrites numerals into words; `audio.normalize_level`
+  `text/zh/normalize.py` rewrites numerals into words; `audio.normalize_level`
   scales a waveform's amplitude. They run in the same call and share no
   vocabulary. Say "text normalisation" or "level normalisation" — never the
   bare verb.

@@ -19,3 +19,4 @@ Thumbs.db
 *.swp
 *.bak
 *.tmp
+cortex-tts/scripts/.cache/

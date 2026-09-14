@@ -76,6 +76,14 @@ class ModelSpec:
             a model can take one and not the other, and distinct from
             OmniVoice's designed voices, which are a closed vocabulary the
             model validates rather than free text.
+        reads_numerals: Whether the model reads Arabic digits and unit
+            symbols itself, in the languages the text pipeline has no locale
+            written for. Measured, never assumed: a model with a language
+            model behind it may read "14:35" more naturally than num2words
+            can, and another with the same claim reads German digits as
+            noise. Where it is true the generic locale stands aside; the
+            Chinese and English locales never do, having been measured
+            against every model and won.
         size_mb: Approximate on-disk size once downloaded.
         languages: Base language codes the model was trained on.
         sample_rate: Output sample rate in Hz.
@@ -96,6 +104,7 @@ class ModelSpec:
     temperature: bool = False
     language_choice: bool = False
     style_instruction: bool = False
+    reads_numerals: bool = False
     sample_rate: int = 24000
     rss_hint_mb: int = 0
 

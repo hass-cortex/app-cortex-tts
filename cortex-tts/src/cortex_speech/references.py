@@ -212,7 +212,7 @@ class ReferenceStore:
             raise ReferenceError("a reference needs the transcript of what is said")
         # Validated before anything is written: a wrong transcript degrades
         # the clone with no error, and a rejected upload must leave no file.
-        prepared = prepared_text(prepare(transcript, TextOptions()))
+        prepared = prepared_text(prepare(transcript, TextOptions(), language))
         if not prepared:
             raise ReferenceError("the transcript has no pronounceable content")
 
@@ -300,7 +300,12 @@ class ReferenceStore:
         if transcript is not None:
             if not transcript.strip():
                 raise ReferenceError("a reference needs the transcript of what is said")
-            prepared = prepared_text(prepare(transcript, TextOptions()))
+            existing = self.get(reference_id)
+            if existing is None:
+                raise KeyError(reference_id)
+            prepared = prepared_text(
+                prepare(transcript, TextOptions(), existing.language)
+            )
             if not prepared:
                 raise ReferenceError("the transcript has no pronounceable content")
             changes.update(transcript=prepared, raw_transcript=transcript.strip())

@@ -17,9 +17,9 @@ from dataclasses import dataclass
 
 from .options import NormalizeOptions
 
-# A sign only counts when nothing numeric precedes it; otherwise the dash in
-# "25-30" would be read as minus thirty.
-NUMBER = r"(?:(?<!\d)[+-])?\d+(?:\.\d+)?"
+# A sign only counts when nothing precedes it: the dash in "25-30" is not
+# minus thirty, and the one in "COVID-19" is not minus nineteen.
+NUMBER = r"(?:(?<![0-9A-Za-z一-鿿])[+-])?\d+(?:\.\d+)?"
 
 # `\b` treats every CJK character as a word character, so it is not a
 # boundary between 現在是 and 14. These are: a digit or Latin letter on either

@@ -19,7 +19,8 @@ front-end none of the models ship. No cloud, no per-character bill.
   that can.
 - **The text pipeline the models lack** — Traditional-to-Simplified conversion
   and number, unit, date and clock expansion, without which they are
-  unintelligible for Chinese.
+  unintelligible for Chinese; and Taiwan readings (垃圾 lè sè, 企業 qì yè),
+  which no model has, respelled by homophone so every model says them.
 - **An admin UI that shows its work** — the prepared text and a ledger of
   every rewrite, beside the composer.
 - **Streaming is per model, and off until you ask** — one fast enough to

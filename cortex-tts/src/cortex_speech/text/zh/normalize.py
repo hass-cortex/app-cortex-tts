@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import re
 
-from . import passes
+from .. import passes
+from ..options import DEFAULT_OPTIONS, NormalizeOptions
+from ..passes import Pass
 from .numbers import cardinal, decimal, digit_string, hours, minutes
-from .options import DEFAULT_OPTIONS, NormalizeOptions
-from .passes import Pass
 
 # Units whose spoken form simply follows the number.
 SUFFIX_UNITS: dict[str, str] = {
@@ -170,8 +170,8 @@ _PASSES: tuple[Pass, ...] = (
     Pass(passes.VERSION, _version),
     Pass(_INTRODUCED_VERSION, _version),
     Pass(_TRAILING_VERSION, _version),
-    Pass(passes.RANGE, _range),
-    Pass(_BARE_NUMBER, _bare_number),
+    Pass(passes.RANGE, _range, "expand_numbers"),
+    Pass(_BARE_NUMBER, _bare_number, "expand_numbers"),
 )
 
 

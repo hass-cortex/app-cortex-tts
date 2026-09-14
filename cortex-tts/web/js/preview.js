@@ -5,54 +5,83 @@ import { call } from "./api.js";
 import { $, esc, pressed } from "./dom.js";
 import { diffSpans, joinSpans } from "./diff.js";
 import { ARROW } from "./icons.js";
+import { previewLanguage } from "./models.js";
 
 // Han only: the warning is about Traditional glyphs, which kana never are.
 const HAS_HAN = /[㐀-䶿一-鿿]/;
 
-// One line per combination: claiming numerals are rewritten while the number
-// pass is off is the same lie the panel was built to stop telling.
-const HINTS = {
-  "1,1": "This model cannot pronounce Traditional glyphs or Arabic numerals. "
-    + "Everything below is rewritten before a single sample is generated.",
-  "0,1": "Traditional glyphs are converted below; numbers stay as digits, which "
-    + "this model cannot pronounce.",
-  "1,0": "Numbers, units and times are written out in the script of the text; "
-    + "nothing else below is rewritten.",
-  "0,0": "Both passes are off, so the model is given the text below exactly "
-    + "as it is written.",
-};
+// The switches a language may have beyond number expansion, and the chip
+// each one is shown as. A language without one has no chip for it: the
+// server lists only the passes the language has, and the chip follows.
+const REWRITES = { convert_script: "conv", taiwan_readings: "tw" };
 
-export function syncHint() {
-  const key = `${pressed($("norm")) ? 1 : 0},${pressed($("conv")) ? 1 : 0}`;
-  $("preparedHint").textContent = HINTS[key];
-}
-
+// What the reader has set by hand, per rewrite: null means "as the language
+// decides", which the server answers in `passes`. Reset when the language
+// changes, because a choice made for Chinese says nothing about German.
+let overrides = { convert_script: null, taiwan_readings: null };
 let lastLanguage = null;
+// The server's answer for the current text, so a click can invert it.
+let passes = { normalize_text: true };
 
-/**
- * Re-default the passes to a voice's language.
- *
- * Only the script conversion follows it: number expansion follows the script
- * of the text, so it stays on for every voice. The voice is the only place a
- * language is declared — the model takes none, its prompt being the text plus
- * a speaker slot — so picking the voice is picking the language.
- *
- * Re-defaulting only on a change is what lets a deliberate toggle survive the
- * picker being rebuilt.
- */
-export function syncPassesToVoice(language) {
-  if (!language || language === lastLanguage) return;
-  lastLanguage = language;
-  $("conv").setAttribute("aria-pressed", String(language.toLowerCase().startsWith("zh")));
-  syncHint();
-  // The switches moved, so the column was computed under the old ones.
+/** Flip a rewrite the reader clicked, against what the server said it is. */
+export function toggle(name) {
+  overrides[name] = !passes[name];
   refresh();
 }
 
-// The ledger mirrors the two passes the toggles control, and the pipeline
-// runs them in this order: normalise first, then convert what it produced.
-// Measuring each pass against its own input keeps a number expansion and a
-// glyph swap from landing in the same row.
+/** The switch fields a request carries: explicit where set, absent otherwise. */
+export function switches() {
+  const out = { normalize_text: pressed($("norm")), expand_numbers: pressed($("num")) };
+  for (const name of Object.keys(REWRITES)) {
+    if (overrides[name] !== null) out[name] = overrides[name];
+  }
+  return out;
+}
+
+// One sentence per pass, so the hint claims exactly what ran: saying numerals
+// are rewritten while the number pass is off is the lie the panel exists to stop.
+function hint(active) {
+  const parts = [];
+  parts.push(
+    active.normalize_text
+      ? "Units, times and dates are written out in the language's own words, which no model here can read as digits."
+      : "Numbers stay as digits, which no model here can pronounce.",
+  );
+  if (active.normalize_text) {
+    parts.push(
+      active.expand_numbers
+        ? "A number on its own is read as a quantity too."
+        : "A number on its own stays as digits: it may be a room, a phone number or a model, and a wrong reading would mislead.",
+    );
+  }
+  if ("convert_script" in active) {
+    parts.push(
+      active.convert_script
+        ? "Traditional glyphs are converted to Simplified, the only script the models read."
+        : "Traditional glyphs are left as written; the models will read them as the wrong words.",
+    );
+  }
+  if (active.taiwan_readings) {
+    parts.push("Words Taiwan reads differently are respelled with homophones the model reads the Taiwan way.");
+  }
+  return parts.join(" ");
+}
+
+function syncChips(active) {
+  for (const [name, id] of Object.entries(REWRITES)) {
+    const has = name in active;
+    $(id).hidden = !has;
+    if (has) $(id).setAttribute("aria-pressed", String(active[name]));
+  }
+  $("preparedHint").textContent = hint(active);
+}
+
+// The ledger mirrors the passes, and the pipeline runs them in this order:
+// normalise first, then convert what it produced, then respell what that
+// produced. Measuring each pass against its own input keeps a number
+// expansion and a glyph swap from landing in the same row. The respellings
+// are not diffed at all: a stand-in is one glyph for one glyph, so two
+// adjacent ones would read as one rewrite. The server lists them instead.
 
 // The appended sentence-final stop is a real change worth showing, but as an
 // insertion it has nothing on the left. Name it rather than render "text — → .".
@@ -87,13 +116,16 @@ function renderLedger(parts) {
       });
     }
   }
+  for (const r of parts.readings || []) {
+    rows.push({ kind: "reading", from: r.word, to: r.standin, note: "" });
+  }
 
   if (!rows.length) {
-    // Only dangerous for Chinese; on English it is the normal state, and a
+    // Only dangerous for Chinese; elsewhere it is the normal state, and a
     // warning that fires when nothing is wrong is one people learn to ignore.
-    const risky = parts.bothOff && HAS_HAN.test($("text").value);
+    const risky = parts.conversionOff && HAS_HAN.test($("text").value);
     $("ledger").innerHTML = risky
-      ? '<div class="msg warn">Both passes are off — the model will be handed Traditional glyphs it cannot pronounce.</div>'
+      ? '<div class="msg warn">Script conversion is off — the model will be handed Traditional glyphs it cannot pronounce.</div>'
       : '<div class="cap ledger-empty">Nothing to rewrite</div>';
     return;
   }
@@ -107,14 +139,15 @@ function renderLedger(parts) {
     </div>`).join("");
 }
 
-function prepared(normalize, convert) {
+function prepared(fields) {
   return call("/preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       text: $("text").value,
-      normalize_text: normalize,
-      convert_script: convert,
+      model: $("model").value || null,
+      language: previewLanguage(),
+      ...fields,
     }),
   }).then((res) => res.json());
 }
@@ -134,25 +167,42 @@ export async function refresh() {
   if (!$("text").value.trim()) {
     fill("…", true);
     $("ledger").innerHTML = "";
+    syncChips(passes);
     return;
   }
-  const normalize = pressed($("norm"));
-  const convert = pressed($("conv"));
   try {
-    syncHint();
-    // With both passes on, the converter never saw the raw text — ask for the
-    // stage between them as well, so each row is measured against its own input.
-    const [full, between] = await Promise.all([
-      prepared(normalize, convert),
-      normalize && convert ? prepared(true, false) : null,
-    ]);
+    const full = await prepared(switches());
     if (seq !== sequence) return; // a newer keystroke already won
+    if (full.language !== lastLanguage) {
+      // The language moved under the reader's choices: drop them, and ask
+      // again only if there were any — with none, the answer is this one.
+      lastLanguage = full.language;
+      const handSet = Object.values(overrides).some((v) => v !== null);
+      overrides = { convert_script: null, taiwan_readings: null };
+      if (handSet) return refresh();
+    }
+    passes = full.passes;
+    syncChips(passes);
+
+    // The diffed rows need the text as each pass saw it: with the number
+    // and glyph passes both on, the converter never saw the raw text, so ask
+    // for the stage between them; with the respelling on, the stage before it.
+    const glyphs = passes.convert_script === true;
+    const [between, respelled] = await Promise.all([
+      passes.normalize_text && glyphs
+        ? prepared({ ...switches(), convert_script: false, taiwan_readings: false })
+        : null,
+      passes.taiwan_readings ? prepared({ ...switches(), taiwan_readings: false }) : null,
+    ]);
+    if (seq !== sequence) return;
     const mid = between ? between.prepared : null;
+    const converted = respelled ? respelled.prepared : full.prepared;
     fill(full.prepared, false);
     renderLedger({
-      numberPair: normalize ? [full.original, mid ?? full.prepared] : null,
-      glyphPair: convert ? [mid ?? full.original, full.prepared] : null,
-      bothOff: !normalize && !convert,
+      numberPair: passes.normalize_text ? [full.original, mid ?? converted] : null,
+      glyphPair: glyphs ? [mid ?? full.original, converted] : null,
+      readings: full.readings,
+      conversionOff: passes.convert_script === false,
     });
   } catch (err) {
     if (seq !== sequence) return;

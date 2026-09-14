@@ -1,23 +1,28 @@
 """The text path every synthesis request takes.
 
-Order is not negotiable. Normalisation emits Traditional Chinese number words
-(二十六點五度), so it has to run before the script conversion that makes those
-glyphs pronounceable. Reversing the two would leave freshly-minted Traditional
-characters downstream of the only pass that can fix them.
+The request's language tag picks the locale; the text is only sniffed when
+there is no tag. Within a locale the order is not negotiable: normalisation
+emits words in the language's own script (二十六點五度 is Traditional), so it
+runs before any rewrite that makes those glyphs pronounceable, and the
+rewrites run in the order the locale lists them — Chinese converts script
+before it respells readings, because the readings table is keyed by the
+Simplified form.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
-from functools import lru_cache
+from dataclasses import dataclass, field
 
-from . import english
-from .normalize import normalize
+from . import en, generic, zh
+from .locales import LOCALES, Locale, primary, register
 from .options import NormalizeOptions
 
 _LOGGER = logging.getLogger(__name__)
+
+register(zh.LOCALE)
+register(en.LOCALE)
 
 # Upper bound on a single synthesis. The LM tops out at 2048 new tokens at a
 # 50 Hz token rate — roughly 40 s of audio — and long prompts degrade before
@@ -29,16 +34,19 @@ MAX_CHARS_PER_SEGMENT = 120
 _SENTENCE_BREAK = re.compile(r"(?<=[。！？；!?;\n])|(?<=[^\d\s]\.)(?=\s)")
 _CLAUSE_BREAK = re.compile(r"(?<=[，、,])")
 
-_CJK = r"㐀-䶿一-鿿豈-﫿　-〿＀-￯"
-# Expanding "26.5°C" into 攝氏二十六點五度 leaves the space that preceded the
-# digits stranded between two Chinese characters, and the model reads a space
-# as a pause. Spaces bordering Latin text are kept — they are real word gaps.
-_CJK_GAP = re.compile(rf"(?<=[{_CJK}])[ \t]+(?=[{_CJK}])")
+_CJK = r"㐀-䶿一-鿿豈-﫿　-〿＀-￯"
+# The scripts that write no space between words: 漢字 and kana. Expanding
+# "26.5°C" into 攝氏二十六點五度 leaves the space that preceded the digits
+# stranded between two of them, and the model reads a space as a pause.
+# Spaces bordering Latin text are kept — they are real word gaps.
+_UNSPACED = r"㐀-䶿一-鿿豈-﫿぀-ヿ"
+_CJK_GAP = re.compile(rf"(?<=[{_UNSPACED}])[ \t]+(?=[{_UNSPACED}])")
 
 # A segment of nothing but punctuation has no sound. Passed to the model it
 # generates no audio tokens and surfaces as an opaque engine error, so it is
-# dropped here and the caller gets a clean "nothing to say" instead.
-_SPEAKABLE = re.compile(r"[0-9A-Za-z㐀-䶿一-鿿぀-ヿ]")
+# dropped here and the caller gets a clean "nothing to say" instead. A letter
+# or digit of any script is sound.
+_SPEAKABLE = re.compile(r"[^\W_]")
 
 # Without sentence-final punctuation the model misses its cue to stop and
 # invents a syllable, so every segment gets one.
@@ -48,6 +56,7 @@ _HAS_CJK = re.compile(rf"[{_CJK}]")
 # What votes for Chinese: 漢字 and kana. `_CJK` also spans fullwidth
 # punctuation, which must not count — "26.5°C。" is a reading, not a script.
 _HAN_OR_KANA = re.compile(r"[㐀-䶿一-鿿豈-﫿぀-ヿ]")
+_KANA = re.compile(r"[぀-ヿ]")
 # Words, not letters: one 漢字 carries about as much text as one Latin word.
 _LATIN_WORD = re.compile(r"[A-Za-z]+")
 
@@ -65,35 +74,41 @@ def is_chinese(text: str) -> bool:
     return _HAS_CJK.search(text) is not None
 
 
-def _terminate(segment: str) -> str:
-    """Give a segment the sentence-final punctuation the model needs.
+def sniff_language(text: str) -> str:
+    """The most specific tag the text itself supports, for a request with none.
 
-    The stop matches the segment's language, decided the same way the
-    normaliser decides it.
+    Kana is Japanese. 漢字 outnumbering Latin words is Chinese, and Chinese
+    written in Traditional glyphs is tagged as such, because that is what
+    tells the Taiwan readings to run. Everything else is read as English,
+    which is what a Latin-script text with no tag has always meant here.
     """
-    if segment.endswith(tuple(_TERMINATORS)):
-        return segment
-    stop = "。" if is_chinese(segment) else "."
-    if segment.endswith(tuple(_TRAILING_COMMA)):
-        return segment[:-1] + stop
-    return segment + stop
+    if _KANA.search(text):
+        return "ja"
+    if is_chinese(text):
+        return "zh-Hant" if zh.is_traditional(text) else "zh"
+    return "en"
 
 
-@lru_cache(maxsize=1)
-def _converter():
-    """Return a cached OpenCC Traditional->Simplified converter.
+def resolve_language(text: str, language: str | None) -> str:
+    """The tag the pipeline reads the text as: the request's, else sniffed.
 
-    ``t2s`` is glyph-only. ``tw2sp`` would also rewrite vocabulary (設定 to
-    设置), changing the words the model says.
+    A bare ``zh`` says only that the text is Chinese; which Chinese, the text
+    itself still answers — written in Traditional glyphs it is read as
+    ``zh-Hant``, so Taiwan readings follow the script the writer used.
     """
-    from opencc import OpenCC
+    # BCP 47 hyphens; a POSIX-style zh_TW is the same tag misspelt.
+    tag = language.strip().replace("_", "-") if language else ""
+    if not tag:
+        return sniff_language(text)
+    if tag.lower() == "zh" and zh.is_traditional(text):
+        return "zh-Hant"
+    return tag
 
-    return OpenCC("t2s")
 
-
-def to_simplified(text: str) -> str:
-    """Convert Traditional glyphs to Simplified, leaving Latin text alone."""
-    return _converter().convert(text)
+def locale_for(tag: str) -> Locale:
+    """The locale for a tag: one written for its language, else the generic one."""
+    code = primary(tag)
+    return LOCALES.get(code) or generic.locale(code)
 
 
 @dataclass(frozen=True)
@@ -102,16 +117,97 @@ class TextOptions:
 
     Attributes:
         normalize_text: Expand numbers, units, dates and clock literals.
-        convert_script: Apply the Traditional->Simplified glyph conversion.
+        convert_script: Chinese only — the Traditional->Simplified glyph
+            conversion. ``None`` lets the locale decide (it is always on).
+        taiwan_readings: Chinese only — respell words Taiwan reads
+            differently. ``None`` lets the locale decide: on for a Taiwanese
+            tag, off otherwise.
         normalize_options: Fine-grained normalisation switches.
     """
 
     normalize_text: bool = True
-    convert_script: bool = True
+    convert_script: bool | None = None
+    taiwan_readings: bool | None = None
     normalize_options: NormalizeOptions = NormalizeOptions()
+
+    def wants(self, name: str) -> bool | None:
+        """The caller's answer for a rewrite, or ``None`` for "you decide"."""
+        return getattr(self, name)
 
 
 DEFAULT_TEXT_OPTIONS = TextOptions()
+
+
+@dataclass(frozen=True)
+class TextPlan:
+    """What the pipeline decided for one text, before running it.
+
+    Attributes:
+        language: The tag the text is read as, resolved.
+        normalize_text: Whether the fixed shapes — units, clock, date — are
+            expanded.
+        expand_numbers: Whether a bare number is read as a quantity too.
+        rewrites: Each rewrite the locale has, and whether it runs — only
+            those; a language without script conversion has no entry for it.
+    """
+
+    language: str
+    normalize_text: bool
+    expand_numbers: bool
+    rewrites: dict[str, bool] = field(default_factory=dict)
+
+    @property
+    def locale(self) -> Locale:
+        return locale_for(self.language)
+
+    @property
+    def passes(self) -> dict[str, bool]:
+        """Every switch this language has, and whether it runs."""
+        return {
+            "normalize_text": self.normalize_text,
+            "expand_numbers": self.normalize_text and self.expand_numbers,
+            **self.rewrites,
+        }
+
+
+def plan(
+    text: str,
+    options: TextOptions = DEFAULT_TEXT_OPTIONS,
+    language: str | None = None,
+    *,
+    reads_numerals: bool = False,
+) -> TextPlan:
+    """Decide the locale and the passes for a text without running them.
+
+    Args:
+        text: The text, stripped.
+        options: The caller's switches.
+        language: The request's language tag, or ``None`` to sniff.
+        reads_numerals: Whether the model reads digits and unit symbols
+            itself. That beats the generic locale's numbers-and-unit-names,
+            so normalisation is skipped there; a written locale is kept,
+            because it was measured against the model and won.
+    """
+    tag = resolve_language(text, language)
+    locale = locale_for(tag)
+    normalize = options.normalize_text and (locale.written or not reads_numerals)
+    rewrites: dict[str, bool] = {}
+    for rewrite in locale.rewrites:
+        wanted = options.wants(rewrite.name)
+        on = rewrite.default(tag) if wanted is None else wanted
+        rewrites[rewrite.name] = on and all(
+            rewrites.get(r, False) for r in rewrite.requires
+        )
+    return TextPlan(tag, normalize, options.normalize_options.expand_numbers, rewrites)
+
+
+def _terminate(segment: str, stop: str) -> str:
+    """Give a segment the sentence-final punctuation the model needs."""
+    if segment.endswith(tuple(_TERMINATORS)):
+        return segment
+    if segment.endswith(tuple(_TRAILING_COMMA)):
+        return segment[:-1] + stop
+    return segment + stop
 
 
 def _split_long(chunk: str, limit: int) -> list[str]:
@@ -175,17 +271,22 @@ def prepared_text(segments: list[str]) -> str:
     return out
 
 
-def segment(text: str, limit: int = MAX_CHARS_PER_SEGMENT) -> list[str]:
+def segment(
+    text: str, limit: int = MAX_CHARS_PER_SEGMENT, stop: str | None = None
+) -> list[str]:
     """Split text into synthesis-sized segments on sentence boundaries.
 
     Args:
         text: Already-normalised text.
         limit: Maximum characters per segment.
+        stop: The sentence-final punctuation to add where a segment has
+            none; the locale's when it is known, else the sniffed script's.
 
     Returns:
         Non-empty segments in reading order. An empty input yields an empty
         list, which callers treat as "nothing to say".
     """
+    final = stop if stop is not None else locale_for(sniff_language(text)).stop
     segments: list[str] = []
     buffer = ""
     for sentence in _SENTENCE_BREAK.split(text):
@@ -200,36 +301,64 @@ def segment(text: str, limit: int = MAX_CHARS_PER_SEGMENT) -> list[str]:
     if buffer:
         segments.extend(_split_long(buffer, limit))
     return [
-        _terminate(s) for s in (seg.strip() for seg in segments) if _SPEAKABLE.search(s)
+        _terminate(s, final)
+        for s in (seg.strip() for seg in segments)
+        if _SPEAKABLE.search(s)
     ]
 
 
-def prepare(text: str, options: TextOptions = DEFAULT_TEXT_OPTIONS) -> list[str]:
+def run(text: str, decided: TextPlan, options: NormalizeOptions) -> str:
+    """Run a plan over the text it was made for; the rewritten text back."""
+    locale = decided.locale
+    if decided.normalize_text:
+        text = locale.normalize(text, options)
+        if locale.close_gaps:
+            text = _CJK_GAP.sub("", text)
+    for rewrite in locale.rewrites:
+        if decided.rewrites[rewrite.name]:
+            text = rewrite.apply(text)
+    return text
+
+
+def prepare_text(
+    text: str,
+    options: TextOptions = DEFAULT_TEXT_OPTIONS,
+    language: str | None = None,
+    *,
+    reads_numerals: bool = False,
+) -> str:
+    """Run the rewriting passes and return the text, not yet segmented."""
+    text = text.strip()
+    if not text:
+        return ""
+    decided = plan(text, options, language, reads_numerals=reads_numerals)
+    return run(text, decided, options.normalize_options)
+
+
+def prepare(
+    text: str,
+    options: TextOptions = DEFAULT_TEXT_OPTIONS,
+    language: str | None = None,
+    *,
+    reads_numerals: bool = False,
+) -> list[str]:
     """Run the full text path and return synthesis-ready segments.
 
     Args:
         text: Raw text as supplied by the caller.
         options: Which passes to apply.
+        language: The request's language tag, or ``None`` to sniff the text.
+        reads_numerals: Whether the model reads digits itself; see `plan`.
 
     Returns:
         Segments ready to hand to an engine, in reading order.
     """
-    prepared = text.strip()
-    if not prepared:
+    text = text.strip()
+    if not text:
         return []
-
-    if options.normalize_text:
-        # The caller sends flags, never a language, so the dominant script picks
-        # which language the numbers are spelled in.
-        if is_chinese(prepared):
-            prepared = normalize(prepared, options.normalize_options)
-            # Only Chinese wants the gap closed; Latin spaces are word gaps.
-            prepared = _CJK_GAP.sub("", prepared)
-        else:
-            prepared = english.normalize(prepared, options.normalize_options)
-    if options.convert_script:
-        prepared = to_simplified(prepared)
-
-    segments = segment(prepared)
+    decided = plan(text, options, language, reads_numerals=reads_numerals)
+    segments = segment(
+        run(text, decided, options.normalize_options), stop=decided.locale.stop
+    )
     _LOGGER.debug("text path: %r -> %d segment(s)", text, len(segments))
     return segments

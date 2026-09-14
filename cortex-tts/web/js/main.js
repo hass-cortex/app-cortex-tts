@@ -23,13 +23,17 @@ function wire() {
     preview.schedule();
   });
 
-  for (const id of ["norm", "conv"]) {
+  // Number expansion and bare numbers are the reader's own switches; the two Chinese rewrites
+  // are the language's, shown only when the text is Chinese, and a click on
+  // one overrides what the language decided.
+  for (const id of ["norm", "num"]) {
     $(id).addEventListener("click", () => {
       $(id).setAttribute("aria-pressed", String(!pressed($(id))));
-      preview.syncHint();
       preview.refresh();
     });
   }
+  $("conv").addEventListener("click", () => preview.toggle("convert_script"));
+  $("tw").addEventListener("click", () => preview.toggle("taiwan_readings"));
 
   // The settings panel offers the same models and voices the rest of the page
   // does, including the ones a download finishing has just added.
@@ -44,18 +48,20 @@ function wire() {
       .then(() => models.refreshModels())
       .catch((err) => msg($("modelMsg"), err.message, "err")));
 
-  // Which passes the preview runs follows the voice's own language, not the
-  // language field: that one says what to read the text as, while the passes
-  // are about the script it is written in. Whether there is a voice at all is
-  // what makes Speak available.
+  // The voice's own language is what the text is read in when the language
+  // field is empty, so the column follows the voice. Whether there is a
+  // voice at all is what makes Speak available.
   models.whenVoiceChanges(() => {
     speak.syncButton();
-    preview.syncPassesToVoice(models.selectedVoiceLanguage());
+    preview.refresh();
   });
   // The upload form's language list is the models' business, not its own —
   // and its value follows the Language filter until someone sets it there.
   models.whenModelsChange(clones.syncLanguages);
-  $("language").addEventListener("change", clones.syncLanguages);
+  $("language").addEventListener("change", () => {
+    clones.syncLanguages();
+    preview.refresh();
+  });
 }
 
 async function load() {
@@ -83,5 +89,4 @@ async function load() {
 }
 
 wire();
-preview.syncHint();
 load();

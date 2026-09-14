@@ -8,6 +8,8 @@ regress, the voice stops being intelligible.
 
 from __future__ import annotations
 
+from importlib.resources import files
+
 import pytest
 
 from cortex_speech.engine.overrun import (
@@ -15,16 +17,22 @@ from cortex_speech.engine.overrun import (
     looks_truncated,
     trim_trailing_babble,
 )
-from cortex_speech.text.normalize import NormalizeOptions, normalize
-from cortex_speech.text.numbers import cardinal, decimal, digit_string
 from cortex_speech.text.pipeline import (
     TextOptions,
     is_chinese,
     prepare,
     prepared_text,
     segment,
-    to_simplified,
 )
+from cortex_speech.text.zh.normalize import NormalizeOptions, normalize
+from cortex_speech.text.zh.numbers import cardinal, decimal, digit_string
+from cortex_speech.text.zh.readings import apply_taiwan_readings, taiwan_readings
+from cortex_speech.text.zh.script import to_simplified
+
+# The number passes are exercised with bare numbers on: the default leaves
+# them as digits, and that default has its own tests.
+NUMBERS = NormalizeOptions(expand_numbers=True)
+WITH_NUMBERS = TextOptions(normalize_options=NUMBERS)
 
 
 class TestNumbers:
@@ -88,16 +96,16 @@ class TestNormalize:
         ],
     )
     def test_units_and_literals(self, raw: str, expected: str) -> None:
-        assert normalize(raw) == expected
+        assert normalize(raw, NUMBERS) == expected
 
     def test_range_reads_as_a_span_not_a_subtraction(self) -> None:
-        assert normalize("25-30 度") == "二十五到三十 度"
+        assert normalize("25-30 度", NUMBERS) == "二十五到三十 度"
 
     def test_version_reads_digit_by_digit(self) -> None:
-        assert "二零二六點九" in normalize("更新到 2026.9 版本")
+        assert "二零二六點九" in normalize("更新到 2026.9 版本", NUMBERS)
 
     def test_latin_words_are_left_alone(self) -> None:
-        assert "Home Assistant" in normalize("你的 Home Assistant 已更新")
+        assert "Home Assistant" in normalize("你的 Home Assistant 已更新", NUMBERS)
 
     def test_temperature_prefix_can_be_dropped(self) -> None:
         options = NormalizeOptions(temperature_prefix=False)
@@ -105,7 +113,32 @@ class TestNormalize:
 
     def test_no_arabic_digits_survive_a_sensor_sentence(self) -> None:
         raw = "現在室內溫度是 26.5°C，濕度 68%，PM2.5 是 12 微克。"
-        assert not any(char.isdigit() for char in normalize(raw))
+        assert not any(char.isdigit() for char in normalize(raw, NUMBERS))
+
+
+class TestBareNumbersAreOptIn:
+    """A number with nothing around it is not read unless asked."""
+
+    @pytest.mark.parametrize(
+        "raw", ["撥打 110", "電話 0912345678", "302號房", "RTX 4090", "COVID-19"]
+    )
+    def test_a_bare_number_stays_as_digits(self, raw: str) -> None:
+        assert normalize(raw) == raw
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("溫度 26.5°C", "溫度 攝氏二十六點五度"),
+            ("濕度 68%", "濕度 百分之六十八"),
+            ("現在 14:35", "現在 十四點三十五分"),
+            ("今天是 2026-09-06", "今天是 二零二六年九月六日"),
+        ],
+    )
+    def test_the_fixed_shapes_are_still_read(self, raw: str, expected: str) -> None:
+        assert normalize(raw) == expected
+
+    def test_a_dash_after_letters_is_not_a_minus(self) -> None:
+        assert normalize("COVID-19%", NUMBERS) == "COVID-百分之十九"
 
 
 class TestScriptConversion:
@@ -122,6 +155,59 @@ class TestScriptConversion:
 
     def test_latin_is_untouched(self) -> None:
         assert to_simplified("Wi-Fi 已經連線") == "Wi-Fi 已经连线"
+
+
+class TestTaiwanReadings:
+    """Words Taiwan reads differently, respelled so any model reads them so."""
+
+    def test_a_word_is_respelled_with_its_homophone(self) -> None:
+        assert apply_taiwan_readings("垃圾车来了") == "乐色车来了"
+
+    def test_the_longest_word_wins(self) -> None:
+        # 研究所 is one entry; matching 研究 first would leave 所 to itself.
+        assert taiwan_readings("研究所的研究") == [
+            ("研究所", "研就所"),
+            ("研究", "研就"),
+        ]
+
+    def test_words_read_alike_on_both_sides_are_untouched(self) -> None:
+        assert apply_taiwan_readings("客厅的灯已经打开了。") == "客厅的灯已经打开了。"
+
+    def test_japanese_never_meets_the_pass(self) -> None:
+        # Kanji share glyphs with the table (研究) and none of its readings;
+        # the pass is Chinese's, so a Japanese tag — or kana, untagged —
+        # keeps the text as written.
+        assert "".join(prepare("研究は楽しい", language="ja")) == "研究は楽しい。"
+        assert "".join(prepare("研究は楽しい", WITH_NUMBERS)) == "研究は楽しい。"
+
+    def test_a_mainland_tag_turns_the_readings_off(self) -> None:
+        assert "".join(prepare("垃圾車來了", language="zh-CN")) == "垃圾车来了。"
+        assert "".join(prepare("垃圾車來了", language="zh-TW")) == "乐色车来了。"
+
+    def test_the_pass_runs_last_on_simplified_text(self) -> None:
+        assert (
+            "".join(prepare("星期天去法國研究企業的檔案。", WITH_NUMBERS))
+            == "星其天去法国研就气业的党案。"
+        )
+
+    def test_the_switch_turns_it_off(self) -> None:
+        options = TextOptions(taiwan_readings=False)
+        assert "".join(prepare("垃圾車來了", options)) == "垃圾车来了。"
+
+    def test_the_table_is_generated_not_edited(self) -> None:
+        # Every stand-in is one glyph for one glyph, or the pass could not be
+        # reported per word; every key is a Simplified word the pass can meet.
+        for line in (
+            files("cortex_speech.text.zh")
+            .joinpath("taiwan_readings.tsv")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ):
+            if line.startswith("#"):
+                continue
+            word, standin, *_ = line.split("\t")
+            assert len(word) == len(standin) >= 2, line
+            assert to_simplified(word) == word, line
 
 
 class TestSegmentation:
@@ -152,16 +238,16 @@ class TestPipeline:
     def test_normalisation_runs_before_conversion(self) -> None:
         # Normalisation emits Traditional numerals (二十六點五度); if the
         # script pass ran first they would reach the model unconverted.
-        prepared = "".join(prepare("溫度 26.5°C"))
+        prepared = "".join(prepare("溫度 26.5°C", WITH_NUMBERS))
         assert prepared == "温度摄氏二十六点五度。"
 
     def test_gap_left_by_an_expanded_number_is_closed(self) -> None:
         # The model reads a space as a pause, and expanding "26.5°C" strands
         # the space that preceded the digits between two Chinese characters.
-        assert " " not in "".join(prepare("溫度是 26.5°C。"))
+        assert " " not in "".join(prepare("溫度是 26.5°C。", WITH_NUMBERS))
 
     def test_space_around_latin_is_kept(self) -> None:
-        prepared = "".join(prepare("你的 Home Assistant 已經更新。"))
+        prepared = "".join(prepare("你的 Home Assistant 已經更新。", WITH_NUMBERS))
         assert " Home Assistant " in prepared
 
     def test_switches_can_be_turned_off(self) -> None:
@@ -169,7 +255,7 @@ class TestPipeline:
         assert "".join(prepare("溫度 26.5°C", options)) == "溫度 26.5°C。"
 
     def test_punctuation_only_input_yields_no_segments(self) -> None:
-        assert prepare("。。。") == []
+        assert prepare("。。。", WITH_NUMBERS) == []
 
     @pytest.mark.parametrize(
         "raw",
@@ -181,7 +267,7 @@ class TestPipeline:
         ],
     )
     def test_ha_sentences_reach_the_model_pronounceable(self, raw: str) -> None:
-        prepared = "".join(prepare(raw))
+        prepared = "".join(prepare(raw, WITH_NUMBERS))
         assert prepared
         # No Arabic digits and no Traditional-only glyphs left to mispronounce.
         assert not any(char.isdigit() for char in prepared)
@@ -384,10 +470,10 @@ class TestSentenceTermination:
     """
 
     def test_a_bare_sentence_gains_a_full_stop(self) -> None:
-        assert prepare("客廳的燈已經打開了") == ["客厅的灯已经打开了。"]
+        assert prepare("客廳的燈已經打開了", WITH_NUMBERS) == ["客厅的灯已经打开了。"]
 
     def test_existing_punctuation_is_left_alone(self) -> None:
-        assert prepare("客廳的燈已經打開了。") == ["客厅的灯已经打开了。"]
+        assert prepare("客廳的燈已經打開了。", WITH_NUMBERS) == ["客厅的灯已经打开了。"]
 
     @pytest.mark.parametrize("ending", ["！", "？", "；"])
     def test_other_terminators_are_accepted(self, ending: str) -> None:
@@ -395,7 +481,7 @@ class TestSentenceTermination:
 
     def test_a_trailing_comma_becomes_a_full_stop(self) -> None:
         # A comma tells the model to carry on, which is the problem.
-        assert prepare("好了，") == ["好了。"]
+        assert prepare("好了，", WITH_NUMBERS) == ["好了。"]
 
     def test_every_segment_of_a_split_is_terminated(self) -> None:
         text = "。".join(["这是一个很长的句子用来测试分段" * 3] * 4) + "。"
@@ -458,10 +544,10 @@ class TestNumbersNextToChinese:
         ],
     )
     def test_constructs_touching_chinese(self, raw: str, expected: str) -> None:
-        assert normalize(raw) == expected
+        assert normalize(raw, NUMBERS) == expected
 
     def test_a_word_ending_in_v_is_not_a_version_lead(self) -> None:
-        assert normalize("電視TV 12台") == "電視TV 十二台"
+        assert normalize("電視TV 12台", NUMBERS) == "電視TV 十二台"
 
 
 class TestRanges:
@@ -478,18 +564,18 @@ class TestRanges:
         ],
     )
     def test_range_with_unit(self, raw: str, expected: str) -> None:
-        assert normalize(raw) == expected
+        assert normalize(raw, NUMBERS) == expected
 
 
 class TestSeparatorsAndSeconds:
     def test_thousands_separator_is_not_a_pause(self) -> None:
-        assert normalize("用了1,234度電") == "用了一千二百三十四度電"
+        assert normalize("用了1,234度電", NUMBERS) == "用了一千二百三十四度電"
 
     def test_a_whole_hour_with_seconds_says_its_minutes(self) -> None:
-        assert normalize("14:00:30") == "十四點零分三十秒"
+        assert normalize("14:00:30", NUMBERS) == "十四點零分三十秒"
 
     def test_an_impossible_clock_is_left_alone(self) -> None:
-        assert "點" not in normalize("99:99")
+        assert "點" not in normalize("99:99", NUMBERS)
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -520,8 +606,8 @@ class TestDominantScript:
 
     def test_a_bare_reading_follows_its_stop(self) -> None:
         assert is_chinese("123。")
-        assert prepare("80%。") == ["百分之八十。"]
-        assert prepare("80%.") == ["eighty percent."]
+        assert prepare("80%。", WITH_NUMBERS) == ["百分之八十。"]
+        assert prepare("80%.", WITH_NUMBERS) == ["eighty percent."]
 
     def test_kana_counts(self) -> None:
         assert is_chinese("はい、元気です。")

@@ -29,6 +29,8 @@ dependencies = [
     # The decisive dependency: this model has no pronunciation for Traditional
     # Chinese glyphs (32% character error rate against 4% once converted).
     "opencc-python-reimplemented>=0.1.7",
+    "num2words>=0.5.14",
+    "babel>=2.17",
 ]
 
 [project.optional-dependencies]

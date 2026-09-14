@@ -51,18 +51,20 @@ stays unpublished.
 
 `POST /api/speak` takes JSON:
 
-| Field             | Default     | Meaning                                                                    |
-| ----------------- | ----------- | -------------------------------------------------------------------------- |
-| `text`            | required    | Up to 4000 characters, in whatever script you write                        |
-| `model`           | the default | A model id from `/api/models`                                              |
-| `voice`           | the default | A voice id the model offers; the first available when it does not          |
-| `format`          | `wav`       | `wav`, `flac`, `ogg` or `mp3`                                              |
-| `normalize_text`  | `true`      | Expand numbers, units, dates and clock literals ([why](text-pipeline.md))  |
-| `convert_script`  | `true`      | Traditional → Simplified glyph conversion                                  |
-| `normalize_level` | `true`      | Peak-normalise the finished waveform                                       |
-| `temperature`     | the setting | Sampling temperature 0–1, for models that have one                         |
-| `language`        | the voice's | Which language to read the text as, for models that take one               |
-| `instruct`        | none        | A plain-language instruction beside the voice, for the one model that does |
+| Field             | Default              | Meaning                                                                                                                                            |
+| ----------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `text`            | required             | Up to 4000 characters, in whatever script you write                                                                                                |
+| `model`           | the default          | A model id from `/api/models`                                                                                                                      |
+| `voice`           | the default          | A voice id the model offers; the first available when it does not                                                                                  |
+| `format`          | `wav`                | `wav`, `flac`, `ogg` or `mp3`                                                                                                                      |
+| `normalize_text`  | `true`               | Expand numbers, units, dates and clock literals ([why](text-pipeline.md))                                                                          |
+| `expand_numbers`  | `false`              | Also read a bare number — no unit, clock or date around it — as a quantity ([why not by default](text-pipeline.md))                                |
+| `convert_script`  | the language decides | Chinese only: Traditional → Simplified glyph conversion                                                                                            |
+| `taiwan_readings` | the language decides | Chinese only: respell words Taiwan reads differently ([why](text-pipeline.md))                                                                     |
+| `normalize_level` | `true`               | Peak-normalise the finished waveform                                                                                                               |
+| `temperature`     | the setting          | Sampling temperature 0–1, for models that have one                                                                                                 |
+| `language`        | the voice's          | The language of the text, as a whole tag: picks how it is prepared on every model, and which language the model reads it in on those that take one |
+| `instruct`        | none                 | A plain-language instruction beside the voice, for the one model that does                                                                         |
 
 The response is the audio, with the measurements in headers:
 `X-Cortex-Model`, `X-Cortex-Voice`, `X-Cortex-Inference-Ms`,
@@ -88,13 +90,21 @@ instead.
 defaults to `wav` and accepts the same four formats; `opus`, `aac` and `pcm`
 are refused.
 
-`POST /api/preview` takes `text`, `normalize_text` and `convert_script` and
-returns `original`, `prepared` and `segments` without touching a model.
+`POST /api/preview` takes `text`, `model`, `language`, `normalize_text`,
+`expand_numbers`, `convert_script` and `taiwan_readings` and returns `original`, `prepared`,
+`segments`, `language` (the tag the text was read as, sniffed when none was
+sent), `passes` (every switch that language has, and whether it ran) and
+`readings` — the `{word, standin}` respellings applied, in text order —
+without touching a model.
 
-`language` is sent whole — `zh-TW`, not `zh`. How much of a tag means anything
-is the model's to decide: Qwen3-TTS names two Chinese dialects apart from
-Chinese, OmniVoice names 646 languages including Cantonese, and reducing the
-tag in the caller would throw that away before either got to say it mattered.
+`language` is sent whole — `zh-TW`, not `zh` (`zh_TW` is read as the
+same tag). It is accepted on every model:
+the text pipeline reads it on all of them, and a model that takes a language
+is told it too. How much of a tag means anything is the model's to decide:
+Qwen3-TTS names two Chinese dialects apart from Chinese, OmniVoice names 646
+languages including Cantonese, and reducing the tag in the caller would throw
+that away before either got to say it mattered. Left out, the voice's own
+language is used, and failing that the text is sniffed.
 The engine tries the whole tag, then its shorter forms, and refuses what it
 does not read. Which models take `language` and `instruct` at all is
 `language_choice` and `style_instruction` in `/api/models`; a model that

@@ -56,6 +56,16 @@ export function selectedVoiceLanguage() {
   return (chosen && chosen.language) || "";
 }
 
+/**
+ * The language the preview reads the text as, or null to let it sniff.
+ *
+ * The same fallback the server applies to a synthesis — the language field,
+ * else the voice's own — so the column shows what Speak will actually send.
+ */
+export function previewLanguage() {
+  return $("language").value || selectedVoiceLanguage() || null;
+}
+
 const shortName = (m) => (m.name.match(/\d+M/) || [m.name])[0];
 
 function statePill(m) {
@@ -201,13 +211,15 @@ export function cloningLanguages() {
 /**
  * The fields a request may carry beyond text, model and voice.
  *
- * Only what the selected model declares: sending a field it does not take is
- * a 400, and the caller never asked for one.
+ * The language goes on every model: it picks the text pipeline's locale, and
+ * the server tells the model too where the model takes one. The instruction
+ * goes only where the model declares it: sending it elsewhere is a 400, and
+ * the caller never asked for one.
  */
 export function delivery() {
   const model = selectedModel();
   const out = {};
-  if (model && model.language_choice && $("language").value) {
+  if ($("language").value) {
     out.language = $("language").value;
   }
   if (model && model.style_instruction && $("instruct").value.trim()) {
@@ -229,12 +241,12 @@ function renderDeliveryFields() {
   $("instructHint").textContent =
     "Plain language, beside the voice. Left empty the speaker reads it as it normally would.";
 
-  // The language field stays on every model: it narrows the voice list
-  // whatever the model does with it, and only some are additionally told
-  // which language to read.
+  // The language field stays on every model: it narrows the voice list and
+  // picks how the text is prepared whatever the model does with it, and only
+  // some are additionally told which language to read.
   $("languageHint").textContent = spoken
-    ? "Narrows the voices below, and tells the model which language to read it in."
-    : "Narrows the voices below. This model reads whichever language its voice does.";
+    ? "Narrows the voices below, picks how the text is prepared, and tells the model which language to read it in."
+    : "Narrows the voices below and picks how the text is prepared. This model reads whichever language its voice does.";
 
   const codes = model ? model.languages || [] : [];
   fillPicker(

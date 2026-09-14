@@ -182,6 +182,104 @@ class TestPreview:
         )
         assert response.json()["prepared"] == "溫度 26.5°C。"
 
+    def test_preview_lists_the_taiwan_readings_it_applied(
+        self, client: TestClient
+    ) -> None:
+        response = client.post(
+            "/api/preview", headers=AUTH, json={"text": "垃圾車來了，請把垃圾拿出去。"}
+        )
+        body = response.json()
+        assert body["prepared"] == "乐色车来了，请把乐色拿出去。"
+        assert body["readings"] == [
+            {"word": "垃圾车", "standin": "乐色车"},
+            {"word": "垃圾", "standin": "乐色"},
+        ]
+
+    def test_the_language_picks_the_locale_and_is_reported(
+        self, client: TestClient
+    ) -> None:
+        response = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={"text": "Es sind 26.5°C.", "language": "de-DE"},
+        )
+        body = response.json()
+        assert body["prepared"] == "Es sind sechsundzwanzig Komma fünf Grad Celsius."
+        assert body["language"] == "de-DE"
+        # A language without Chinese rewrites lists none, rather than "off".
+        assert body["passes"] == {"normalize_text": True, "expand_numbers": False}
+
+    def test_the_model_decides_whether_the_generic_locale_runs(
+        self, client: TestClient
+    ) -> None:
+        # Nothing in the catalog reads numerals until measured; the field
+        # is on the wire so the UI's column follows whatever is declared.
+        response = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={"text": "Es sind 26.5 Grad.", "language": "de", "model": "hojo-40m"},
+        )
+        assert response.json()["passes"]["normalize_text"] is True
+        models = client.get("/api/models", headers=AUTH).json()
+        assert all("reads_numerals" in m for m in models)
+
+    def test_a_mainland_tag_keeps_the_mainland_readings(
+        self, client: TestClient
+    ) -> None:
+        response = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={"text": "垃圾车来了", "language": "zh-CN"},
+        )
+        body = response.json()
+        assert body["prepared"] == "垃圾车来了。"
+        assert body["passes"] == {
+            "normalize_text": True,
+            "expand_numbers": False,
+            "convert_script": True,
+            "taiwan_readings": False,
+        }
+
+    def test_untagged_traditional_text_is_read_as_taiwan_s(
+        self, client: TestClient
+    ) -> None:
+        response = client.post(
+            "/api/preview", headers=AUTH, json={"text": "垃圾車來了"}
+        )
+        body = response.json()
+        assert body["language"] == "zh-Hant"
+        assert body["prepared"] == "乐色车来了。"
+
+    def test_both_endpoints_leave_the_chinese_switches_to_the_language(self) -> None:
+        # /api/speak and /api/preview must default alike, or a zh-CN call would
+        # get Taiwan readings on one and not the other.
+        from cortex_tts.api.schemas import PreviewRequest, SpeakRequest
+
+        for request in (SpeakRequest(text="x"), PreviewRequest(text="x")):
+            assert request.convert_script is None
+            assert request.taiwan_readings is None
+
+    def test_a_bare_number_is_read_only_when_asked(self, client: TestClient) -> None:
+        # 110 is an emergency number; read as a quantity it would mislead.
+        unasked = client.post("/api/preview", headers=AUTH, json={"text": "撥打 110"})
+        assert unasked.json()["prepared"] == "拨打 110。"
+        asked = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={"text": "撥打 110", "expand_numbers": True},
+        )
+        assert asked.json()["prepared"] == "拨打一百一十。"
+        assert asked.json()["passes"]["expand_numbers"] is True
+
+    def test_preview_can_leave_the_readings_alone(self, client: TestClient) -> None:
+        response = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={"text": "垃圾車來了", "taiwan_readings": False},
+        )
+        assert response.json()["prepared"] == "垃圾车来了。"
+        assert response.json()["readings"] == []
+
 
 class TestSpeakErrors:
     """What a caller sees when synthesis cannot happen."""
@@ -497,22 +595,14 @@ class TestReferenceValidation:
 class TestAKnobTheModelDoesNotHave:
     """A field a model cannot honour is refused, never silently dropped.
 
-    The same reasoning as `NO_TEMPERATURE`: accepting `language` on a model
-    whose voice decides the language would be indistinguishable from having
-    worked, and the caller would go looking for the fault in the audio.
-    Answered from the catalog, so it does not wait behind a download.
-    """
+    The same reasoning as `NO_TEMPERATURE`: accepting an instruction on a
+    model that reads none would be indistinguishable from having worked, and
+    the caller would go looking for the fault in the audio. Answered from the
+    catalog, so it does not wait behind a download.
 
-    def test_a_language_on_a_voice_bound_model_is_refused(
-        self, ingress_client: TestClient
-    ) -> None:
-        response = ingress_client.post(
-            "/api/speak",
-            json={"text": "你好。", "model": "hojo-40m", "language": "ja"},
-            headers=INGRESS,
-        )
-        assert response.status_code == 400
-        assert response.json()["code"] == "NO_LANGUAGE_CHOICE"
+    `language` is not such a field: it says what the text is, which the
+    pipeline uses on every model, so it is never refused (see TestPreview).
+    """
 
     def test_an_instruction_on_a_model_without_one_is_refused(
         self, ingress_client: TestClient
