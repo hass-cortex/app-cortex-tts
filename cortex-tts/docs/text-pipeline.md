@@ -170,7 +170,11 @@ in punctuation — the app adds it.
 
 `normalize_text` is every language's, on by default; `expand_numbers` is
 every language's too, left out it is the model's call — on only for one
-that cannot say a digit (see above). `convert_script` and
+that cannot say a digit (see above). Between the request and those built-in
+answers sit the settings: a rule per model and language (`text_rules`, on
+the app's Settings page) answers any switch the request left out, so a
+household that wants bare numbers read on MOSS in Chinese, or Taiwan
+readings off for one voice, sets that once instead of on every call. `convert_script` and
 `taiwan_readings` are Chinese's alone: left out of a request, the language
 decides them — conversion is always on, readings are on for `zh-TW` and
 `zh-Hant` (a bare `zh` counts when the text is Traditional) and off for

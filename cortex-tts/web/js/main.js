@@ -45,6 +45,7 @@ function wire() {
   settings.whenSaved(() =>
     models.loadDefaults()
       .then(() => models.refreshModels())
+      .then(() => preview.refresh())
       .catch((err) => msg($("modelMsg"), err.message, "err")));
 
   // The voice's own language is what the text is read in when the language

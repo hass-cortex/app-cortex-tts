@@ -133,16 +133,20 @@ class SpeakRequest(BaseModel):
     """Container to answer in. `/api/speak` defaults to wav and
     `/api/speak/stream` to mp3, because a stream has to be writable
     without knowing how long the audio will be."""
-    normalize_text: bool = True
+    normalize_text: bool | None = None
+    """Expand units, clock literals and dates into words. Left out, a
+    settings rule for the model and language may answer; otherwise on."""
     expand_numbers: bool | None = None
     """Read a bare number — no unit, clock or date around it — as a quantity.
-    Left out, the model decides: on for one that cannot say a digit at all
-    (Hojo), off for the rest, because a bare number is as often a phone
-    number, a room or a model as a count, and a wrong reading misleads."""
+    Left out, a settings rule may answer; otherwise the model decides: on for
+    one that cannot say a digit at all (Hojo), off for the rest, because a
+    bare number is as often a phone number, a room or a model as a count,
+    and a wrong reading misleads."""
     convert_script: bool | None = None
-    """Chinese only. Left out, the pipeline decides from the language."""
+    """Chinese only. Left out, a settings rule may answer; otherwise on."""
     taiwan_readings: bool | None = None
-    """Chinese only. Left out, on for `zh-TW` and `zh-Hant`, off otherwise."""
+    """Chinese only. Left out, a settings rule may answer; otherwise on for
+    `zh-TW` and `zh-Hant`, off elsewhere."""
     normalize_level: bool = True
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     language: str | None = Field(default=None, max_length=32)
@@ -229,7 +233,7 @@ class PreviewRequest(BaseModel):
     Left out, the default model's answer."""
     language: str | None = Field(default=None, max_length=32)
     """The language of the text, as on `/api/speak`; sniffed when left out."""
-    normalize_text: bool = True
+    normalize_text: bool | None = None
     expand_numbers: bool | None = None
     convert_script: bool | None = None
     taiwan_readings: bool | None = None
@@ -277,6 +281,23 @@ class OpenAISpeechRequest(BaseModel):
     response_format: AudioFormat = "wav"
 
 
+class TextRule(BaseModel):
+    """What the text switches default to for a model, a language, or both.
+
+    A request that leaves a switch out gets the rule's answer; a switch left
+    out of the rule (or null) stays the pipeline's call. Rules cascade per
+    switch, the most specific one that says something winning: `model` and
+    `language` both set beats either alone, which beats neither. `language`
+    matches a tag it equals or prefixes (`zh` covers `zh-TW`)."""
+
+    model: str | None = None
+    language: str | None = None
+    normalize_text: bool | None = None
+    expand_numbers: bool | None = None
+    convert_script: bool | None = None
+    taiwan_readings: bool | None = None
+
+
 class SettingsOut(BaseModel):
     """How the app behaves, as the user last set it."""
 
@@ -289,6 +310,7 @@ class SettingsOut(BaseModel):
     default_voice: str
     temperature: float
     preload: bool
+    text_rules: list[TextRule]
 
 
 class SettingsUpdate(BaseModel):
@@ -308,6 +330,8 @@ class SettingsUpdate(BaseModel):
     default_voice: str | None = None
     temperature: float | None = None
     preload: bool | None = None
+    text_rules: list[TextRule] | None = None
+    """The whole list; sending one replaces what was stored."""
 
 
 class SettingsSaved(BaseModel):

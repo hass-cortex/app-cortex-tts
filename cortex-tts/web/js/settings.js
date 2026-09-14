@@ -10,6 +10,20 @@ let models = [];
 let voices = [];
 let onSaved = () => {};
 
+// The four text switches a rule can answer, and the chip name each one
+// wears on the composer — so a rule reads the way the preview does.
+const SWITCHES = [
+  ["normalize_text", "normalise numbers"],
+  ["expand_numbers", "bare numbers"],
+  ["convert_script", "to Simplified"],
+  ["taiwan_readings", "Taiwan readings"],
+];
+const THREE_WAY = [
+  ["", "as decided"],
+  ["true", "on"],
+  ["false", "off"],
+];
+
 /** Register what to do once a change is stored — the defaults just moved. */
 export const whenSaved = (fn) => { onSaved = fn; };
 
@@ -30,7 +44,69 @@ const LABELS = {
   max_synthesis_seconds: "Refuse over-long replies",
   temperature: "Sampling temperature",
   preload: "Preload",
+  text_rules: "Text switch rules",
 };
+
+function threeWay(name, value) {
+  const chosen = value === null || value === undefined ? "" : String(value);
+  return `<select data-switch="${name}">${THREE_WAY.map(
+    ([v, label]) => `<option value="${v}"${v === chosen ? " selected" : ""}>${label}</option>`,
+  ).join("")}</select>`;
+}
+
+function renderRule(rule) {
+  const modelOptions = [`<option value="">any model</option>`]
+    .concat(models.map((m) => `<option value="${esc(m.id)}"${m.id === rule.model ? " selected" : ""}>${esc(m.name)}</option>`))
+    .join("");
+  return `<div class="rule">
+    <div><label>Model</label><select data-rule="model">${modelOptions}</select></div>
+    <div><label>Language</label><input data-rule="language" list="setLangList" placeholder="any" value="${esc(rule.language || "")}"></div>
+    ${SWITCHES.map(([name, label]) => `<div><label>${esc(label)}</label>${threeWay(name, rule[name])}</div>`).join("")}
+    <button class="danger" data-rule="remove" aria-label="Remove rule">Remove</button>
+  </div>`;
+}
+
+function renderRules() {
+  if (!current) return;
+  const rules = current.text_rules || [];
+  $("setRules").innerHTML = rules.length
+    ? rules.map(renderRule).join("")
+    : '<div class="rules-empty">No rules: every switch is the pipeline\'s call.</div>';
+  // The tags the models declare, plus the Chinese ones a rule is likely to
+  // want, offered as suggestions; anything else may be typed.
+  const tags = new Set(["zh-TW", "zh-CN", "zh-Hant", "zh-Hans"]);
+  for (const m of models) for (const l of m.languages || []) tags.add(l);
+  $("setLangList").innerHTML = [...tags].sort().map((t) => `<option value="${esc(t)}">`).join("");
+}
+
+/** The rules as the rows now read, sent whole: the list replaces what was stored. */
+function collectRules() {
+  return [...$("setRules").querySelectorAll(".rule")].map((row) => {
+    const rule = {
+      model: row.querySelector('[data-rule="model"]').value || null,
+      language: row.querySelector('[data-rule="language"]').value.trim() || null,
+    };
+    for (const sel of row.querySelectorAll("[data-switch]")) {
+      rule[sel.dataset.switch] = sel.value === "" ? null : sel.value === "true";
+    }
+    return rule;
+  });
+}
+
+function addRule() {
+  // Edits in the other rows survive: the new row is appended to what the
+  // rows say now, not to what was last stored.
+  current = { ...current, text_rules: [...collectRules(), { model: null, language: null }] };
+  renderRules();
+}
+
+function removeRule(row) {
+  const rules = collectRules();
+  const index = [...$("setRules").querySelectorAll(".rule")].indexOf(row);
+  rules.splice(index, 1);
+  current = { ...current, text_rules: rules };
+  renderRules();
+}
 
 /** Voices the chosen default model offers, plus the stored one if nothing downloaded offers it. */
 function voiceOptions() {
@@ -82,6 +158,7 @@ function render() {
   $("setModel").innerHTML = "";
   $("setVoice").innerHTML = "";
   renderPickers();
+  renderRules();
 }
 
 /** Adopt a freshly fetched model and voice list without disturbing an edit. */
@@ -91,6 +168,7 @@ export function syncChoices(nextModels, nextVoices) {
   // The bound counts catalog entries, so the catalog says how high it goes.
   if (models.length) $("setLoaded").max = models.length;
   renderPickers();
+  renderRules();
   showProviders(models.filter((m) => m.provider).map((m) => m.provider));
 }
 
@@ -124,6 +202,7 @@ async function save() {
         max_synthesis_seconds: numberOrOmit("setMaxSynth"),
         temperature: numberOrOmit("setTemp"),
         preload: $("setPreload").checked,
+        text_rules: collectRules(),
       }),
     });
     const body = await res.json();
@@ -154,4 +233,9 @@ export async function load() {
 export function init() {
   $("setModel").addEventListener("change", renderPickers);
   $("setSave").addEventListener("click", save);
+  $("setRuleAdd").addEventListener("click", addRule);
+  $("setRules").addEventListener("click", (event) => {
+    const button = event.target.closest('[data-rule="remove"]');
+    if (button) removeRule(button.closest(".rule"));
+  });
 }

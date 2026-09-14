@@ -187,6 +187,17 @@ again — about a second for the 40M, about 4 s for MOSS on a GPU. Worth setting
 on a card another workload shares: MOSS holds about 2.5 GB of a GPU for as
 long as it is resident, whether or not anyone is speaking.
 
+### Text switches, per model and language
+
+What a request gets for `normalize_text`, `expand_numbers`, `convert_script`
+and `taiwan_readings` when it does not say. Left alone, each is the
+pipeline's call — bare numbers are read only for a model that cannot say a
+digit (Hojo), the two Chinese rewrites follow the language — and a rule here
+answers instead, for one model, one language, or both. The most specific rule
+that says something wins; a language covers every tag it prefixes (`zh`
+covers `zh-TW`). The Home Assistant integration's `options:` still override
+a rule for that one call.
+
 ### Refuse over-long replies
 
 Seconds; a reply whose estimated render would take longer than this on the

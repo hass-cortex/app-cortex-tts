@@ -13,9 +13,9 @@ import logging
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from functools import partial
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi import status as http_status
@@ -364,13 +364,8 @@ async def preview_text(
 ) -> PreviewResponse:
     """Show what the text pipeline would hand the model, without synthesising."""
     spec = _spec_or_404(state, body.model or state.preferences.default_model)
-    options = _text_options(
-        body.normalize_text,
-        body.expand_numbers,
-        body.convert_script,
-        body.taiwan_readings,
-    )
     text = body.text.strip()
+    options = _text_options(state, spec, text, body.language, body)
     decided = plan(
         text,
         options,
@@ -406,18 +401,55 @@ async def preview_text(
 # ---------------------------------------------------------------------------
 
 
+class _Switches(Protocol):
+    """What a request said about the text switches; ``None`` is nothing."""
+
+    @property
+    def normalize_text(self) -> bool | None: ...
+    @property
+    def expand_numbers(self) -> bool | None: ...
+    @property
+    def convert_script(self) -> bool | None: ...
+    @property
+    def taiwan_readings(self) -> bool | None: ...
+
+
+@dataclass(frozen=True)
+class _Unasked:
+    """A request that said nothing about the text switches."""
+
+    normalize_text: bool | None = None
+    expand_numbers: bool | None = None
+    convert_script: bool | None = None
+    taiwan_readings: bool | None = None
+
+
 def _text_options(
-    normalize_text: bool,
-    expand_numbers: bool | None,
-    convert_script: bool | None,
-    taiwan_readings: bool | None,
+    state: AppState,
+    spec: ModelSpec,
+    text: str,
+    language: str | None,
+    asked: _Switches,
 ) -> TextOptions:
-    """The request's text switches as the pipeline takes them."""
+    """The request's text switches, with the settings' rules behind them.
+
+    A switch the request leaves out is answered by the rule for this model
+    and the language the text resolves to; one no rule answers stays
+    ``None`` for the pipeline to decide — except `normalize_text`, which
+    the pipeline takes as a plain flag and is on unless something says no.
+    """
+    rule = state.preferences.text_defaults(spec.id, resolve_language(text, language))
+
+    def settle(name: str) -> bool | None:
+        value = getattr(asked, name)
+        return getattr(rule, name) if value is None else value
+
+    normalize = settle("normalize_text")
     return TextOptions(
-        normalize_text=normalize_text,
-        expand_numbers=expand_numbers,
-        convert_script=convert_script,
-        taiwan_readings=taiwan_readings,
+        normalize_text=True if normalize is None else normalize,
+        expand_numbers=settle("expand_numbers"),
+        convert_script=settle("convert_script"),
+        taiwan_readings=settle("taiwan_readings"),
     )
 
 
@@ -478,10 +510,7 @@ async def _resolve(
     text: str,
     model: str | None,
     voice: str | None,
-    normalize_text: bool,
-    expand_numbers: bool | None,
-    convert_script: bool | None,
-    taiwan_readings: bool | None,
+    asked: _Switches,
     delivery: Delivery = Delivery(),
 ) -> _Resolved:
     """Turn a request into everything a synthesis needs, or raise.
@@ -510,9 +539,7 @@ async def _resolve(
             f"{spec.name} takes no style instruction",
         )
 
-    options = _text_options(
-        normalize_text, expand_numbers, convert_script, taiwan_readings
-    )
+    options = _text_options(state, spec, text, delivery.language, asked)
     # Whether there is anything to say does not depend on the voice, so it is
     # answered first — before a model with no voices, or one not downloaded,
     # gets to answer instead.
@@ -561,6 +588,7 @@ async def _resolve(
 
     language = delivery.language or chosen.language
     if language != delivery.language:
+        options = _text_options(state, spec, text, language, asked)
         segments = prepare(
             text,
             options,
@@ -585,23 +613,12 @@ async def _synthesize(
     model: str | None,
     voice: str | None,
     fmt: AudioFormat,
-    normalize_text: bool = True,
-    expand_numbers: bool | None = None,
-    convert_script: bool | None = None,
-    taiwan_readings: bool | None = None,
+    asked: _Switches = _Unasked(),
     normalize_level: bool = True,
     delivery: Delivery = Delivery(),
 ) -> tuple[bytes, SpeakStats]:
     spec, segments, voice_id, delivery = await _resolve(
-        state,
-        text=text,
-        model=model,
-        voice=voice,
-        normalize_text=normalize_text,
-        expand_numbers=expand_numbers,
-        convert_script=convert_script,
-        taiwan_readings=taiwan_readings,
-        delivery=delivery,
+        state, text=text, model=model, voice=voice, asked=asked, delivery=delivery
     )
 
     with _engine_errors():
@@ -669,10 +686,7 @@ async def speak(body: SpeakRequest, state: AppState = Depends(get_state)) -> Res
         model=body.model,
         voice=body.voice,
         fmt=body.format or "wav",
-        normalize_text=body.normalize_text,
-        expand_numbers=body.expand_numbers,
-        convert_script=body.convert_script,
-        taiwan_readings=body.taiwan_readings,
+        asked=body,
         normalize_level=body.normalize_level,
         delivery=body.delivery(),
     )
@@ -733,10 +747,7 @@ async def speak_stream(
         text=body.text,
         model=body.model,
         voice=body.voice,
-        normalize_text=body.normalize_text,
-        expand_numbers=body.expand_numbers,
-        convert_script=body.convert_script,
-        taiwan_readings=body.taiwan_readings,
+        asked=body,
         delivery=body.delivery(),
     )
 

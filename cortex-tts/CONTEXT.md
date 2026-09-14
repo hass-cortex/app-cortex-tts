@@ -89,6 +89,12 @@ ordinary Traditional Chinese makes the voice unintelligible.
 phone number as a count — except for a model that cannot say a digit at all,
 where digits are noise and it is on; `taiwan_readings` is a preference.
 
+**Text rule**:
+A stored default for the request flags, per model and language
+(`text_rules` in the settings): what a request gets for a switch it left out,
+before the pipeline's own answer. Rules cascade per switch, the most specific
+one that says something winning.
+
 **Taiwan reading** / **Stand-in**:
 A word Taiwan reads differently from the mainland (垃圾 lè sè), and the
 homophone it is respelled with so the model says it that way (乐色). The table

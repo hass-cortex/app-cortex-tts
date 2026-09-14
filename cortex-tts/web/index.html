@@ -157,6 +157,20 @@
   </div>
 
   <div class="group">
+    <h3>Text switches, per model and language</h3>
+    <p class="sub">What a request gets when it does not say. Each switch is
+    normally the pipeline's call — bare numbers by the model (on only for one
+    that cannot say a digit), the two Chinese rewrites by the language — and a
+    rule here answers instead. The most specific rule that says something wins:
+    model and language over either alone, either over a rule for everything.
+    A language matches any tag it prefixes (<code>zh</code> covers
+    <code>zh-TW</code>).</p>
+    <div class="rules" id="setRules"></div>
+    <datalist id="setLangList"></datalist>
+    <button id="setRuleAdd">Add rule</button>
+  </div>
+
+  <div class="group">
     <h3>How this host runs them</h3>
     <div class="row">
       <div class="field">

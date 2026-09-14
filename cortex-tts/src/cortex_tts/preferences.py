@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -33,6 +33,45 @@ from cortex_speech import (
 _LOGGER = logging.getLogger(__name__)
 
 FILE_NAME = "settings.json"
+
+
+SWITCHES = ("normalize_text", "expand_numbers", "convert_script", "taiwan_readings")
+
+
+@dataclass(frozen=True)
+class TextRule:
+    """What the text switches default to for a model, a language, or both.
+
+    A request that leaves a switch out gets the rule's answer; ``None`` in
+    the rule leaves the switch to the pipeline — the model's need for number
+    words, the language's own rewrites. Rules cascade per switch: the most
+    specific rule that says something wins, a model-and-language rule over a
+    model-only or language-only one, either over a rule for everything.
+
+    Attributes:
+        model: A catalog id, or ``None`` for every model.
+        language: A BCP 47 tag the request's language must equal or extend
+            (``zh`` covers ``zh-TW``), or ``None`` for every language.
+    """
+
+    model: str | None = None
+    language: str | None = None
+    normalize_text: bool | None = None
+    expand_numbers: bool | None = None
+    convert_script: bool | None = None
+    taiwan_readings: bool | None = None
+
+    def covers(self, model: str, language: str) -> bool:
+        if self.model is not None and self.model != model:
+            return False
+        if self.language is None:
+            return True
+        tag, want = language.lower(), self.language.lower()
+        return tag == want or tag.startswith(want + "-")
+
+    @property
+    def specificity(self) -> tuple[int, int]:
+        return (self.model is not None, len(self.language or ""))
 
 
 @dataclass(frozen=True)
@@ -61,6 +100,8 @@ class Preferences:
             first the model offers.
         temperature: Sampling temperature for engines that have one.
         preload: Load the default model at startup rather than on first use.
+        text_rules: What the text switches default to, per model and
+            language, for a request that leaves them out.
     """
 
     num_threads: int = 2
@@ -72,6 +113,25 @@ class Preferences:
     default_voice: str = "hojo_zh_f_01"
     temperature: float = 0.8
     preload: bool = True
+    text_rules: tuple[TextRule, ...] = ()
+
+    def text_defaults(self, model: str, language: str) -> TextRule:
+        """The switches the rules settle for this model and language.
+
+        Per switch, the most specific rule that says something; among rules
+        of equal specificity the later one.
+        """
+        answer: dict[str, bool | None] = dict.fromkeys(SWITCHES)
+        covering = sorted(
+            (r for r in self.text_rules if r.covers(model, language)),
+            key=lambda r: r.specificity,
+        )
+        for rule in covering:
+            for name in SWITCHES:
+                value = getattr(rule, name)
+                if value is not None:
+                    answer[name] = value
+        return TextRule(None, None, **answer)
 
     def merged(self, changes: dict[str, Any]) -> Preferences:
         """Return a copy with `changes` applied, each one validated.
@@ -170,6 +230,36 @@ def _flag(value: Any) -> bool:
     raise ValueError(f"not a boolean: {value!r}")
 
 
+def _flag_or_none(value: Any) -> bool | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _flag(value)
+
+
+def _text_rule(value: Any) -> TextRule:
+    if not isinstance(value, dict):
+        raise TypeError("a text rule is an object")
+    known = {f.name for f in fields(TextRule)}
+    if unknown := set(value) - known:
+        raise ValueError(f"unknown text rule fields: {sorted(unknown)}")
+    model = value.get("model")
+    model = _model(model) if model not in (None, "") else None
+    language = str(value.get("language") or "").strip().replace("_", "-") or None
+    if language is not None and len(language) > 32:
+        raise ValueError("language tag too long")
+    return TextRule(
+        model,
+        language,
+        **{name: _flag_or_none(value.get(name)) for name in SWITCHES},
+    )
+
+
+def _text_rules(value: Any) -> tuple[TextRule, ...]:
+    if not isinstance(value, list):
+        raise TypeError("text rules are a list")
+    return tuple(_text_rule(rule) for rule in value)
+
+
 _VALIDATORS: dict[str, Any] = {
     "num_threads": _threads,
     "execution_provider": _provider,
@@ -184,6 +274,7 @@ _VALIDATORS: dict[str, Any] = {
     "default_voice": lambda value: str(value).strip(),
     "temperature": _temperature,
     "preload": _flag,
+    "text_rules": _text_rules,
 }
 
 

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from cortex_speech import CATALOG
-from cortex_tts.preferences import FILE_NAME, Preferences, load, save
+from cortex_tts.preferences import FILE_NAME, Preferences, TextRule, load, save
 
 
 class TestStoring:
@@ -184,3 +184,70 @@ class TestHandEditedFiles:
         prefs, ignored = Preferences().validated({"preload": "maybe"})
         assert prefs.preload is True
         assert ignored == ["preload"]
+
+
+class TestTextRules:
+    """What the switches default to, per model and language."""
+
+    def test_no_rules_leave_every_switch_to_the_pipeline(self) -> None:
+        assert Preferences().text_defaults("hojo-40m", "zh-TW") == TextRule()
+
+    def test_the_most_specific_rule_wins_per_switch(self) -> None:
+        prefs = Preferences().merged(
+            {
+                "text_rules": [
+                    {"expand_numbers": True, "taiwan_readings": False},
+                    {"language": "zh", "taiwan_readings": True},
+                    {"model": "hojo-40m", "expand_numbers": False},
+                    {"model": "hojo-40m", "language": "zh-TW", "normalize_text": False},
+                ]
+            }
+        )
+        settled = prefs.text_defaults("hojo-40m", "zh-TW")
+        assert settled == TextRule(
+            normalize_text=False, expand_numbers=False, taiwan_readings=True
+        )
+        # Another model sees only the rules that cover it.
+        assert prefs.text_defaults("moss-nano", "zh-CN") == TextRule(
+            expand_numbers=True, taiwan_readings=True
+        )
+        assert prefs.text_defaults("moss-nano", "en") == TextRule(
+            expand_numbers=True, taiwan_readings=False
+        )
+
+    def test_a_language_covers_the_tags_it_prefixes(self) -> None:
+        rule = TextRule(language="zh-Hant")
+        assert rule.covers("moss-nano", "zh-Hant-TW")
+        assert rule.covers("moss-nano", "ZH-HANT")
+        assert not rule.covers("moss-nano", "zh-Hans")
+        assert not rule.covers("moss-nano", "zh")
+
+    def test_a_later_rule_beats_an_equal_one(self) -> None:
+        prefs = Preferences().merged(
+            {"text_rules": [{"expand_numbers": True}, {"expand_numbers": False}]}
+        )
+        assert prefs.text_defaults("hojo-40m", "en").expand_numbers is False
+
+    def test_a_rule_naming_an_unknown_model_refuses_the_list(self) -> None:
+        prefs, ignored = Preferences().validated(
+            {"text_rules": [{"model": "nope", "expand_numbers": True}]}
+        )
+        assert ignored == ["text_rules"]
+        assert prefs.text_rules == ()
+
+    def test_hand_edited_values_are_read(self) -> None:
+        prefs = Preferences().merged(
+            {
+                "text_rules": [
+                    {"language": "zh_TW", "expand_numbers": "true", "model": ""}
+                ]
+            }
+        )
+        assert prefs.text_rules == (TextRule(language="zh-TW", expand_numbers=True),)
+
+    def test_rules_survive_a_round_trip(self, tmp_path: Path) -> None:
+        prefs = Preferences(
+            text_rules=(TextRule(model="hojo-40m", expand_numbers=False),)
+        )
+        save(tmp_path, prefs)
+        assert load(tmp_path) == prefs

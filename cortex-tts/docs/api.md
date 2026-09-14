@@ -142,12 +142,23 @@ a route's own refusal, an unknown path, and a request body pydantic rejected
 
 ## Settings over the API
 
-`GET /api/settings` returns the seven stored settings as they are in force.
+`GET /api/settings` returns the stored settings as they are in force.
 `PUT /api/settings` takes any subset; a field that fails validation keeps its
 previous value rather than rejecting the form, and the reply names it under
 `ignored` beside `reloaded`, which says whether resident models were dropped
 to adopt a thread count or execution provider. See the App Store page for what
 each setting does.
+
+`text_rules` is what the four text switches default to when a request leaves
+them out, per model and language: a list of `{model, language, normalize_text,
+expand_numbers, convert_script, taiwan_readings}` where `model` is a catalog id
+or null for every model, `language` a tag the request's resolved language must
+equal or extend (`zh` covers `zh-TW`) or null for every language, and each
+switch `true`, `false` or null for "the pipeline's call". Rules cascade per
+switch, the most specific one that says something winning — model and language
+over either alone, either over neither; equal ones, the later. Sending the
+list replaces it whole. A rule naming a model the catalog lacks refuses the
+whole list, reported under `ignored`.
 
 ## Versioning
 

@@ -278,6 +278,53 @@ class TestPreview:
         assert moss.json()["prepared"] == "拨打 110。"
         assert moss.json()["passes"]["expand_numbers"] is False
 
+    def test_a_settings_rule_answers_what_the_request_left_out(
+        self, client: TestClient
+    ) -> None:
+        saved = client.put(
+            "/api/settings",
+            headers=AUTH,
+            json={
+                "text_rules": [
+                    {"model": "hojo-40m", "expand_numbers": False},
+                    {"language": "zh-TW", "taiwan_readings": False},
+                ]
+            },
+        )
+        assert saved.status_code == 200
+        assert saved.json()["ignored"] == []
+        assert len(saved.json()["settings"]["text_rules"]) == 2
+        assert len(client.get("/api/settings", headers=AUTH).json()["text_rules"]) == 2
+
+        ruled = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={"text": "撥打 110，垃圾車", "model": "hojo-40m", "language": "zh-TW"},
+        ).json()
+        assert ruled["prepared"] == "拨打 110，垃圾车。"
+        assert ruled["passes"]["expand_numbers"] is False
+        assert ruled["passes"]["taiwan_readings"] is False
+        # The request still has the last word.
+        asked = client.post(
+            "/api/preview",
+            headers=AUTH,
+            json={
+                "text": "撥打 110，垃圾車",
+                "model": "hojo-40m",
+                "language": "zh-TW",
+                "expand_numbers": True,
+                "taiwan_readings": True,
+            },
+        ).json()
+        assert asked["prepared"] == "拨打一百一十，乐色车。"
+        # A rule is matched on the language the text resolves to, so a
+        # sniffed Traditional text falls under the zh-TW rule as well.
+        sniffed = client.post(
+            "/api/preview", headers=AUTH, json={"text": "垃圾車", "model": "moss-nano"}
+        ).json()
+        assert sniffed["language"] == "zh-Hant"
+        assert sniffed["passes"]["taiwan_readings"] is True
+
     def test_the_request_overrides_the_model_on_bare_numbers(
         self, client: TestClient
     ) -> None:
