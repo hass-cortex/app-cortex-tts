@@ -413,6 +413,82 @@ class TestTheFitLeansSlow:
 class TestBankNeeded:
     """A paced reply releases when the bank covers what is still to be lost."""
 
+    def test_a_reply_that_runs_dear_widens_its_own_hold(self) -> None:
+        """The fit is the host's average day; this reply may not get one.
+
+        Measured in production: MOSS rendered a 61 s reply at 1.70x where its
+        fit said 1.09x, and the hold sized from the fit let the listener run
+        35 s dry. The first request had already been through the slow patch
+        before the hold released, so the reply knew and the plan did not.
+        """
+        planner = Planner(SLOW_CHUNKED, chunk_streaming=True)
+        planner.feed(S2 * 6)
+        planner.end()
+        assert isinstance(planner.plan(None), Send)
+        unaware = planner.bank_needed(0.0)
+
+        # The first request cost twice what the fit predicted for its audio.
+        predicted = SLOW_CHUNKED.render_seconds(12.0)
+        planner.rendered(12.0, predicted * 2)
+        assert planner.bank_needed(0.0) > unaware
+
+        # A batch that has produced almost nothing is not evidence: the
+        # prediction tends to zero at the top of a request while the wall does
+        # not, and on a host with no fixed cost the ratio ran away.
+        bare = Planner(SLOW_CHUNKED, chunk_streaming=True)
+        bare.feed(S2 * 6)
+        bare.end()
+        assert isinstance(bare.plan(None), Send)
+        assert bare.bank_needed(0.001, 5.0) == pytest.approx(
+            bare.bank_needed(0.0, 0.0), abs=0.01
+        )
+
+        # Past that, it counts before the request ends, because the hold is
+        # normally released part-way through it.
+        fresh = Planner(SLOW_CHUNKED, chunk_streaming=True)
+        fresh.feed(S2 * 6)
+        fresh.end()
+        assert isinstance(fresh.plan(None), Send)
+        half = SLOW_CHUNKED.render_seconds(6.0)
+        assert fresh.bank_needed(6.0, half * 2) > fresh.bank_needed(6.0, half)
+
+        # The whole line is dearer, and the loss comes off the moved line:
+        # at a fitted 1.15 running 2x dear the engine loses 1.3 per audio
+        # second, not (1.15 - 1) x 2 = 0.3.
+        dear = SLOW_CHUNKED.scaled(2.0)
+        assert dear.per_audio == pytest.approx(SLOW_CHUNKED.per_audio * 2)
+        # The request already rendering has paid its fixed part, so only the
+        # one behind it carries one.
+        in_flight = max(0.0, dear.per_audio - 1.0) * 12.0
+        queued = dear.deficit(12.0, chunk_streaming=True)
+        assert planner.bank_needed(0.0) == pytest.approx(
+            in_flight + queued + 0.5 + dear.spread_s, abs=0.1
+        )
+
+    def test_a_line_is_scaled_before_the_loss_is_taken_from_it(self) -> None:
+        """Scaling the difference under-corrects, which is how it read -3.4.
+
+        Measured against a host made 1.4x slower than its fit: scaling the
+        deficit left the listener 3.4 s short where scaling the line covers it.
+        """
+        fit = SLOW_CHUNKED
+        moved = fit.scaled(1.1)
+        assert moved.per_audio - 1.0 > (fit.per_audio - 1.0) * 1.1
+        # A factor at or below 1 is the fit itself: a hold never shrinks on
+        # one cheap request.
+        assert fit.scaled(1.0) is fit
+        assert fit.scaled(0.5) is fit
+
+    def test_a_reply_that_runs_cheap_does_not_narrow_it(self) -> None:
+        """A hold too long is a wait; too short is a gap nobody can un-hear."""
+        planner = Planner(SLOW_CHUNKED, chunk_streaming=True)
+        planner.feed(S2 * 6)
+        planner.end()
+        assert isinstance(planner.plan(None), Send)
+        unaware = planner.bank_needed(0.0)
+        planner.rendered(12.0, SLOW_CHUNKED.render_seconds(12.0) / 4)
+        assert planner.bank_needed(0.0) == pytest.approx(unaware, abs=0.01)
+
     def test_a_chunked_engine_counts_what_the_rest_will_lose(self) -> None:
         planner = Planner(SLOW_CHUNKED, chunk_streaming=True)
         planner.feed(S2 * 6)  # two batches of three sentences, 12 s each

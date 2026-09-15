@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -81,6 +81,27 @@ class RenderModel:
         """How long this text will take to say."""
         cjk, latin = count_scripts(text)
         return cjk / self.cjk_per_s + latin / self.latin_per_s
+
+    def scaled(self, factor: float) -> RenderModel:
+        """The same line with every cost dearer by `factor`.
+
+        Both parts move, and the deficit is taken from the moved line rather
+        than scaled after the fact: a chunk-streaming engine loses
+        `per_audio - 1`, and scaling that difference under-corrects. At a
+        fitted 1.26 running 1.10x dear, the loss is 1.26x1.10 - 1 = 0.386 per
+        audio second, not (1.26 - 1) x 1.10 = 0.286.
+
+        The speech rates are untouched: a busy host renders slower, it does
+        not make the voice speak fewer characters a second.
+        """
+        if factor <= 1.0:
+            return self
+        return replace(
+            self,
+            fixed_s=self.fixed_s * factor,
+            per_audio=self.per_audio * factor,
+            spread_s=self.spread_s * factor,
+        )
 
     def render_seconds(self, audio_s: float) -> float:
         """How long a request producing this much audio takes to render."""

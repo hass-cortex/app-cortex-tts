@@ -43,6 +43,11 @@ FIRST_FLOOR_S = 3.0
 # predicted to land in time, or the cut buys nothing but a pause mid-sentence.
 FIRST_CEILING_S = 6.0
 
+# How much audio a reply must have produced before its own pace is believed
+# over the fit's. A second is enough to be a measurement and short enough to
+# arrive before the opening hold is released.
+SLIP_EVIDENCE_S = 1.0
+
 # What the lead must keep in hand beyond the prediction. Renders vary, the
 # host is briefly busy, the estimate of how fast the voice speaks is rounded.
 MARGIN_S = 0.5
@@ -127,11 +132,55 @@ class Planner:
         self._sent = 0
         self._queued: list[str] = []
         self._rendering: str | None = None
+        # What this reply's finished requests actually cost, against what the
+        # fit said they would. The fit describes the host on its average day.
+        self._spent_audio_s = 0.0
+        self._spent_wall_s = 0.0
         self.mode: str = BUFFERED if mode == BUFFERED or model is None else STREAMING
 
     def feed(self, text: str) -> None:
         """More of the reply arrived."""
         self._buffer.feed(text)
+
+    def rendered(self, audio_s: float, wall_s: float) -> None:
+        """Note what one finished request of this reply actually cost."""
+        if audio_s > 0 and wall_s > 0:
+            self._spent_audio_s += audio_s
+            self._spent_wall_s += wall_s
+
+    def _slip(self, produced_s: float = 0.0, elapsed_s: float = 0.0) -> float:
+        """How much dearer this reply is running than the fit predicted.
+
+        A reply that meets a busy host has to notice before it releases audio
+        it cannot sustain: the host's measured average cannot see a burst
+        coming, but this reply is already inside one.
+
+        The request still rendering counts, not only the finished ones. A
+        paced reply normally releases part-way through its first request —
+        measured on a host made 1.4x slower than its fit, the release came at
+        12.4 s and the first request did not finish until 12.2 s — so waiting
+        for a request to end is waiting until after the decision.
+
+        Never below 1. A hold that is too long costs a wait the listener can
+        sit through; one that is too short costs a gap they cannot un-hear,
+        and by then there is no taking the audio back.
+        """
+        if self._model is None:
+            return 1.0
+        audio = self._spent_audio_s + max(0.0, produced_s)
+        wall = self._spent_wall_s + max(0.0, elapsed_s)
+        if audio < SLIP_EVIDENCE_S or wall <= 0:
+            # A request that has produced almost nothing has spent almost no
+            # time predictably: at the top of a batch the prediction tends to
+            # zero while the wall does not, and the ratio of the two is
+            # arithmetic, not evidence. Measured before this guard, a reply on
+            # a host with no fixed cost held its whole nine seconds rather
+            # than the 1.6 s the line asked for.
+            return 1.0
+        predicted = self._model.render_seconds(audio)
+        if predicted <= 0:
+            return 1.0
+        return max(1.0, wall / predicted)
 
     def end(self) -> None:
         """The reply is complete."""
@@ -307,7 +356,7 @@ class Planner:
         self._rendering = self._queued.pop(0)
         return Send(self._rendering)
 
-    def bank_needed(self, produced_s: float) -> float:
+    def bank_needed(self, produced_s: float, elapsed_s: float = 0.0) -> float:
         """Audio the listener must hold now so the rest never runs dry.
 
         Requests are dispatched back to back. A chunk-streaming engine loses
@@ -319,7 +368,9 @@ class Planner:
         counted whole. The margin and the fit's spread are on top, once.
         """
         assert self._model is not None
-        model = self._model
+        # Dearer by whatever this reply has cost so far, so every deficit below
+        # is taken from the line it is actually running on.
+        model = self._model.scaled(self._slip(produced_s, elapsed_s))
         remaining = ([self._rendering] if self._rendering else []) + list(self._queued)
         if not remaining:
             return 0.0
@@ -335,6 +386,8 @@ class Planner:
                     needed += model.deficit(audio, chunk_streaming=True)
         else:
             needed = self._exact_hold(remaining, from_dispatch=True)
+        # Scaled by what this reply has cost so far, not only by the fit: the
+        # margin and the spread are fixed allowances and stay outside it.
         return needed + self._margin + model.spread_s
 
     def _group(self, sentences: list[str], limit_s: float) -> list[str]:

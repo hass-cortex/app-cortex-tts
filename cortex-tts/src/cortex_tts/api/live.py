@@ -100,6 +100,7 @@ class _Session:
         self._render_s = 0.0
         self._planner: Planner | None = None
         self._batch_produced_s = 0.0
+        self._batch_started: float | None = None
         self._ready_at: float | None = None
         self._ended_at: float | None = None
         self._hold = _Hold()
@@ -310,7 +311,7 @@ class _Session:
         """Render one batch, emitting audio as the engine produces it."""
         self._requests += 1
         self._batch_produced_s = 0.0
-        started = time.perf_counter()
+        started = self._batch_started = time.perf_counter()
         produced = 0
         with engine_errors():
             async for chunk in self._state.registry.synthesize_stream(
@@ -324,6 +325,10 @@ class _Session:
         wall = time.perf_counter() - started
         self._render_s += wall
         seconds = produced / spec.sample_rate
+        if self._planner is not None:
+            # What it really cost, so the opening hold for what is left is
+            # sized by this reply and not only by the host's average day.
+            self._planner.rendered(seconds, wall)
         if seconds:
             # Every request teaches the render model; a listener who left
             # never reaches here, so an abandoned render teaches it nothing.
@@ -369,7 +374,14 @@ class _Session:
             # Enough banked to outlast what the rest is still predicted to
             # lose: released now, and sooner if the render runs ahead.
             assert self._planner is not None
-            if hold.banked_s >= self._planner.bank_needed(self._batch_produced_s):
+            elapsed = (
+                time.perf_counter() - self._batch_started
+                if self._batch_started is not None
+                else 0.0
+            )
+            if hold.banked_s >= self._planner.bank_needed(
+                self._batch_produced_s, elapsed
+            ):
                 await self._release()
             return
         if hold.wall_s:
