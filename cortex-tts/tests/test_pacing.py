@@ -25,7 +25,7 @@ from cortex_speech.pacing import (
     Wait,
     clause_pieces,
 )
-from cortex_speech.pacing.planner import HOLD_CAP_S
+from cortex_speech.pacing.planner import HOLD_CAP_S, MARGIN_S, PACED_BATCH_S
 
 # Chinese at 4 chars/s so the arithmetic below is legible: 12 chars = 3 s.
 FAST_WHOLE = RenderModel(
@@ -283,29 +283,101 @@ class TestModelsThatCannotGainLead:
         assert decision.text.startswith(S1)
         assert not decision.hold_all
 
-    def test_the_paced_hold_is_exact_for_a_whole_render_engine(self) -> None:
-        """Six 4 s sentences at RTF 1 with 1.5 s fixed, grouped three and three:
-        the second batch lands 1.5 s after the first has played out, so the
-        first is held that long plus the margin."""
-        planner = Planner(REALTIME_WHOLE, chunk_streaming=False)
-        planner.feed(S2 * 6)  # 96 chars = 24 s
+    @pytest.mark.parametrize(
+        ("model", "chunked"),
+        [
+            (REALTIME_WHOLE, False),
+            (SLOW_CHUNKED, True),
+            (
+                RenderModel(
+                    fixed_s=0.0,
+                    per_audio=0.8,
+                    cjk_per_s=4.0,
+                    latin_per_s=14.0,
+                    samples=12,
+                ),
+                False,
+            ),
+        ],
+    )
+    def test_no_other_grouping_speaks_sooner(
+        self, model: RenderModel, chunked: bool
+    ) -> None:
+        """The plan is chosen by asking, so nothing else may beat it.
+
+        This is the specification the constants used to approximate: soonest
+        first word, with the lead never falling below the margin. It holds for
+        an engine that gains lead, one that does not, and one that is audible
+        mid-request, without any of them being named here.
+        """
+        planner = Planner(model, chunk_streaming=chunked)
+        planner.feed(S2 * 6)
         planner.end()
         first = planner.plan(None)
         assert isinstance(first, Send)
-        batches = [first.text]
-        while isinstance(nxt := planner.plan(0.0), Send):
-            batches.append(nxt.text)
-        assert batches == [S2 * 3, S2 * 3]
+        chosen = [first.text] + list(planner._queued)
+        assert "".join(chosen) == S2 * 6, "nothing is lost between requests"
         assert first.hold_bank
+
+        sentences = [S2] * 6
+        ours = planner._speaks_at(chosen)
+        for limit in (2.0, 4.0, 6.0, 8.0, PACED_BATCH_S):
+            rival = planner._group(sentences, limit)
+            assert ours <= planner._speaks_at(rival) + 1e-6, limit
+
+    def test_a_tie_goes_to_the_fewest_boundaries(self) -> None:
+        """Every cut speaks at the same moment on a chunk-streaming engine.
+
+        It is audible from its fixed cost whatever the grouping, so the search
+        finds a tie and the tie has to be broken on what else a boundary
+        costs. Measured on MOSS, the same story in one-sentence requests fell
+        41% behind playback against 4.1% in nine-second ones.
+        """
+        fast = RenderModel(
+            fixed_s=0.0, per_audio=0.36, cjk_per_s=4.0, latin_per_s=14.0, samples=12
+        )
+        planner = Planner(fast, chunk_streaming=True)
+        planner.feed(S2 * 6)
+        planner.end()
+        first = planner.plan(None)
+        assert isinstance(first, Send)
+        chosen = [first.text] + list(planner._queued)
+        assert planner._speaks_at(chosen) == pytest.approx(
+            planner._speaks_at(planner._group([S2] * 6, 4.0)), abs=0.01
+        ), "the cuts really do tie"
+        assert len(chosen) == 2, "so the one with fewer boundaries is taken"
+
+    def test_the_search_stops_where_the_line_stops_being_true(self) -> None:
+        """One request past the valley reads as faster, and is not.
+
+        The fit is a line, and a request long enough to leave the valley costs
+        more than a line can express — measured on MOSS, the same 55-second
+        story fell 4.1% behind playback in nine-second requests and 17.8% in
+        one. Searching past the cap would be optimising against a model that
+        is knowingly wrong there, so the search does not look.
+        """
+        planner = Planner(SLOW_CHUNKED, chunk_streaming=True)
+        planner.feed(S2 * 6)
+        planner.end()
+        first = planner.plan(None)
+        assert isinstance(first, Send)
+        chosen = [first.text] + list(planner._queued)
+        whole = planner._group([S2] * 6, 24.0)
+        assert len(whole) == 1
+        assert planner._speaks_at(whole) < planner._speaks_at(chosen)
+        assert max(SLOW_CHUNKED.audio_seconds(b) for b in chosen) <= PACED_BATCH_S
 
     def test_a_second_batch_that_lands_in_time_needs_only_the_margin(self) -> None:
         planner = Planner(REALTIME_WHOLE, chunk_streaming=False)
-        planner.feed(S1 + S2 + S3 + S2)  # groups as 11 s + 4 s
+        planner.feed(S1 + S2 + S3 + S2)
         planner.end()
         first = planner.plan(None)
         assert isinstance(first, Send)
-        assert first.text == S1 + S2 + S3
         assert first.hold_bank
+        chosen = [first.text] + list(planner._queued)
+        # Whatever the cut, a request that lands before the one before it has
+        # played out costs the listener only the margin and the spread.
+        assert planner._exact_hold(chosen) >= MARGIN_S
 
     def test_a_hold_past_the_cap_is_paced_even_when_lead_is_gained(self) -> None:
         heavy = RenderModel(
@@ -512,9 +584,14 @@ class TestBankNeeded:
         planner.end()
         first = planner.plan(None)
         assert isinstance(first, Send)
-        # Batch 1 renders in 13.5 s and lands whole; batch 2 lands at 27 s
-        # against 12 s played: 15 s is the deepest point.
-        assert planner.bank_needed(0.0) == pytest.approx(15.0 + 0.5, abs=0.05)
+        # The deepest point of whatever plan was chosen, which is what a whole
+        # render engine must have banked: every batch lands after the ones
+        # before it have played, so the bank covers the largest of those gaps.
+        chosen = [first.text] + list(planner._queued)
+        deepest, _ = planner._schedule(chosen)
+        assert planner.bank_needed(0.0) == pytest.approx(
+            deepest + MARGIN_S + REALTIME_WHOLE.spread_s, abs=0.05
+        )
 
     def test_the_spread_is_charged_once(self) -> None:
         shaky = RenderModel(

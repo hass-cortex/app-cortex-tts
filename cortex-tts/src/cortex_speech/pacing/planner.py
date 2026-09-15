@@ -343,7 +343,7 @@ class Planner:
         sentences = SentenceBuffer()
         sentences.feed(text)
         sentences.end()
-        self._queued = self._group(sentences.sentences, PACED_BATCH_S)
+        self._queued = self._best_batches(sentences.sentences)
         self._sent += 1
         self._rendering = self._queued.pop(0)
         return Send(self._rendering, hold_bank=True)
@@ -404,18 +404,19 @@ class Planner:
             batches.append(current)
         return batches
 
-    def _exact_hold(self, batches: list[str], *, from_dispatch: bool = False) -> float:
-        """Seconds to hold after the first audio so playback never catches up.
-
-        With `from_dispatch`, the bare figure from the moment the first of
-        these batches was dispatched — no margin, no spread — for a caller
-        that adds its own.
+    def _schedule(self, batches: list[str]) -> tuple[float, float]:
+        """The deepest point of a plan, and when its first audio exists.
 
         Requests are dispatched back to back. A whole-render engine makes a
         batch's audio available when its render ends; a chunk-streaming one
-        makes it available from its fixed cost onwards, at the rate it renders.
-        Playback starting at `H` needs the cumulative audio at every one of
-        those points, and `H` is the smallest value that satisfies all of them.
+        makes it available from its fixed cost onwards, at the rate it
+        renders. Playback starting at `H` needs the cumulative audio at every
+        one of those points; the deepest is the smallest `H` that satisfies
+        all of them.
+
+        This is the one piece of arithmetic under every decision here. What
+        each engine does differently is in the branch below and nowhere else —
+        it is physics, not policy.
         """
         assert self._model is not None
         model = self._model
@@ -439,11 +440,70 @@ class Planner:
                 first_audio_at = ends if first_audio_at is None else first_audio_at
             dispatched += render
             played_before += audio
+        return needed, first_audio_at or 0.0
+
+    def _exact_hold(self, batches: list[str], *, from_dispatch: bool = False) -> float:
+        """Seconds to hold after the first audio so playback never catches up.
+
+        With `from_dispatch`, the bare figure from the moment the first of
+        these batches was dispatched — no margin, no spread — for a caller
+        that adds its own.
+        """
+        assert self._model is not None
+        needed, first_audio_at = self._schedule(batches)
         if from_dispatch:
             return max(0.0, needed)
-        return (
-            max(0.0, needed - (first_audio_at or 0.0)) + self._margin + model.spread_s
-        )
+        return max(0.0, needed - first_audio_at) + self._margin + self._model.spread_s
+
+    def _speaks_at(self, batches: list[str]) -> float:
+        """When the listener hears the first word, if the plan is these batches."""
+        assert self._model is not None
+        needed, first_audio_at = self._schedule(batches)
+        return max(needed, first_audio_at) + self._margin + self._model.spread_s
+
+    def _best_batches(self, sentences: list[str]) -> list[str]:
+        """The cut points that get the listener speaking soonest.
+
+        Every rule this replaces was a hand-worked case of one question — how
+        soon can the first word go out with the lead never falling below the
+        margin — and the answer differed per engine, per model and per host,
+        so each case grew its own constant. `_schedule` answers the question
+        for any plan, so the plan is chosen by asking rather than by a
+        constant, and what an engine does differently falls out of the
+        arithmetic instead of a branch: a chunk-streaming one finds nothing to
+        gain by splitting, a model slower than real time finds no split that
+        keeps the lead, and both land on the plan they were special-cased to.
+
+        The family searched is one limit applied to every request, and the
+        limits worth trying are the ones that move a boundary. `PACED_BATCH_S`
+        is the only cap left: past it an autoregressive model's cost turns
+        quadratic, which is a property of the architecture and not this host's.
+        """
+        assert self._model is not None
+        running = 0.0
+        limits: list[float] = []
+        for sentence in sentences:
+            running += self._model.audio_seconds(sentence)
+            if running >= PACED_BATCH_S:
+                break
+            limits.append(running)
+        limits.append(PACED_BATCH_S)
+
+        # Largest first, and only a strictly sooner first word displaces it:
+        # where several plans speak at the same moment — which is every plan on
+        # a chunk-streaming engine, audible from its fixed cost whatever the
+        # cut — the fewest boundaries wins. Measured on MOSS, the same story in
+        # one-sentence requests fell 41% behind playback against 4.1% in nine-
+        # second ones; all of that is boundaries.
+        best: float | None = None
+        plan: list[str] | None = None
+        for limit in reversed(limits):
+            batches = self._group(sentences, limit)
+            speaks_at = self._speaks_at(batches)
+            if best is None or speaks_at < best - 1e-6:
+                best, plan = speaks_at, batches
+        assert plan is not None
+        return plan
 
 
 def _prepend(buffer: SentenceBuffer, text: str) -> SentenceBuffer:
