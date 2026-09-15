@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pypinyin>=0.53", "opencc-python-reimplemented>=0.1.7"]
+# dependencies = ["pypinyin>=0.53"]
 # ///
 """Build the Taiwan-readings table the text pipeline substitutes from.
 
@@ -25,7 +25,7 @@ goes in the table when a syllable differs in more than tone sandhi (一/不) or
 the neutral tone, and a stand-in character exists that both sides read one
 way only. Run it from the app directory:
 
-    uv run scripts/taiwan_readings.py
+    uv run --with pypinyin python scripts/taiwan_readings.py
 
 It writes ``src/cortex_speech/text/zh/taiwan_readings.tsv``.
 """
@@ -39,12 +39,20 @@ import sys
 import urllib.request
 from pathlib import Path
 
-from opencc import OpenCC
 from pypinyin import Style, lazy_pinyin
+
+# The pipeline's own conversion, not a bare OpenCC: it also writes every 著
+# that is not zhù as 着, and a key made any other way could never match the
+# text this table is looked up in.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from cortex_speech.text.zh.script import to_simplified  # noqa: E402
 
 RAW = "https://raw.githubusercontent.com/openvanilla/McBopomofo/master/Source/Data/"
 FILES = ("BPMFMappings.txt", "BPMFBase.txt", "heterophony1.list", "phrase.occ")
-OUT = Path(__file__).resolve().parents[1] / "src/cortex_speech/text/zh/taiwan_readings.tsv"
+OUT = (
+    Path(__file__).resolve().parents[1]
+    / "src/cortex_speech/text/zh/taiwan_readings.tsv"
+)
 
 # A word the corpus never saw is as likely a dictionary artefact as a word.
 MIN_WORD_OCCURRENCES = 1
@@ -57,7 +65,7 @@ _HAN = re.compile(r"^[一-鿿]+$")
 _FRAGMENT = re.compile(r"[的了著地得過]$")
 _PINYIN = re.compile(r"^[a-z]+[1-5]?$")
 
-_t2s = OpenCC("t2s").convert
+_t2s = to_simplified
 
 
 def fetch(name: str, cache: Path) -> list[str]:

@@ -234,6 +234,50 @@ class TestTaiwanReadings:
             assert to_simplified(word) == word, line
 
 
+class TestZheIsWrittenAsZhe:
+    """OpenCC keeps 著, which a Simplified-trained model reads as zhù.
+
+    Heard in production on OmniVoice: 住著 as 住住, 看著 as 看住. In Simplified
+    every reading but zhù is 着, so that is what the glyph becomes outside the
+    handful of zhù words.
+    """
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("廟裡住著一位老和尚", "庙里住着一位老和尚"),
+            ("他看著電視", "他看着电视"),
+            ("門開著", "门开着"),
+            ("拿著手機等著", "拿着手机等着"),
+            ("他著手處理，睡著了", "他着手处理，睡着了"),
+        ],
+    )
+    def test_the_particle_becomes_zhe(self, text: str, expected: str) -> None:
+        assert to_simplified(text) == expected
+
+    @pytest.mark.parametrize(
+        "text", ["著名的著作", "顯著", "一本名著", "原著", "土著", "著述", "著者"]
+    )
+    def test_the_zhu_words_keep_the_glyph(self, text: str) -> None:
+        assert "着" not in to_simplified(text)
+
+    def test_the_readings_table_carries_no_zhu_glyph_for_other_readings(self) -> None:
+        """Generated through the same conversion, so a 著 left in a key is a
+        zhù word and nothing else — otherwise the key could never match."""
+        from importlib.resources import files
+
+        for line in (
+            files("cortex_speech.text.zh")
+            .joinpath("taiwan_readings.tsv")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ):
+            if line.startswith("#"):
+                continue
+            word = line.split("\t")[0]
+            assert to_simplified(word) == word, line
+
+
 class TestSegmentation:
     """Splitting long text into synthesis-sized chunks."""
 
