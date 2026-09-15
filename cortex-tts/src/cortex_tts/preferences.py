@@ -1,10 +1,9 @@
 """The settings a user changes while the app is running.
 
-Everything here used to be an addon option, which meant every change went
-through the Supervisor and cost a restart — and a change to the *schema* cost
-a rebuild. None of these need that: what they configure is either read afresh
-on every request or bound when an engine's sessions are created, and the
-registry can drop those on demand.
+None of these needs a restart to take effect: what they configure is either
+read afresh on every request or bound when an engine's sessions are created,
+and the registry can drop those on demand. An addon option would have cost a
+restart per change and a rebuild per schema change, for nothing.
 
 What stays an addon option is what has to be settled before the process
 starts: the log level, and the key the Supervisor pushes through discovery.
@@ -90,11 +89,6 @@ class Preferences:
             0 keeps it until something evicts it. The next reply pays the
             load again, which is what makes this a choice: on a card shared
             with another workload the memory is worth more than the seconds.
-        max_synthesis_seconds: Refuse a request whose estimated render would
-            take longer than this on the measured speed of the chosen model;
-            0 accepts any length. What it stops is a reply so long it renders
-            past the client's own timeout — the audio finishes into a socket
-            nobody is reading, having held the model for minutes.
         default_model: Model used when a request names none.
         default_voice: Voice used when a request names none. Empty takes the
             first the model offers.
@@ -108,7 +102,6 @@ class Preferences:
     execution_provider: ExecutionProvider = "auto"
     max_loaded_models: int = 1
     idle_unload_seconds: int = 0
-    max_synthesis_seconds: int = 0
     default_model: str = "hojo-40m"
     default_voice: str = "hojo_zh_f_01"
     temperature: float = 0.8
@@ -193,13 +186,6 @@ def _idle(value: Any) -> int:
     return number
 
 
-def _synthesis_seconds(value: Any) -> int:
-    number = int(value)
-    if not 0 <= number <= 3600:
-        raise ValueError("max synthesis seconds out of range")
-    return number
-
-
 def _provider(value: Any) -> ExecutionProvider:
     text = str(value).strip().lower()
     if text not in EXECUTION_PROVIDERS:
@@ -265,7 +251,6 @@ _VALIDATORS: dict[str, Any] = {
     "execution_provider": _provider,
     "max_loaded_models": _loaded,
     "idle_unload_seconds": _idle,
-    "max_synthesis_seconds": _synthesis_seconds,
     "default_model": _model,
     # Deliberately unvalidated: a voice only exists once its model is
     # downloaded, and refusing one that is not there yet would make the field

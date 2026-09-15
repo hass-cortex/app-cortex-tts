@@ -14,7 +14,7 @@ import pytest
 
 from cortex_speech import BY_ID
 from cortex_speech.catalog import model_dir
-from cortex_speech.engine.base import Delivery, Synthesis
+from cortex_speech.engine.base import Delivery, StopCheck, Synthesis
 from cortex_speech.engine.registry import EngineRegistry
 from cortex_speech.references import ReferenceStore
 
@@ -30,7 +30,12 @@ class _Fake:
         self.deliveries: list[Delivery] = []
 
     def synthesize(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Synthesis:
         self.temperatures.append(delivery.temperature)
         self.deliveries.append(delivery)

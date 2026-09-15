@@ -61,7 +61,7 @@ class ModelSpec:
         cloning: Whether a reference recording can condition it. Independent
             of ``builtin_voices``: a model may have both, one, or neither.
         chunk_streaming: Whether the engine can emit audio before the whole
-            utterance is rendered, which `/api/speak/stream` carries over HTTP.
+            utterance is rendered, which a live reply carries per request.
         temperature: Whether a sampling temperature means anything to it. MOSS
             fuses its sampling into a dedicated ONNX graph and cannot read one,
             and silently ignoring the parameter is indistinguishable from

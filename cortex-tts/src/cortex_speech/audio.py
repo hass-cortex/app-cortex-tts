@@ -311,7 +311,7 @@ STREAM_ENCODERS: dict[str, Callable[[], StreamEncoder]] = {
     "wav": WavStream,
     "mp3": Mp3Stream,
 }
-"""Formats `/api/speak/stream` can produce, by the name a caller asks for."""
+"""Formats a chunked stream can produce, by the name a caller asks for."""
 
 
 class StreamGain:

@@ -30,9 +30,11 @@ from .base import (
     Delivery,
     Engine,
     EngineError,
+    StopCheck,
     StreamingEngine,
     Synthesis,
     Voice,
+    check_stop,
     reference_voices,
 )
 
@@ -462,6 +464,8 @@ class EngineRegistry:
         segments: list[str],
         voice: str,
         delivery: Delivery | None = None,
+        *,
+        stop: StopCheck | None = None,
     ) -> AsyncIterator[np.ndarray]:
         """Yield mono float32 chunks, as early as the model allows.
 
@@ -480,7 +484,13 @@ class EngineRegistry:
                 engine = slot.engine
                 if not isinstance(engine, StreamingEngine):
                     synthesis = await asyncio.to_thread(
-                        partial(engine.synthesize, segments, voice, delivery=wanted)
+                        partial(
+                            engine.synthesize,
+                            segments,
+                            voice,
+                            delivery=wanted,
+                            stop=stop,
+                        )
                     )
                     yield synthesis.audio
                     return
@@ -489,9 +499,15 @@ class EngineRegistry:
                 # is synchronous and blocking it would stall the event loop for
                 # the whole render. `None` is the end marker because the
                 # contract is arrays, so it cannot collide with a real chunk.
-                chunks = engine.synthesize_stream(segments, voice, delivery=wanted)
+                chunks = engine.synthesize_stream(
+                    segments, voice, delivery=wanted, stop=stop
+                )
 
                 def pull() -> np.ndarray | None:
+                    # Asked here rather than inside the engine: closing the
+                    # generator below is what stops its worker, so the
+                    # engine needs no second way to hear the same news.
+                    check_stop(stop)
                     return next(chunks, None)
 
                 try:
@@ -515,13 +531,24 @@ class EngineRegistry:
         voice: str,
         *,
         delivery: Delivery | None = None,
+        stop: StopCheck | None = None,
     ) -> Synthesis:
-        """Render text with a model, loading and serialising as needed."""
+        """Render text with a model, loading and serialising as needed.
+
+        `AbandonedError` passes straight through: it is the caller's own news
+        coming back, not a failure to note or a device to check.
+        """
         wanted = self._with_default_temperature(delivery)
         async with self._lease(model_id) as slot:
             try:
                 return await asyncio.to_thread(
-                    partial(slot.engine.synthesize, segments, voice, delivery=wanted)
+                    partial(
+                        slot.engine.synthesize,
+                        segments,
+                        voice,
+                        delivery=wanted,
+                        stop=stop,
+                    )
                 )
             except Exception as err:
                 self._note_failure("render", model_id, segments, voice, err)

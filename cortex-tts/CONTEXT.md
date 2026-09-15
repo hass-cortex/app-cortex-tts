@@ -175,20 +175,64 @@ seconds via the models-changed event.
 
 ### Latency
 
-**Streamed synthesis**:
-Speaking a reply sentence by sentence, so playback starts on the first one
-while the rest is still being made. The _integration_ does this by calling
-`/api/speak` per sentence. Needs no engine support: it is the _integration_
-splitting the reply, not the model streaming it.
+**Live reply**:
+A reply spoken over `/api/speak/live` while the writer is still producing it:
+text frames in, audio frames out, one WebSocket per reply. The _app_ decides
+what to render when (`cortex_speech/pacing`); the integration only forwards
+the words and plays the sound. Replaces the integration's per-sentence
+`/api/speak` calls, which split the reply without knowing what it cost.
 _Avoid_: "streaming" unqualified (see Flagged ambiguities)
+
+**Render model**:
+What this host has measured about one model and voice kind: a request costs a
+fixed part plus a part per second of audio (`fixed_s`, `per_audio`), and the
+voice speaks so many characters a second per script. Fitted from the requests
+the host actually served, never carried from another machine; `None` until
+three of them exist, and a reply to an unmeasured model is **buffered**.
+_Avoid_: "RTF" for the whole thing (the factor is one of its four numbers)
+
+**Lead**:
+Audio handed to the listener minus wall time since the first byte left: how
+much the listener still has to play if nothing more arrives. Positive and
+growing is a stream that is winning; the least value over a reply is
+`min_lead_s` in the `done` frame and the integration's playback-margin sensor.
+_Avoid_: "buffer" (the listener's buffer is downstream and invisible)
+
+**Hold**:
+Audio kept back before the first sound, so that what follows never runs dry.
+Sized by the planner from the render model, not chosen by a person: a bank of
+audio seconds for a chunk-streaming engine, a wall-clock delay after the first
+audio for one that hands requests over whole, or everything until the end.
+_Avoid_: "head start" (the integration's old user-facing number)
+
+**Streaming / paced / buffered**:
+The three plans for a live reply, chosen per reply and reported in the
+`ready` frame. _Streaming_: the model gains lead on every request, so batches
+go out as the lead allows. _Paced_: the whole reply was known before anything
+had to be sent, or the model cannot gain lead, so every batch is known and
+the hold is computed exactly. _Buffered_: nothing until it is all rendered —
+an unmeasured model, or a caller that asked.
+
+**Whole**:
+What the `done` frame reports, in place of the plan, when the reply fit one
+request: nothing was streamed or paced, whichever plan was in force. The
+outcomes are therefore _whole_, _streaming_ and _paced_; the integration's
+mode sensor shows those, and its setting stays automatic or buffered.
+
+**Abandoned**:
+A render whose listener left. Every engine takes a `stop` check and asks it
+between the units it produces — a decode step, a diffusion step, a codec
+chunk — so the engine lock is released within one unit and nothing is
+recorded against the model. Not a failure: `AbandonedError` is the caller's
+own news coming back.
 
 **Chunk streaming**:
 An engine emitting audio before a whole segment is finished. A `ModelSpec`
-capability and a separate `StreamingEngine` protocol, both true only for
-MOSS-TTS-Nano. `/api/speak/stream` carries it over HTTP as chunked MP3, and
-the integration consumes it inside each sentence. The measurement is in the
-`/api/speak/stream` docstring.
-Distinct from **Streamed synthesis**, which is per _sentence_ and needs no
+capability and a separate `StreamingEngine` protocol, both true for
+MOSS-TTS-Nano and Qwen3-TTS and for nothing else. A **Live reply** uses it
+inside each request, and the planner's arithmetic differs for it — a
+whole-render engine's request is all deficit until it ends, a chunk-streaming
+one's costs only its fixed part up front. Distinct from a live reply, which is per _request_ and needs no
 engine support at all.
 
 **Time to first audio**:
@@ -201,9 +245,14 @@ What the model cost, summed across segments. It is not a wait: segment one is
 already playing while segment three is being generated.
 
 **RTF**:
-Real-time factor — inference time divided by the length of audio produced.
-Below 1 means it speaks faster than the audio plays, which is what a streamed
-reply needs in order not to run dry mid-sentence.
+Real-time factor — render time divided by the length of audio produced. Below
+1 means it speaks faster than the audio plays, which is what a streamed reply
+needs in order not to run dry mid-sentence. Of one request it is a division;
+of a _model on this host_ it is `per_audio`, the **Render model**'s fitted
+factor, because a division carries the fixed cost of whichever request it came
+from. The card shows the fitted one.
+_Avoid_: averaging per-request divisions to describe a model — a reply split
+into ten short requests then reads as ten slow ones.
 
 ### Configuration
 
@@ -239,8 +288,9 @@ waits for a restart.
 - **Normalisation** runs before **Script conversion**: normalisation emits
   Traditional number words, so reversing the two would leave freshly-minted
   Traditional glyphs downstream of the only pass that can fix them.
-- **Segment** count drives **Streamed synthesis**: one segment means one model
-  call and no streaming benefit, however the flags are set.
+- A **Live reply** is planned in requests, each prepared through the **Text
+  path** into **Segments** on its own; the **Render model** is fitted per
+  request, because a request is what the listener waits for.
 - A **Reference recording** and the models-changed event are the two things
   that alter the voice list without a config-entry reload.
 
@@ -264,14 +314,13 @@ waits for a restart.
   scales a waveform's amplitude. They run in the same call and share no
   vocabulary. Say "text normalisation" or "level normalisation" — never the
   bare verb.
-- **"streaming" is four things.** Home Assistant's _streaming input_ (the
-  conversation agent feeding text in as it is written), our **Streamed
-  synthesis** (one `/api/speak` per sentence), **Chunk streaming** (an engine
-  emitting audio mid-segment, which only MOSS can do),
-  and HTTP chunked responses, which `/api/speak/stream` does and `/api/speak`
-  does not. A sensor that
-  measured the first of these was removed precisely because the name promised
-  one and the clock measured another.
+- **"streaming" is three things.** Home Assistant's _streaming input_ (the
+  conversation agent feeding text in as it is written), a **Live reply**
+  (text in, audio out over one socket, paced by the app), and **Chunk
+  streaming** (an engine emitting audio mid-segment, which MOSS and Qwen3-TTS
+  can do). _Streaming_ is also one of the three ways a live reply is spoken,
+  beside _paced_ and _buffered_. Name which one, every time: a sensor whose
+  name promised the first and whose clock measured another was unreadable.
 - **"voice" without a model is meaningless.** `hojo_zh_f_01` exists on the 40M
   and nowhere else, `Yuewen` only on MOSS, and the 80M's voices are whatever
   references have been uploaded. A reference is a voice on _every_ model that

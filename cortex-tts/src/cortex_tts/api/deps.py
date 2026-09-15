@@ -8,7 +8,15 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import (
+    Header,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketException,
+    status,
+)
+from starlette.requests import HTTPConnection
 
 from cortex_speech import (
     DownloadManager,
@@ -81,11 +89,16 @@ def get_state(request: Request) -> AppState:
     return request.app.state.cortex
 
 
+def get_state_ws(websocket: WebSocket) -> AppState:
+    """The same state for a WebSocket route; FastAPI resolves the two by type."""
+    return websocket.app.state.cortex
+
+
 INGRESS_PEER = "172.30.32.2"
 """The Supervisor's address on the hassio network, the only source of ingress."""
 
 
-def is_ingress(request: Request) -> bool:
+def is_ingress(request: HTTPConnection) -> bool:
     """Whether the Supervisor's ingress proxy sent this request.
 
     The `X-Ingress-Path` header alone proves nothing — any client on a
@@ -97,48 +110,74 @@ def is_ingress(request: Request) -> bool:
     return request.client is not None and request.client.host == INGRESS_PEER
 
 
+def _supplied_key(authorization: str | None, x_api_key: str | None) -> str:
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    if x_api_key:
+        return x_api_key.strip()
+    return ""
+
+
+def _key_accepted(
+    conn: HTTPConnection, authorization: str | None, x_api_key: str | None
+) -> bool:
+    """Whether this connection may proceed; logs a refusal.
+
+    An empty configured key disables the check, which is only sane when the
+    port is not published. Ingress connections skip it because the
+    Supervisor has already authenticated the user; see `is_ingress`.
+    """
+    state: AppState = conn.app.state.cortex
+    expected = state.settings.api_key
+    if not expected or is_ingress(conn):
+        return True
+
+    supplied = _supplied_key(authorization, x_api_key)
+    # Constant-time compare so a wrong key cannot be narrowed by timing. Bytes,
+    # because the str form raises on a non-ASCII token instead of rejecting it.
+    if supplied and hmac.compare_digest(
+        supplied.encode("utf-8"), expected.encode("utf-8")
+    ):
+        return True
+    # Say so. A refused request is invisible otherwise — there is no
+    # access log — and the admin UI reacts to a 401 by asking for a key,
+    # so "why is it asking?" has to be answerable from here.
+    _LOGGER.warning(
+        "refused %s %s: %s (peer=%s, ingress-path=%s)",
+        conn.scope.get("method", "WEBSOCKET"),
+        conn.url.path,
+        "no key supplied" if not supplied else "key did not match",
+        conn.client.host if conn.client else "unknown",
+        conn.headers.get("X-Ingress-Path") is not None,
+    )
+    return False
+
+
 async def require_api_key(
     request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> None:
-    """Reject requests without the configured bearer token.
-
-    An empty configured key disables the check, which is only sane when the
-    port is not published. Ingress requests skip the check because the
-    Supervisor has already authenticated the user; see `is_ingress` for what
-    counts as one.
-    """
-    state: AppState = request.app.state.cortex
-    expected = state.settings.api_key
-    if not expected:
-        return
-    if is_ingress(request):
-        return
-
-    supplied = ""
-    if authorization and authorization.lower().startswith("bearer "):
-        supplied = authorization[7:].strip()
-    elif x_api_key:
-        supplied = x_api_key.strip()
-
-    # Constant-time compare so a wrong key cannot be narrowed by timing. Bytes,
-    # because the str form raises on a non-ASCII token instead of rejecting it.
-    if not supplied or not hmac.compare_digest(
-        supplied.encode("utf-8"), expected.encode("utf-8")
-    ):
-        # Say so. A refused request is invisible otherwise — there is no
-        # access log — and the admin UI reacts to a 401 by asking for a key,
-        # so "why is it asking?" has to be answerable from here.
-        _LOGGER.warning(
-            "refused %s %s: %s (peer=%s, ingress-path=%s)",
-            request.method,
-            request.url.path,
-            "no key supplied" if not supplied else "key did not match",
-            request.client.host if request.client else "unknown",
-            request.headers.get("X-Ingress-Path") is not None,
-        )
+    """Reject requests without the configured bearer token."""
+    if not _key_accepted(request, authorization, x_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_REQUIRED", "message": "authentication required"},
+        )
+
+
+async def require_api_key_ws(
+    websocket: WebSocket,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> None:
+    """The same check for a WebSocket, which has no status code to refuse with.
+
+    The handshake is completed and the socket closed with policy-violation,
+    because a 403 during the handshake reaches most clients as an opaque
+    connection error and the close code at least names the reason.
+    """
+    if not _key_accepted(websocket, authorization, x_api_key):
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION, reason="authentication required"
         )

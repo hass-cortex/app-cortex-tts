@@ -18,6 +18,20 @@ property the directory exists for.
 | `moss_ort.py`     | `OpenMOSS/MOSS-TTS-Nano` @ `8b7bcc9`                          | see repo   |
 | `omnivoice/`      | `omnivoice` 0.2.1 (`k2-fsa/OmniVoice`), six modules flattened | Apache-2.0 — `omnivoice/LICENSE` |
 
+## Local deviations in carried files
+
+Each is marked `DEVIATION` at the line, so a diff against upstream reads as
+three known edits rather than noise:
+
+| Path                    | Deviation                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `moss_runtime.py`       | `on_audio_chunk` callback on `synthesize_single_chunk`: publishes each decoded chunk as it appears          |
+| `hojo40.py`, `hojo80.py` | `on_step` on `generate` / `_generate_coarse_tokens`: called before every decode step; raising from it aborts |
+| `omnivoice/modeling.py` | `on_step` on `OmniVoiceGenerationConfig`: called before every iterative decoding step; raising aborts       |
+
+The two `on_step` hooks exist for one reason: a render whose listener has gone
+must stop within one unit of work, and the unit is inside these loops.
+
 ## Ours, and therefore linted
 
 These two sit here for provenance, not because upstream would recognise them.

@@ -22,6 +22,7 @@ from cortex_speech import (
 
 from . import __version__, config, discovery, events, preferences
 from .api.deps import AppState
+from .api.live import live
 from .api.routes import api, compat, public
 from .stats import FILE_NAME as STATS_FILE
 from .stats import StatsStore
@@ -111,7 +112,7 @@ async def lifespan(app: FastAPI):
     _LOGGER.info(
         "cortex-tts %s listening on %s:%d "
         "(data=%s, references=%s, threads=%d, max_loaded=%d, idle_unload=%ds, "
-        "max_synthesis=%ds, temp=%.2f, provider=%s)",
+        "temp=%.2f, provider=%s)",
         state.version,
         settings.host,
         settings.port,
@@ -120,7 +121,6 @@ async def lifespan(app: FastAPI):
         prefs.num_threads,
         prefs.max_loaded_models,
         prefs.idle_unload_seconds,
-        prefs.max_synthesis_seconds,
         prefs.temperature,
         prefs.execution_provider,
     )
@@ -195,6 +195,7 @@ def create_app() -> FastAPI:
     app.include_router(public)
     app.include_router(api)
     app.include_router(compat)
+    app.include_router(live)
 
     # The lifespan builds its own; this one only needs where the UI lives.
     static_dir = config.load().static_dir

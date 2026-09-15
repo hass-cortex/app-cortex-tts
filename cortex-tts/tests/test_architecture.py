@@ -167,7 +167,6 @@ FACADE = {
     "AudioFormat",
     "CONTENT_TYPES",
     "encode",
-    "estimated_audio_seconds",
     "decode_reference",
     "level",
     "StreamGain",
@@ -181,6 +180,20 @@ FACADE = {
     # notifications
     "notify_models_changed",
     "subscribe_models_changed",
+    # pacing: what to render next, and the stop contract a live caller uses
+    "AbandonedError",
+    "BUFFERED",
+    "count_scripts",
+    "Decision",
+    "Finished",
+    "PACED",
+    "Planner",
+    "RenderModel",
+    "RenderSample",
+    "Send",
+    "STREAMING",
+    "StopCheck",
+    "Wait",
     # errors
     "EngineError",
     "NoAudioError",

@@ -10,58 +10,49 @@ to speak, so one figure averaging the kinds would describe neither.
 Stored beside the models rather than in the settings file: settings are what a
 user chose and stats are what the app observed, and a "reset settings" must
 not erase measurements that took real work to gather.
+
+One primitive, recorded once per request: a `RenderSample` of raw audio and
+wall seconds. Everything a caller asks for is fitted from those, so there is
+no second series to keep honest and no cadence a transport can get wrong.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import statistics
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from cortex_speech import write_json
+from cortex_speech import RenderModel, RenderSample, write_json
 
 _LOGGER = logging.getLogger(__name__)
 
 FILE_NAME = "stats.json"
 
-# How many recent syntheses a model's figure is drawn from. Enough that one
-# odd reply cannot define it, few enough that it follows a host that changed —
-# a thread count, an execution provider, a busier machine.
-MAX_SAMPLES = 12
-
-# Shorter replies than this are measured but not recorded. Every model pays a
-# fixed cost per synthesis, so a half-second clip reports an RTF dominated by
-# it: measured on OmniVoice, the ten-character sentence came in at 0.99 where
-# the other three sat at 0.72-0.80. A card that quoted the short one would
-# overstate what a real reply costs.
-MIN_AUDIO_SECONDS = 1.0
+# How many recent requests are kept, and so how many a fit rests on — this is
+# the only bound, `RenderModel.fit` uses whatever it is handed. Enough that one
+# odd request cannot define it, few enough that it follows a host that changed
+# — a thread count, an execution provider, a busier machine. More than a bare
+# figure of merit would need, because a fit wants requests of different lengths
+# to find a slope, and a dozen replies to an assistant are mostly one length.
+MAX_RENDERS = 24
 
 
 @dataclass(frozen=True)
 class ModelStats:
-    """One model-and-voice-kind's recent real-time factors on this host.
+    """One model-and-voice-kind's cost on this host.
 
     Attributes:
         kind: The `Voice.source` these were measured with — `builtin`,
             `designed` or `reference`.
-        samples: Most recent last, at most `MAX_SAMPLES`.
+        render: The fit those requests produced. Its `per_audio` is the
+            real-time factor a card shows, with the per-request fixed cost
+            held beside it rather than averaged into it.
     """
 
     kind: str
-    samples: tuple[float, ...]
-
-    @property
-    def rtf(self) -> float:
-        """The median, which is what a card shows."""
-        return round(statistics.median(self.samples), 2)
-
-    @property
-    def count(self) -> int:
-        """How many syntheses it rests on, so the UI can say."""
-        return len(self.samples)
+    render: RenderModel
 
 
 class StatsStore:
@@ -76,8 +67,8 @@ class StatsStore:
     def __init__(self, path: Path) -> None:
         """Load what was measured before, if anything."""
         self._path = path
-        # model id -> voice kind -> samples.
-        self._samples: dict[str, dict[str, list[float]]] = {}
+        # model id -> voice kind -> requests as they went.
+        self._renders: dict[str, dict[str, list[RenderSample]]] = {}
         self._lock = threading.Lock()
         self._read()
 
@@ -94,62 +85,89 @@ class StatsStore:
             return
         for model_id, by_kind in stored.items():
             if not isinstance(by_kind, dict):
-                # An earlier layout kept one flat list per model. It cannot be
-                # split after the fact, and a figure that averaged two kinds is
-                # exactly what this replaced, so it is dropped rather than
-                # carried forward under a label it may not deserve.
                 continue
-            for kind, samples in by_kind.items():
-                if not isinstance(samples, list):
-                    continue
-                kept = [float(s) for s in samples if isinstance(s, (int, float))]
-                if kept:
-                    self._samples.setdefault(str(model_id), {})[str(kind)] = kept[
-                        -MAX_SAMPLES:
+            for kind, entry in by_kind.items():
+                # An earlier layout also kept ready-divided ratios under
+                # "rtf". The pairs they came from are not in the file, so
+                # there is nothing to fit and nothing to carry forward.
+                renders = entry.get("renders") if isinstance(entry, dict) else None
+                samples = [
+                    RenderSample(float(r[0]), float(r[1]), int(r[2]), int(r[3]))
+                    for r in renders or []
+                    if isinstance(r, list) and len(r) == 4
+                ]
+                if samples:
+                    self._renders.setdefault(str(model_id), {})[str(kind)] = samples[
+                        -MAX_RENDERS:
                     ]
 
     def _write(self) -> None:
         """Write the file. Callers hold `_lock`."""
+        stored = {
+            model_id: {
+                kind: {
+                    "renders": [[r.audio_s, r.wall_s, r.cjk, r.latin] for r in renders]
+                }
+                for kind, renders in by_kind.items()
+            }
+            for model_id, by_kind in self._renders.items()
+        }
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            write_json(self._path, self._samples, indent=2, sort_keys=True)
+            write_json(self._path, stored, indent=2, sort_keys=True)
         except OSError as err:
             # The measurement still counts for this process; only the memory
             # of it across a restart is lost, which is not worth an error to
             # the caller who only asked for audio.
             _LOGGER.warning("could not write stats: %s", err)
 
-    def record(
-        self, model_id: str, kind: str, rtf: float, audio_seconds: float
-    ) -> None:
-        """Note one synthesis, if it is long enough to be representative.
+    def record(self, model_id: str, kind: str, sample: RenderSample) -> None:
+        """Note how one request went.
+
+        Every request counts, short ones included: the fixed cost is exactly
+        what a short request exposes, and the fit needs both ends of the line.
 
         Args:
             model_id: Catalog id.
             kind: The `Voice.source` it was rendered with.
-            rtf: Render seconds over audio seconds.
-            audio_seconds: How much audio came out.
+            sample: Audio and wall seconds as measured, undivided. What the
+                render clock means is the caller's to state and the fit's to
+                use; a ratio would hide it.
         """
-        if rtf <= 0 or audio_seconds < MIN_AUDIO_SECONDS:
+        if sample.audio_s <= 0 or sample.wall_s <= 0:
             return
         with self._lock:
-            samples = self._samples.setdefault(model_id, {}).setdefault(kind, [])
-            samples.append(round(float(rtf), 3))
-            del samples[:-MAX_SAMPLES]
+            renders = self._renders.setdefault(model_id, {}).setdefault(kind, [])
+            renders.append(
+                RenderSample(
+                    round(sample.audio_s, 3),
+                    round(sample.wall_s, 3),
+                    sample.cjk,
+                    sample.latin,
+                )
+            )
+            del renders[:-MAX_RENDERS]
             self._write()
+
+    def render_model(self, model_id: str, kind: str) -> RenderModel | None:
+        """What a request to this model and voice kind costs here, if measured."""
+        with self._lock:
+            renders = list((self._renders.get(model_id) or {}).get(kind) or [])
+        return RenderModel.fit(renders)
 
     def get(self, model_id: str) -> list[ModelStats]:
         """Return what this host measured for a model, one entry per kind.
 
-        Empty when it never has. Ordered so a card renders the same way twice.
+        Empty until it has served enough requests of one kind to fit a line.
+        Ordered so a card renders the same way twice.
         """
         with self._lock:
-            by_kind = self._samples.get(model_id) or {}
-            return [
-                ModelStats(kind=kind, samples=tuple(samples))
-                for kind, samples in sorted(by_kind.items())
-                if samples
-            ]
+            by_kind = {
+                kind: list(renders)
+                for kind, renders in sorted((self._renders.get(model_id) or {}).items())
+            }
+        fitted = ((kind, RenderModel.fit(s)) for kind, s in by_kind.items())
+        return [ModelStats(kind=kind, render=fit) for kind, fit in fitted if fit]
 
     def clear(self) -> None:
         """Drop every model's measurements.
@@ -159,8 +177,8 @@ class StatsStore:
         describes a machine that is gone.
         """
         with self._lock:
-            if self._samples:
-                self._samples = {}
+            if self._renders:
+                self._renders = {}
                 self._write()
 
     def forget(self, model_id: str) -> None:
@@ -171,5 +189,5 @@ class StatsStore:
         that something about it changed.
         """
         with self._lock:
-            if self._samples.pop(model_id, None) is not None:
+            if self._renders.pop(model_id, None) is not None:
                 self._write()

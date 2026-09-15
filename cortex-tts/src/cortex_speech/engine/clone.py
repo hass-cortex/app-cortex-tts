@@ -34,8 +34,10 @@ from ..vendor.hojo80 import (
 from .base import (
     Delivery,
     NoAudioError,
+    StopCheck,
     Synthesis,
     UnknownVoiceError,
+    check_stop,
 )
 from .conditioning import ConditioningCache
 from .join import join_segments
@@ -137,7 +139,12 @@ class CloneEngine:
         return prompt
 
     def _render(
-        self, text: str, ref_text: str, prompt: _Prompt, temperature: float
+        self,
+        text: str,
+        ref_text: str,
+        prompt: _Prompt,
+        temperature: float,
+        stop: StopCheck | None,
     ) -> np.ndarray:
         """Render one segment, retrying a generation that stopped early.
 
@@ -159,6 +166,7 @@ class CloneEngine:
                 temperature=temperature,
                 top_p=0.95,
                 repetition_penalty=1.1,
+                on_step=lambda: check_stop(stop),
             )
             try:
                 mag, phase = self._model._decode_from_coarse(
@@ -171,7 +179,12 @@ class CloneEngine:
         return render_with_retries(text, self.sample_rate, generate)
 
     def synthesize(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Synthesis:
         """Render segments in a cloned voice."""
         ref = self._references.get(voice)
@@ -184,7 +197,8 @@ class CloneEngine:
             self._temperature if delivery.temperature is None else delivery.temperature
         )
         waves = [
-            self._render(text, ref.transcript, prompt, temperature) for text in segments
+            self._render(text, ref.transcript, prompt, temperature, stop)
+            for text in segments
         ]
 
         if not waves:

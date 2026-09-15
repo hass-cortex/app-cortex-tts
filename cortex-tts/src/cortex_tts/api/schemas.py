@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from cortex_speech import AudioFormat, Delivery
 
-API_VERSION = 1
+API_VERSION = 3
 """Bumped when a route, field or header the integration reads changes shape.
 
 The app's release version says nothing about the wire; this does, and it is
@@ -64,13 +64,25 @@ class VoiceOut(BaseModel):
 
 
 class MeasuredRtf(BaseModel):
-    """A real-time factor this host measured, for one kind of voice."""
+    """What this host measured for one kind of voice.
+
+    The fit a live reply is paced from — `fixed_s + per_audio × audio` — which
+    is also where a card's figure comes from: `per_audio` is the real-time
+    factor with the per-request fixed cost held out rather than averaged in.
+    """
 
     kind: str
     """`builtin`, `designed` or `reference` — see `Voice.source`."""
-    rtf: float
-    samples: int
-    """How many syntheses `rtf` is the median of."""
+    per_audio: float
+    """Render seconds per audio second."""
+    fixed_s: float
+    """Render seconds a request costs before any audio."""
+    spread_s: float
+    """One standard deviation of what the line failed to explain."""
+    cjk_per_s: float
+    latin_per_s: float
+    requests: int
+    """How many requests the fit rests on."""
 
 
 class ModelOut(BaseModel):
@@ -117,8 +129,14 @@ class ModelOut(BaseModel):
     download_error: str | None = None
 
 
-class SpeakRequest(BaseModel):
-    """A synthesis request.
+class SpeakCommon(BaseModel):
+    """What both ways of asking for speech settle.
+
+    A request for a file and the opening frame of a live reply differ in how
+    the words arrive and in what container can carry them; everything else —
+    which model and voice, how the text is prepared, how it is delivered — is
+    the same question, asked once here so the two cannot drift into answering
+    it differently.
 
     The text switches exist because the pipeline they control is the
     difference between an intelligible voice and noise on this model; they are
@@ -126,13 +144,8 @@ class SpeakRequest(BaseModel):
     so they can be turned off casually.
     """
 
-    text: str = Field(min_length=1, max_length=4000)
     model: str | None = None
     voice: str | None = None
-    format: AudioFormat | None = None
-    """Container to answer in. `/api/speak` defaults to wav and
-    `/api/speak/stream` to mp3, because a stream has to be writable
-    without knowing how long the audio will be."""
     normalize_text: bool | None = None
     """Expand units, clock literals and dates into words. Left out, a
     settings rule for the model and language may answer; otherwise on."""
@@ -147,7 +160,6 @@ class SpeakRequest(BaseModel):
     taiwan_readings: bool | None = None
     """Chinese only. Left out, a settings rule may answer; otherwise on for
     `zh-TW` and `zh-Hant`, off elsewhere."""
-    normalize_level: bool = True
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     language: str | None = Field(default=None, max_length=32)
     """Which language to read the text as: a whole tag, `zh-TW` or `zh`.
@@ -175,6 +187,40 @@ class SpeakRequest(BaseModel):
             language=self.language,
             instruct=self.instruct,
         )
+
+
+class SpeakRequest(SpeakCommon):
+    """A synthesis request: the words, and a container that may declare one."""
+
+    text: str = Field(min_length=1, max_length=4000)
+    format: AudioFormat | None = None
+    """Container to answer in; wav by default. A finished file may declare
+    its own length, which is what separates this from a live reply's mp3."""
+    normalize_level: bool = True
+    """Scale the finished waveform to a target peak. Only a finished waveform
+    can be, which is why a live reply has `StreamGain` instead."""
+
+
+class LiveStart(SpeakCommon):
+    """The opening frame of `/api/speak/live`: everything but the words.
+
+    The text follows in `text` frames as the writer produces it; this frame
+    settles what cannot change once audio has started.
+    """
+
+    type: Literal["start"] = "start"
+    format: Literal["mp3", "wav"] = "mp3"
+    """MP3 unless raw PCM is wanted: a stream cannot declare a length."""
+    mode: Literal["auto", "buffered"] = "auto"
+    """`auto` lets the server pace the reply from what it has measured;
+    `buffered` releases nothing until the whole reply is rendered."""
+
+
+class LiveText(BaseModel):
+    """A piece of the reply, as the writer produced it."""
+
+    type: Literal["text"] = "text"
+    text: str = Field(max_length=4000)
 
 
 class SpeakStats(BaseModel):
@@ -308,7 +354,6 @@ class SettingsOut(BaseModel):
     execution_provider: str
     max_loaded_models: int
     idle_unload_seconds: int
-    max_synthesis_seconds: int
     default_model: str
     default_voice: str
     temperature: float
@@ -328,7 +373,6 @@ class SettingsUpdate(BaseModel):
     execution_provider: str | None = None
     max_loaded_models: int | None = None
     idle_unload_seconds: int | None = None
-    max_synthesis_seconds: int | None = None
     default_model: str | None = None
     default_voice: str | None = None
     temperature: float | None = None

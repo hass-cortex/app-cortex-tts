@@ -13,10 +13,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from cortex_speech import CATALOG
+from cortex_speech import CATALOG, RenderSample
 from cortex_tts import preferences
 from cortex_tts.app import create_app
 from cortex_tts.preferences import FILE_NAME
+from cortex_tts.stats import FILE_NAME as STATS_FILE
+from cortex_tts.stats import StatsStore
 
 INGRESS = {"X-Ingress-Path": "/api/hassio_ingress/x"}
 """What the Supervisor adds; `is_ingress` wants it and the peer both."""
@@ -369,6 +371,74 @@ class TestSpeakErrors:
         )
 
 
+class TestACloneOnlyModel:
+    """A stored reference makes a voice exist before the model is downloaded.
+
+    Listing voices reads the reference store, not the bundle, so resolving the
+    voice succeeds and the load is what fails.
+    """
+
+    @pytest.fixture
+    def with_reference(self, client: TestClient, reference_wav: bytes) -> TestClient:
+        response = client.post(
+            "/api/references",
+            headers=AUTH,
+            data={"name": "Tester", "transcript": "這是一段測試錄音。"},
+            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
+        )
+        assert response.status_code == 201, response.text
+        return client
+
+    def test_the_load_is_a_conflict(self, with_reference: TestClient) -> None:
+        response = with_reference.post(
+            "/api/speak",
+            headers=AUTH,
+            json={"text": "你好。", "model": "hojo-80m-clone"},
+        )
+        assert response.status_code == 409
+        assert response.json()["code"] == "MODEL_NOT_READY"
+
+
+class TestTheCardsFigure:
+    """What a model card reads, end to end.
+
+    The card and the planner are the same fit, so the number shown is the
+    factor with the per-request fixed cost held out — not an average of what
+    each request happened to cost.
+    """
+
+    @staticmethod
+    def _measured(tmp_path: Path) -> None:
+        store = StatsStore(tmp_path / STATS_FILE)
+        for audio in (2.0, 4.0, 8.0):
+            store.record(
+                "hojo-40m",
+                "builtin",
+                RenderSample(audio, 0.3 + 0.5 * audio, int(audio * 4), 0),
+            )
+
+    def test_an_unmeasured_model_reports_nothing(self, client: TestClient) -> None:
+        body = client.get("/api/models", headers=AUTH).json()
+        assert next(m for m in body if m["id"] == "hojo-40m")["rtf"] == []
+
+    def test_the_figure_is_the_fitted_factor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._measured(tmp_path)
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("STATIC_DIR", str(tmp_path / "no-ui"))
+        monkeypatch.setenv("API_KEY", "test-key")
+        with TestClient(create_app()) as fresh:
+            body = fresh.get("/api/models", headers=AUTH).json()
+        [entry] = next(m for m in body if m["id"] == "hojo-40m")["rtf"]
+        assert entry["kind"] == "builtin"
+        # 0.5 is the slope; an average of the three requests' own ratios would
+        # be about 0.6, pulled up by the fixed cost the short one pays.
+        assert abs(entry["per_audio"] - 0.5) < 0.02
+        assert abs(entry["fixed_s"] - 0.3) < 0.05
+        assert entry["requests"] == 3
+
+
 class TestResettingStats:
     """RTF is measured per host and goes stale when the host changes; a reset
     lets the next replies re-measure. The endpoints answer even when nothing
@@ -548,17 +618,6 @@ class TestSettingsEndpoint:
             == 300
         )
 
-    def test_max_synthesis_is_a_setting(self, client: TestClient) -> None:
-        saved = client.put(
-            "/api/settings", headers=AUTH, json={"max_synthesis_seconds": 120}
-        ).json()
-        assert saved["settings"]["max_synthesis_seconds"] == 120
-        assert not saved["reloaded"], "nothing resident needs rebuilding for it"
-        assert (
-            client.get("/api/settings", headers=AUTH).json()["max_synthesis_seconds"]
-            == 120
-        )
-
     def test_a_change_is_readable_immediately(self, client: TestClient) -> None:
         client.put("/api/settings", headers=AUTH, json={"default_model": "moss-nano"})
         assert (
@@ -625,7 +684,7 @@ class TestErrorShape:
 
 class TestHealthContract:
     def test_health_carries_the_api_version(self, client: TestClient) -> None:
-        assert client.get("/health").json()["api_version"] == 1
+        assert client.get("/health").json()["api_version"] == 3
 
 
 class TestSettingsReporting:
@@ -697,6 +756,18 @@ class TestAKnobTheModelDoesNotHave:
     `language` is not such a field: it says what the text is, which the
     pipeline uses on every model, so it is never refused (see TestPreview).
     """
+
+    def test_a_temperature_on_a_model_without_one_is_refused(
+        self, client: TestClient
+    ) -> None:
+        """MOSS fuses sampling into its graph; there is no knob to turn."""
+        response = client.post(
+            "/api/speak",
+            headers=AUTH,
+            json={"text": "你好。", "model": "moss-nano", "temperature": 0.5},
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "NO_TEMPERATURE"
 
     def test_an_instruction_on_a_model_without_one_is_refused(
         self, ingress_client: TestClient

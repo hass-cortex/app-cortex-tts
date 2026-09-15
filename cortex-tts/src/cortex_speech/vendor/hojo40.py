@@ -562,7 +562,11 @@ class HojoTTSLightOnnx:
         temperature: float,
         top_p: float,
         repetition_penalty: float,
+        on_step=None,
     ) -> tuple[np.ndarray, np.ndarray]:
+        # DEVIATION: `on_step` is ours. Called before every decode step; a
+        # callable that raises aborts the generation there, which is how a
+        # render whose listener has gone stops costing anything.
         seq_len = int(input_ids.shape[1])
         position_ids = np.arange(seq_len, dtype=np.int64)[None, :]
 
@@ -596,6 +600,8 @@ class HojoTTSLightOnnx:
                 and next_token == self.speech_end_id
             ):
                 break
+            if on_step is not None:
+                on_step()
 
             step_ids = np.array([[next_token]], dtype=np.int64)
             feed = {
@@ -673,6 +679,7 @@ class HojoTTSLightOnnx:
         top_p: float = 0.95,
         repetition_penalty: float = 1.1,
         seed: int = 42,
+        on_step=None,
     ) -> np.ndarray:
         """Synthesize speech and return a 1-D float32 waveform @ 24 kHz."""
         np.random.seed(seed)
@@ -693,6 +700,7 @@ class HojoTTSLightOnnx:
             temperature=temperature,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
+            on_step=on_step,
         )
         bits = self._bits_from_coarse(input_ids, generated, last_hidden, speaker_vec)
         mag, phase = self.codec_decode.run(None, {"bits": bits})

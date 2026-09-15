@@ -19,11 +19,14 @@ from ..providers import (
 )
 from ..vendor.hojo40 import VOICES_NPZ_NAME, HojoTTSLightOnnx
 from .base import (
+    AbandonedError,
     Delivery,
     NoAudioError,
+    StopCheck,
     Synthesis,
     UnknownVoiceError,
     Voice,
+    check_stop,
 )
 from .join import join_segments
 from .overrun import render_with_retries
@@ -127,14 +130,24 @@ class PresetEngine:
         """Release the sessions; see `Engine.close`."""
         release_sessions(self._model)
 
-    def _render(self, text: str, voice: str, temperature: float) -> np.ndarray:
+    def _render(
+        self, text: str, voice: str, temperature: float, stop: StopCheck | None
+    ) -> np.ndarray:
         """Render one segment, seeding each attempt for the shared retry."""
 
         def generate(seed: int) -> np.ndarray:
             try:
                 return self._model.generate(
-                    text, voice=voice, temperature=temperature, seed=seed
+                    text,
+                    voice=voice,
+                    temperature=temperature,
+                    seed=seed,
+                    on_step=lambda: check_stop(stop),
                 )
+            except AbandonedError:
+                # An EngineError is a RuntimeError; the guard below must not
+                # relabel a listener leaving as the model producing nothing.
+                raise
             except RuntimeError as err:
                 # No audio tokens at all: punctuation-only text, or a segment
                 # left empty upstream. Nothing downstream can recover.
@@ -143,7 +156,12 @@ class PresetEngine:
         return render_with_retries(text, self.sample_rate, generate)
 
     def synthesize(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Synthesis:
         """Render segments with a bundled voice."""
         if voice not in {v.id for v in self._voices}:
@@ -153,7 +171,7 @@ class PresetEngine:
         temperature = (
             self._temperature if delivery.temperature is None else delivery.temperature
         )
-        waves = [self._render(text, voice, temperature) for text in segments]
+        waves = [self._render(text, voice, temperature, stop) for text in segments]
 
         if not waves:
             raise NoAudioError("no segments to synthesize")

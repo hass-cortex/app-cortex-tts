@@ -611,7 +611,11 @@ class HojoTTSLightOnnx:
         temperature: float,
         top_p: float,
         repetition_penalty: float,
+        on_step=None,
     ) -> tuple[np.ndarray, np.ndarray]:
+        # DEVIATION: `on_step` is ours. Called before every decode step; a
+        # callable that raises aborts the generation there, which is how a
+        # render whose listener has gone stops costing anything.
         seq_len = int(input_ids.shape[1])
         prefill_out = self.lm.run(
             None,
@@ -643,6 +647,8 @@ class HojoTTSLightOnnx:
                 and next_token == self.speech_end_id
             ):
                 break
+            if on_step is not None:
+                on_step()
             feed = {
                 "inputs_embeds": self.token_embedding[
                     np.array([[next_token]], dtype=np.int64)

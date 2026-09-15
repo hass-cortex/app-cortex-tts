@@ -27,7 +27,10 @@ the model speaks faster than the audio plays. The column is one measurement,
 not one per model: every model on the same host, the same text, the same settings, so
 the figures are comparable with each other. **They are not a prediction about
 your machine**, and the app does not pretend otherwise: a model card shows the
-real-time factor that host has measured, or says it has none yet. This table
+real-time factor that host has measured, or says it has none yet — the fitted
+factor, the per-second part with each request's fixed cost held separately, so
+on a comparable host it reads a little under this column, which divides the
+whole cost of each sentence. This table
 is for choosing between models before you have run any of them. That host is a 4-vCPU virtual
 machine on an Intel Core i7-9750H running the app at two threads on the CPU —
 deliberately the kind of machine Home Assistant usually lives on, not a
@@ -71,15 +74,14 @@ elsewhere](standalone.md). Your host will differ; the integration's
 `sensor.<model>_real_time_factor` is your number, and [Keeping
 up](streaming.md) says what to do with it.
 
-### Why the numbers moved
+### The other VM on the same CPU
 
-The first three figures were previously 0.67, 1.06 and 1.42, measured on the
-Home Assistant OS VM beside this one on the same physical CPU. The run above
-reproduces MOSS to 0.01 and puts the 40M 18% faster and the 80M 6% slower.
-Both VMs are quoted because neither is wrong: the one above can hold all six
-models, and the Home Assistant VM — 8 GB, shared with Home Assistant itself —
-is where the first three were measured and is the constraint that matters for
-what you can actually run there.
+The Home Assistant OS VM beside this one, on the same physical CPU, measures
+the first three at 0.67, 1.06 and 1.42. MOSS agrees to 0.01; the reference
+host is 18% faster on the 40M and 6% slower on the 80M. Both are quoted
+because neither is wrong: the reference VM can hold all six models, and the
+Home Assistant VM — 8 GB, shared with Home Assistant itself — is the
+constraint that matters for what you can actually run there.
 
 ## Hardware, and running it elsewhere
 
@@ -97,7 +99,7 @@ over the four sentences above; the reference host is the first column.
 
 The first column is two VMs on that one CPU — the Home Assistant OS VM for the
 first three rows, the VM beside it for the last three, which is the difference
-[Why the numbers moved](#why-the-numbers-moved) measures. The GTX 1650 column
+[The other VM on the same CPU](#the-other-vm-on-the-same-cpu) measures. The GTX 1650 column
 is one run of `bench_rtf.py` against the app with the execution provider set
 to `cuda`, which reproduced the two figures already in it (0.31 and 0.37) to
 the hundredth. Neither new model has been run on the 5070 Ti, and their Ryzen
@@ -105,7 +107,10 @@ figures are single sentences rather than the four.
 
 **A GPU is what makes OmniVoice usable**: 3.83 to **0.80**, from four times
 real time to comfortably under it, and the largest gain any model here gets
-from a card. Qwen3-TTS gains less than half as much in relative terms — 6.72
+from a card. With a cloned voice the fixed cost of re-encoding the reference
+on every request puts it past the streaming threshold even so — measured at
+about 1.5 s per request on the GTX 1650 — so a live reply on it is paced
+rather than streamed ([Keeping up](streaming.md)). Qwen3-TTS gains less than half as much in relative terms — 6.72
 to 2.84 — and is still nearly three times real time on the card, for the
 reason in its section below.
 
@@ -198,8 +203,8 @@ downloaded together.
   as codec tokens, is the voice, so its length and content do shape the clone.
   Every second is paid for once per reference, then cached.
 - **Chunk streaming**: the only model that emits audio before a sentence is
-  finished. `/api/speak/stream` starts 143–178 ms after the request against
-  1.8 s for the whole utterance.
+  finished: measured over a chunked stream, the first audio arrives 143–178 ms
+  after the request against 1.8 s for the whole utterance.
 - **No sampling temperature**: sampling is fused into a dedicated ONNX graph.
   The setting is ignored for it, and a request that names one is refused
   (`NO_TEMPERATURE`).

@@ -55,9 +55,8 @@ def _env_flag(name: str, default: bool) -> bool:
 class Settings:
     """The few things that must be settled before the process starts.
 
-    Everything a user changes while it runs lives in `preferences.py` — those
-    used to be addon options, and each change cost a restart while a change to
-    their *schema* cost a rebuild.
+    Everything a user changes while it runs lives in `preferences.py`, where
+    no change costs a restart.
 
     Attributes:
         host: Bind address.

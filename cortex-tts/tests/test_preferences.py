@@ -76,20 +76,6 @@ class TestValidation:
             == 300
         )
 
-    @pytest.mark.parametrize("value", [-1, 3601])
-    def test_max_synthesis_outside_the_range_is_refused(self, value: int) -> None:
-        assert (
-            Preferences().merged({"max_synthesis_seconds": value}).max_synthesis_seconds
-            == 0
-        )
-
-    def test_max_synthesis_is_off_unless_asked_for(self) -> None:
-        assert Preferences().max_synthesis_seconds == 0
-        assert (
-            Preferences().merged({"max_synthesis_seconds": 120}).max_synthesis_seconds
-            == 120
-        )
-
     def test_every_model_may_be_resident_at_once(self) -> None:
         assert Preferences().merged(
             {"max_loaded_models": len(CATALOG)}
@@ -151,7 +137,6 @@ class TestWhatNeedsARebuild:
             {"preload": False},
             {"max_loaded_models": 2},
             {"idle_unload_seconds": 300},
-            {"max_synthesis_seconds": 120},
         ],
     )
     def test_the_rest_take_effect_on_the_next_request(

@@ -34,7 +34,7 @@ import os
 import re
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any, List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 import numpy as np
 import torch
@@ -187,6 +187,10 @@ class OmniVoiceGenerationConfig:
     audio_chunk_threshold: float = 30.0
     pad_duration: float = 0.1
     fade_duration: float = 0.1
+    # DEVIATION: `on_step` is ours. Called before every iterative decoding
+    # step; a callable that raises aborts the generation there, which is how a
+    # render whose listener has gone stops costing anything.
+    on_step: Optional[Callable[[], None]] = None
 
     @classmethod
     def from_dict(cls, kwargs_dict):
@@ -1382,6 +1386,8 @@ class OmniVoice(PreTrainedModel):
         ).view(1, -1, 1)
 
         for step in range(gen_config.num_step):
+            if gen_config.on_step is not None:
+                gen_config.on_step()
             batch_logits = self(
                 input_ids=batch_input_ids,
                 audio_mask=batch_audio_mask,

@@ -18,7 +18,9 @@ audio time with every model measured on one host — a VM with 4 vCPU of an
 Intel Core i7-9750H, two inference threads, CPU — so it ranks the models
 against each other and nothing else; below 1 means the model outran playback
 _there_. Once the app is running, each model's card shows what **your** host
-measured, or says it has none yet. Start at the top of the table; the lower
+measured, or says it has none yet. The card fits the per-second part apart
+from the fixed cost every request pays, so it reads a little under this column
+even on the same machine; it also needs three replies before it says anything. Start at the top of the table; the lower
 entries want a faster machine or a GPU. Which model suits what, how each one
 clones, and what a faster CPU or a GPU changes is in [Models][models].
 
@@ -198,17 +200,6 @@ that says something wins; a language covers every tag it prefixes (`zh`
 covers `zh-TW`). The Home Assistant integration's `options:` still override
 a rule for that one call.
 
-### Refuse over-long replies
-
-Seconds; a reply whose estimated render would take longer than this on the
-chosen model's measured speed is refused with a clear error rather than
-rendered. `0`, the default, accepts any length. What it stops is a reply long
-enough to render past the caller's own timeout: the audio then finishes into a
-connection nobody is reading, having held the model for the whole of it — one
-514-character story measured at over seven minutes on a CPU that renders
-OmniVoice at 4.6x. The estimate needs the model to have been measured on this
-host at least once, so the very first long reply on a fresh model still runs.
-
 ## Troubleshooting
 
 **No voices in the pipeline picker.** The model is probably not downloaded —
@@ -221,9 +212,11 @@ with its id; in Home Assistant, `cortex_tts.list_voices` does. Ids differ per
 model — see [Models][models].
 
 **It stutters near the end of long replies.** The model is not keeping up with
-playback on this host. Read `sensor.<model>_playback_margin`; negative means
-the renderer lost the race, and [Keeping up][streaming] lists the five things
-that fix it, starting with setting that model back to buffered.
+playback on this host, and the app's estimate of it was too optimistic. Read
+`sensor.<model>_playback_margin`; negative means the renderer lost the race.
+The app learns from every request and paces the next reply from what it
+measured, so one stutter usually corrects itself; a model that keeps losing
+can be set to buffered in the integration ([Keeping up][streaming]).
 
 **Chinese sounds like the wrong words.** Check that `convert_script` was not
 turned off for that call. The integration turns it on whenever the pipeline
@@ -266,7 +259,8 @@ you switch between models often.
 - [The text pipeline][text] — why Traditional Chinese and numbers are
   rewritten, and into what.
 - [Cloned voices][cloning] — the recording, the transcript, the name.
-- [Keeping up][streaming] — buffered, streamed, the sensors that decide it.
+- [Keeping up][streaming] — how the app paces a reply, where the RTF
+  threshold is, and the sensors that show it.
 - [Running it elsewhere][standalone] — a faster CPU or a GPU outside HAOS.
 - [HTTP API][api] — using the app without the integration.
 - [Integration][integration] — `tts.speak`, voice ids, speaking mode, the

@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from cortex_speech import BY_ID
 from cortex_speech.catalog import model_dir
 from cortex_speech.device import Memory
-from cortex_speech.engine.base import Delivery, Synthesis, UnknownVoiceError
+from cortex_speech.engine.base import Delivery, StopCheck, Synthesis, UnknownVoiceError
 from cortex_speech.engine.registry import EngineRegistry, OutOfMemoryError
 from cortex_speech.references import ReferenceStore
 
@@ -45,7 +45,12 @@ class _Blocking:
         self.closed = False
 
     def synthesize(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Synthesis:
         del voice, delivery
         self.calls += 1
@@ -342,7 +347,7 @@ class TestRunningTheDeviceOutOfMemory:
     async def test_a_stream_drops_it_too(
         self, registry: EngineRegistry, engines: list[_Blocking]
     ) -> None:
-        """Where it actually bit: the failing traces were `/api/speak/stream`."""
+        """Where it actually bit: the failing traces were chunked streams."""
         await registry.synthesize("hojo-40m", ["x"], "v")
         self._starve(engines[0])
 

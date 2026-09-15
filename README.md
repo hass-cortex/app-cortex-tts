@@ -23,9 +23,11 @@ front-end none of the models ship. No cloud, no per-character bill.
   which no model has, respelled by homophone so every model says them.
 - **An admin UI that shows its work** — the prepared text and a ledger of
   every rewrite, beside the composer.
-- **Streaming is per model, and off until you ask** — one fast enough to
-  outrun the speaker can start on the opening sentences; a slower one is
-  buffered on purpose, because a stream that falls behind stutters.
+- **A reply is paced by the app, from what it measured on your host** — a
+  model that outruns the speaker starts on the opening sentences; one that
+  cannot is held back just long enough that playback never catches the
+  renderer; an unmeasured one is buffered. The integration's one setting per
+  model is Automatic or Buffered.
 - **Discovered by Home Assistant** through the Supervisor, so the companion
   integration needs no address or key typed in.
 
@@ -56,7 +58,10 @@ a temperature is the symptom you would otherwise have to guess at.
 It also manages the models — download, load, evict — and the cloned voices,
 including the transcript each reference recording is bound to. A card carries
 what the model costs to keep, and the real-time factor **this** host has
-measured, or says it has none yet: no figure from anyone else's machine.
+measured, or says it has none yet: no figure from anyone else's machine, and
+no average of what individual replies happened to cost — the per-second part,
+fitted apart from the fixed cost each request pays, which is the same number
+the app paces a live reply from.
 
 ![A model card: what it costs, and what this host measured](images/models.png)
 
@@ -85,15 +90,15 @@ configuration, settings and troubleshooting.
 
 ## Documentation
 
-| Page                                                  | What it covers                                                   |
-| ----------------------------------------------------- | ---------------------------------------------------------------- |
-| [Models](cortex-tts/docs/models.md)                   | The line-up, what each costs, how each clones, which to pick     |
-| [The text pipeline](cortex-tts/docs/text-pipeline.md) | Why Traditional Chinese and numbers are rewritten, and into what |
-| [Cloned voices](cortex-tts/docs/cloning.md)           | The recording, the transcript, the name                          |
-| [Keeping up](cortex-tts/docs/streaming.md)            | Buffered, streamed, and the sensors that decide it               |
-| [Running it elsewhere](cortex-tts/docs/standalone.md) | A faster CPU or a GPU outside Home Assistant OS                  |
-| [HTTP API](cortex-tts/docs/api.md)                    | Using the app without the integration                            |
-| [App Store page](cortex-tts/DOCS.md)                  | Install, configure, troubleshoot                                 |
+| Page                                                  | What it covers                                                    |
+| ----------------------------------------------------- | ----------------------------------------------------------------- |
+| [Models](cortex-tts/docs/models.md)                   | The line-up, what each costs, how each clones, which to pick      |
+| [The text pipeline](cortex-tts/docs/text-pipeline.md) | Why Traditional Chinese and numbers are rewritten, and into what  |
+| [Cloned voices](cortex-tts/docs/cloning.md)           | The recording, the transcript, the name                           |
+| [Keeping up](cortex-tts/docs/streaming.md)            | How a reply is paced, where the RTF threshold is, and the sensors |
+| [Running it elsewhere](cortex-tts/docs/standalone.md) | A faster CPU or a GPU outside Home Assistant OS                   |
+| [HTTP API](cortex-tts/docs/api.md)                    | Using the app without the integration                             |
+| [App Store page](cortex-tts/DOCS.md)                  | Install, configure, troubleshoot                                  |
 
 ## Acknowledgements
 

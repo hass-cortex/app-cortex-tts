@@ -38,10 +38,12 @@ from ..vendor.qwen3_tts_ort import (
 from .base import (
     Delivery,
     NoAudioError,
+    StopCheck,
     Synthesis,
     UnknownVoiceError,
     UnsupportedLanguageError,
     Voice,
+    check_stop,
     narrowing,
 )
 from .conditioning import ConditioningCache
@@ -307,6 +309,15 @@ class Qwen3TtsEngine:
             seed=seed,
         )
 
+    @staticmethod
+    def _until_stopped(
+        frames: Iterator[np.ndarray], stop: StopCheck | None
+    ) -> Iterator[np.ndarray]:
+        """Pass frames through, asking between each whether anyone is listening."""
+        for frame in frames:
+            check_stop(stop)
+            yield frame
+
     def _blocks(self, frames: Iterator[np.ndarray]) -> Iterator[np.ndarray]:
         """Decode frames in the fixed-size blocks the codec decoder takes.
 
@@ -332,18 +343,22 @@ class Qwen3TtsEngine:
         language: str | None,
         instruct: str | None,
         temperature: float,
+        stop: StopCheck | None,
     ) -> np.ndarray:
         def generate(seed: int) -> np.ndarray:
             blocks = list(
                 self._blocks(
-                    self._frames(
-                        text,
-                        speaker=speaker,
-                        conditioning=conditioning,
-                        language=language,
-                        instruct=instruct,
-                        temperature=temperature,
-                        seed=seed,
+                    self._until_stopped(
+                        self._frames(
+                            text,
+                            speaker=speaker,
+                            conditioning=conditioning,
+                            language=language,
+                            instruct=instruct,
+                            temperature=temperature,
+                            seed=seed,
+                        ),
+                        stop,
                     )
                 )
             )
@@ -354,7 +369,12 @@ class Qwen3TtsEngine:
         return render_with_retries(text, self.sample_rate, generate)
 
     def synthesize(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Synthesis:
         """Render segments with a bundled speaker or a cloned voice.
 
@@ -380,6 +400,7 @@ class Qwen3TtsEngine:
                 language=language,
                 instruct=delivery.instruct,
                 temperature=temperature,
+                stop=stop,
             )
             for text in segments
         ]
@@ -394,7 +415,12 @@ class Qwen3TtsEngine:
         )
 
     def synthesize_stream(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Generator[np.ndarray, None, None]:
         """Yield two seconds of audio at a time, as the codec fills a block.
 
@@ -412,18 +438,21 @@ class Qwen3TtsEngine:
             if index:
                 yield gap
             for block in self._blocks(
-                self._frames(
-                    text,
-                    speaker=speaker,
-                    conditioning=conditioning,
-                    language=language,
-                    instruct=delivery.instruct,
-                    temperature=(
-                        self._temperature
-                        if delivery.temperature is None
-                        else delivery.temperature
+                self._until_stopped(
+                    self._frames(
+                        text,
+                        speaker=speaker,
+                        conditioning=conditioning,
+                        language=language,
+                        instruct=delivery.instruct,
+                        temperature=(
+                            self._temperature
+                            if delivery.temperature is None
+                            else delivery.temperature
+                        ),
+                        seed=0,
                     ),
-                    seed=0,
+                    stop,
                 )
             ):
                 if not block.size:

@@ -47,10 +47,12 @@ from ..text.pipeline import is_chinese
 from .base import (
     Delivery,
     NoAudioError,
+    StopCheck,
     Synthesis,
     UnknownVoiceError,
     UnsupportedLanguageError,
     Voice,
+    check_stop,
     narrowing,
 )
 from .conditioning import ConditioningCache
@@ -273,7 +275,12 @@ class OmniVoiceEngine:
         )
 
     def synthesize(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Synthesis:
         """Render segments with a designed voice or a cloned one.
 
@@ -302,6 +309,7 @@ class OmniVoiceEngine:
             voice_clone_prompt=prompt,
             num_step=DECODE_STEPS,
             class_temperature=CLASS_TEMPERATURE,
+            on_step=lambda: check_stop(stop),
         )
         waves = [np.asarray(wave, dtype=np.float32).reshape(-1) for wave in rendered]
         if not any(wave.size for wave in waves):

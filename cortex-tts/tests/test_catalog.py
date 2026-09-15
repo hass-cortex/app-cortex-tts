@@ -67,7 +67,7 @@ class TestCapabilities:
         assert not mute, f"models that can never produce a voice: {mute}"
 
     def test_no_model_has_both_kinds_of_its_own_voices(self) -> None:
-        """`routes._voice_kind` decides "builtin" or "designed" from the spec
+        """`routes.voice_kind` decides "builtin" or "designed" from the spec
         alone, without looking the voice up — it can do that only while no
         model declares both. An entry that did would mislabel every
         measurement it made, silently, so the build refuses it here."""
@@ -288,8 +288,8 @@ class TestChunkStreamingIsOneFact:
     catalog metadata a caller can read before anything is loaded, the method is
     what the registry finds with `isinstance`. Nothing tied them together, and
     the failure is silent in the direction that matters: a spec claiming the
-    capability without the method makes `/api/speak/stream` answer
-    `X-Cortex-Chunk-Streaming: 1` while the registry renders whole utterances.
+    capability without the method makes `/api/speak/live` report
+    `chunk_streaming: true` while the registry renders whole utterances.
     """
 
     @pytest.mark.parametrize("spec", CATALOG, ids=lambda spec: spec.id)

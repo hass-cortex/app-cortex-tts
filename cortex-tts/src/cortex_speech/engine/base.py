@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -114,12 +114,18 @@ class Engine(Protocol):
         ...
 
     def synthesize(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Synthesis:
         """Render prepared text segments as one continuous waveform.
 
         Args:
             segments: Already normalised and script-converted text.
+            stop: Consulted between units of work; see `StopCheck`.
             voice: A voice id the registry listed for this model.
             delivery: How to say it. An engine reads the fields it supports.
 
@@ -163,7 +169,12 @@ class StreamingEngine(Protocol):
     """
 
     def synthesize_stream(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Generator[np.ndarray, None, None]:
         """Yield mono float32 chunks in playback order.
 
@@ -178,12 +189,38 @@ class StreamingEngine(Protocol):
         Raises:
             UnknownVoiceError: The voice id is not available.
             NoAudioError: The model produced nothing for the text.
+            AbandonedError: `stop` said the listener is gone.
         """
         ...
 
 
 class EngineError(RuntimeError):
     """Base class for engine failures surfaced to the API."""
+
+
+class AbandonedError(EngineError):
+    """The listener went away, so the render stopped at its next checkpoint.
+
+    Not a failure: nothing was wrong with the text or the model. Raised so the
+    engine lock is released and the caller can tell an abandoned render from
+    one that produced nothing.
+    """
+
+
+StopCheck = Callable[[], bool]
+"""Asked at every checkpoint of a render; ``True`` means nobody is listening.
+
+Passed in rather than raised at the engine, because only the transport knows
+the connection is gone. An engine checks between the units it produces — a
+decode step, a diffusion step, a codec chunk, a segment — since an ONNX
+`run()` cannot be interrupted, so that unit is the most a lost listener costs.
+"""
+
+
+def check_stop(stop: StopCheck | None) -> None:
+    """Raise `AbandonedError` when the stop check says to. No check, no cost."""
+    if stop is not None and stop():
+        raise AbandonedError("the listener went away")
 
 
 class UnknownVoiceError(EngineError):

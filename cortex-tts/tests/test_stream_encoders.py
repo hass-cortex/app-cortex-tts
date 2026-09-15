@@ -1,8 +1,8 @@
-"""The streaming synthesis endpoint.
+"""What a chunked stream is made of, under `/api/speak/live`.
 
-Synthesis itself needs a 729 MB bundle, so these cover the parts that break
-without one: the WAV header a stream has to open with, and the errors that must
-be raised before a 200 has gone out.
+Synthesis itself needs a 729 MB bundle; these cover the parts that break
+without one — the container each format opens with, the sample conversion, and
+the gain that keeps chunks under the ceiling without ever raising them.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import struct
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 
 from cortex_speech.audio import (
     MP3_BITRATE,
@@ -23,8 +22,6 @@ from cortex_speech.audio import (
     pcm_frames,
     wav_header,
 )
-
-AUTH = {"Authorization": "Bearer test-key"}
 
 
 class TestWavHeader:
@@ -206,150 +203,3 @@ class TestWavStream:
         encoder = WavStream()
         encoder.open(24000)
         assert encoder.bitrate == 24000 * 16
-
-
-class TestEndpoint:
-    def test_needs_auth(self, client: TestClient) -> None:
-        response = client.post("/api/speak/stream", json={"text": "hi"})
-        assert response.status_code == 401
-
-    def test_unknown_model_is_404_before_anything_streams(
-        self, client: TestClient
-    ) -> None:
-        """After a header goes out the status is 200 and errors can only truncate."""
-        response = client.post(
-            "/api/speak/stream", headers=AUTH, json={"text": "hi", "model": "nope"}
-        )
-        assert response.status_code == 404
-        assert response.json()["code"] == "UNKNOWN_MODEL"
-
-    def test_text_that_prepares_to_nothing_is_400(self, client: TestClient) -> None:
-        response = client.post(
-            "/api/speak/stream", headers=AUTH, json={"text": "！！！"}
-        )
-        assert response.status_code == 400
-        assert response.json()["code"] == "EMPTY_TEXT"
-
-    def test_an_undownloaded_model_is_a_conflict(self, client: TestClient) -> None:
-        """Same failure as `/api/speak`: the stream never starts."""
-        response = client.post(
-            "/api/speak/stream",
-            headers=AUTH,
-            json={"text": "你好。", "model": "hojo-40m"},
-        )
-        assert response.status_code == 409
-
-
-class TestFieldsThatDoNotApply:
-    """A request field a stream cannot honour is refused, not ignored.
-
-    Silently dropping one is indistinguishable from honouring it: the caller
-    gets a 200 and audio, and no way to tell it asked for something it did not
-    get.
-    """
-
-    def test_a_format_that_needs_a_length_is_refused(self, client: TestClient) -> None:
-        """FLAC and OGG both want a header written before the audio exists."""
-        for fmt in ("flac", "ogg"):
-            response = client.post(
-                "/api/speak/stream",
-                headers=AUTH,
-                json={"text": "你好。", "format": fmt},
-            )
-            assert response.status_code == 400, fmt
-            assert response.json()["code"] == "UNSUPPORTED_FORMAT"
-            assert "mp3" in response.json()["message"], "it should say what works"
-
-    def test_a_temperature_is_refused_for_a_model_without_one(
-        self, client: TestClient
-    ) -> None:
-        """MOSS fuses sampling into its graph; there is no knob to turn."""
-        response = client.post(
-            "/api/speak/stream",
-            headers=AUTH,
-            json={"text": "你好。", "model": "moss-nano", "temperature": 0.5},
-        )
-        assert response.status_code == 400
-        assert response.json()["code"] == "NO_TEMPERATURE"
-
-    def test_the_same_refusal_applies_to_the_file_endpoint(
-        self, client: TestClient
-    ) -> None:
-        """`/api/speak` validated 0..1 and then dropped the value."""
-        response = client.post(
-            "/api/speak",
-            headers=AUTH,
-            json={"text": "你好。", "model": "moss-nano", "temperature": 0.5},
-        )
-        assert response.status_code == 400
-        assert response.json()["code"] == "NO_TEMPERATURE"
-
-
-class TestAnUnknownVoice:
-    """A named voice is checked before the response starts.
-
-    The engine raises when it resolves the voice, which on the streaming path
-    is after the first frame has gone out. The caller then sees 200, a header
-    with no samples behind it, and no error — reported from production as
-    "why is there no reaction".
-    """
-
-    def test_a_wrong_voice_is_404_on_the_stream(self, client: TestClient) -> None:
-        response = client.post(
-            "/api/speak/stream",
-            headers=AUTH,
-            json={"text": "你好。", "model": "hojo-40m", "voice": "nope"},
-        )
-        assert response.status_code != 200, "the stream started before failing"
-        assert response.json()["code"] in {"UNKNOWN_VOICE", "MODEL_NOT_READY"}
-
-    def test_a_wrong_voice_is_404_on_the_file_endpoint_too(
-        self, client: TestClient
-    ) -> None:
-        response = client.post(
-            "/api/speak",
-            headers=AUTH,
-            json={"text": "你好。", "model": "hojo-40m", "voice": "nope"},
-        )
-        assert response.status_code != 200
-        assert response.json()["code"] in {"UNKNOWN_VOICE", "MODEL_NOT_READY"}
-
-
-class TestACloneOnlyModel:
-    """A stored reference makes a voice exist before the model is downloaded.
-
-    Listing voices reads the reference store, not the bundle, so resolving the
-    voice succeeds; the load is what fails, and it has to fail before the
-    response starts rather than inside the body generator.
-    """
-
-    @pytest.fixture
-    def with_reference(self, client: TestClient, reference_wav: bytes) -> TestClient:
-        response = client.post(
-            "/api/references",
-            headers=AUTH,
-            data={"name": "Tester", "transcript": "這是一段測試錄音。"},
-            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
-        )
-        assert response.status_code == 201, response.text
-        return client
-
-    def test_the_stream_is_a_conflict_before_any_frame(
-        self, with_reference: TestClient
-    ) -> None:
-        response = with_reference.post(
-            "/api/speak/stream",
-            headers=AUTH,
-            json={"text": "你好。", "model": "hojo-80m-clone"},
-        )
-        assert response.status_code == 409
-        assert response.json()["code"] == "MODEL_NOT_READY"
-
-    def test_the_file_endpoint_agrees(self, with_reference: TestClient) -> None:
-        response = with_reference.post(
-            "/api/speak",
-            headers=AUTH,
-            json={"text": "你好。", "model": "hojo-80m-clone"},
-        )
-        assert response.status_code == 409
-        assert response.json()["code"] == "MODEL_NOT_READY"

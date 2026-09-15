@@ -1,14 +1,17 @@
 """Measure every model's real-time factor on one host with one text set.
 
-This is where the figures in docs/models.md come from — and only those. The
-app itself no longer carries a number measured here: a real-time factor is a
-property of the host, so a card shows what that host measured or nothing at
-all (`cortex_tts.stats`). What this script produces is documentation, for
-comparing models with each other on one machine.
+This is where the figures in docs/models.md come from — and only those. A
+real-time factor is a property of the host, so a card shows what that host
+measured or nothing at all (`cortex_tts.stats`); what this script produces is
+documentation, for comparing models with each other on one machine.
 
-The reference host is written down in docs/models.md ("The reference host"): a Home Assistant OS VM with
-4 vCPU of an Intel Core i7-9750H and 8 GB, the app at two threads on the CPU, and the figure is the
-median over the four sentence lengths below. Run it against any app instance:
+Not the same statistic as the card: this divides each sentence's whole cost,
+fixed part included, while a card fits the per-second part apart from it. On
+one host the card reads a little lower, and that is not a disagreement.
+
+The reference host is written down in docs/models.md ("The reference host") and
+that is the authority on it; the figure is the median over the four sentence
+lengths below. Run it against any app instance:
 
     CORTEX_TTS_KEY=... uv run python scripts/bench_rtf.py http://host:8771 out.json
 

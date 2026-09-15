@@ -11,21 +11,29 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from functools import partial
 from typing import NamedTuple, Protocol
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi import status as http_status
-from fastapi.responses import StreamingResponse
 
 from cortex_speech import (
     CATALOG,
     CONTENT_TYPES,
     MAX_REFERENCE_SECONDS,
-    STREAM_ENCODERS,
+    AbandonedError,
     AudioFormat,
     Delivery,
     EngineError,
@@ -36,14 +44,14 @@ from cortex_speech import (
     ProviderUnavailableError,
     Reference,
     ReferenceError,
-    StreamGain,
+    RenderSample,
     TextOptions,
     UnknownModelError,
     UnknownVoiceError,
     UnsupportedLanguageError,
     Voice,
+    count_scripts,
     encode,
-    estimated_audio_seconds,
     plan,
     prepare,
     prepared_text,
@@ -78,6 +86,9 @@ from .schemas import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# How often a whole render asks whether its caller is still there.
+_DISCONNECT_POLL_S = 0.25
 
 # A 20 s reference at 48 kHz 24-bit stereo is under 6 MB; this leaves room
 # for a lossless container without spooling an arbitrary upload to disk.
@@ -136,11 +147,10 @@ async def write_settings(
 ) -> SettingsSaved:
     """Change settings, keeping what was not sent.
 
-    These used to be addon options, where every change cost a restart and a
-    change to their schema cost a rebuild. Nothing here needs that: most are
-    read afresh on the next request, and the two that are bound when a
-    session is created are adopted by dropping what is resident — the next
-    reply pays a rebuild instead of the user paying a restart.
+    Nothing here costs a restart: most are read afresh on the next request,
+    and the two that are bound when a session is created are adopted by
+    dropping what is resident — the next reply pays a rebuild instead of the
+    user paying a restart.
 
     A value that fails validation is ignored with a warning rather than
     rejecting the whole form, so one bad number cannot discard the model
@@ -158,7 +168,7 @@ async def write_settings(
         try:
             await asyncio.to_thread(save_preferences, state.preferences_path, updated)
         except OSError as err:
-            raise _http(
+            raise http_error(
                 http_status.HTTP_500_INTERNAL_SERVER_ERROR,
                 "SETTINGS_NOT_WRITTEN",
                 f"could not store the settings: {err}",
@@ -186,7 +196,7 @@ async def write_settings(
 # ---------------------------------------------------------------------------
 
 
-def _voice_kind(state: AppState, spec: ModelSpec, voice_id: str) -> str:
+def voice_kind(state: AppState, spec: ModelSpec, voice_id: str) -> str:
     """Which `Voice.source` a rendered voice belongs to.
 
     A stored recording is a clone whichever model spoke it; anything else is
@@ -219,7 +229,18 @@ def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
         sample_rate=spec.sample_rate,
         size_mb=spec.size_mb,
         rss_hint_mb=spec.rss_hint_mb,
-        rtf=[MeasuredRtf(kind=m.kind, rtf=m.rtf, samples=m.count) for m in measured],
+        rtf=[
+            MeasuredRtf(
+                kind=m.kind,
+                per_audio=m.render.per_audio,
+                fixed_s=m.render.fixed_s,
+                spread_s=m.render.spread_s,
+                cjk_per_s=m.render.cjk_per_s,
+                latin_per_s=m.render.latin_per_s,
+                requests=m.render.samples,
+            )
+            for m in measured
+        ],
         downloaded=model_state.downloaded,
         loaded=model_state.loaded,
         provider=state.registry.providers_in_use.get(spec.id),
@@ -242,7 +263,7 @@ async def download_model(
     model_id: str, state: AppState = Depends(get_state)
 ) -> ModelOut:
     """Start (or rejoin) a background download of a model bundle."""
-    spec = _spec_or_404(state, model_id)
+    spec = spec_or_404(state, model_id)
     state.downloads.start(spec)
     return _model_out(state, spec)
 
@@ -250,11 +271,11 @@ async def download_model(
 @api.delete("/models/{model_id}", response_model=ModelOut)
 async def delete_model(model_id: str, state: AppState = Depends(get_state)) -> ModelOut:
     """Unload a model and delete its bundle from disk."""
-    spec = _spec_or_404(state, model_id)
+    spec = spec_or_404(state, model_id)
     if state.downloads.is_running(model_id):
         # The worker would keep writing into the directory being removed and
         # a half bundle would reappear behind the delete.
-        raise _http(
+        raise http_error(
             http_status.HTTP_409_CONFLICT,
             "DOWNLOAD_RUNNING",
             f"{spec.name} is still downloading; wait for it to finish",
@@ -270,8 +291,8 @@ async def delete_model(model_id: str, state: AppState = Depends(get_state)) -> M
 @api.post("/models/{model_id}/load", response_model=ModelOut)
 async def load_model(model_id: str, state: AppState = Depends(get_state)) -> ModelOut:
     """Load a model into memory ahead of the first synthesis."""
-    spec = _spec_or_404(state, model_id)
-    with _engine_errors():
+    spec = spec_or_404(state, model_id)
+    with engine_errors():
         await state.registry.acquire(model_id)
     return _model_out(state, spec)
 
@@ -279,7 +300,7 @@ async def load_model(model_id: str, state: AppState = Depends(get_state)) -> Mod
 @api.post("/models/{model_id}/unload", response_model=ModelOut)
 async def unload_model(model_id: str, state: AppState = Depends(get_state)) -> ModelOut:
     """Drop a model from memory, leaving its bundle on disk."""
-    spec = _spec_or_404(state, model_id)
+    spec = spec_or_404(state, model_id)
     await state.registry.unload(model_id)
     return _model_out(state, spec)
 
@@ -291,11 +312,11 @@ async def reset_model_stats(
     """Forget this model's measured real-time factors.
 
     A model's speed belongs to the host, and the host changes — a model moved
-    onto the GPU, a thread count raised. The old figures then misjudge it,
-    the render guard that reads them included, until enough new replies push
-    them out of the window. This drops them so the next reply measures fresh.
+    onto the GPU, a thread count raised. The stored figures then misjudge it
+    until enough new replies push them out of the window. This drops them so
+    the next reply measures fresh.
     """
-    spec = _spec_or_404(state, model_id)
+    spec = spec_or_404(state, model_id)
     await asyncio.to_thread(state.stats.forget, model_id)
     return _model_out(state, spec)
 
@@ -324,7 +345,7 @@ async def list_voices(
     """
     wanted = [s for s in CATALOG if model is None or s.id == model]
     if model is not None and not wanted:
-        raise _http(
+        raise http_error(
             http_status.HTTP_404_NOT_FOUND, "UNKNOWN_MODEL", f"no model {model!r}"
         )
 
@@ -363,9 +384,9 @@ async def preview_text(
     body: PreviewRequest, state: AppState = Depends(get_state)
 ) -> PreviewResponse:
     """Show what the text pipeline would hand the model, without synthesising."""
-    spec = _spec_or_404(state, body.model or state.preferences.default_model)
+    spec = spec_or_404(state, body.model or state.preferences.default_model)
     text = body.text.strip()
-    options = _text_options(state, spec, text, body.language, body)
+    options = text_options(state, spec, text, body.language, body)
     decided = plan(
         text,
         options,
@@ -401,7 +422,7 @@ async def preview_text(
 # ---------------------------------------------------------------------------
 
 
-class _Switches(Protocol):
+class Switches(Protocol):
     """What a request said about the text switches; ``None`` is nothing."""
 
     @property
@@ -424,12 +445,12 @@ class _Unasked:
     taiwan_readings: bool | None = None
 
 
-def _text_options(
+def text_options(
     state: AppState,
     spec: ModelSpec,
     text: str,
     language: str | None,
-    asked: _Switches,
+    asked: Switches,
 ) -> TextOptions:
     """The request's text switches, with the settings' rules behind them.
 
@@ -469,39 +490,84 @@ class _Resolved(NamedTuple):
         return self.spec.id
 
 
-def _guard_render_length(
-    state: AppState, spec: ModelSpec, segments: list[str], voice_id: str
-) -> None:
-    """Refuse a reply too long to be worth rendering on this host.
+def check_delivery(spec: ModelSpec, delivery: Delivery) -> None:
+    """Refuse a knob the catalog says this model does not have.
 
-    The cost of a synthesis is uninterruptible — one worker thread the engine
-    runs to the end — so a reply that renders past the caller's timeout is not
-    merely late: its audio finishes into a socket nobody is reading, and the
-    model was held for the whole of it. This estimate stops that before it
-    starts, from the text's rough length and the speed this host has actually
-    measured for the chosen model and voice kind.
-
-    Fails open when the model has never been measured here: there is nothing to
-    estimate from, and one long render teaches the store what the next one is
-    judged against. `0` turns the guard off entirely.
+    Answered from the catalog, so it does not wait behind a model that has
+    not been downloaded — a caller asking for a knob this model does not
+    have should hear that, not "not downloaded".
     """
-    limit = state.preferences.max_synthesis_seconds
-    if not limit:
-        return
-    kind = _voice_kind(state, spec, voice_id)
-    rtf = next((m.rtf for m in state.stats.get(spec.id) if m.kind == kind), None)
-    if rtf is None:
-        return
-    estimate = estimated_audio_seconds(segments) * rtf
-    if estimate <= limit:
-        return
-    raise _http(
-        http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-        "RENDER_TOO_LONG",
-        f"{spec.name} would take about {estimate:.0f}s to render this on this "
-        f"host, over the {limit}s limit. Shorten the text, or render it on a "
-        "faster model or the GPU.",
+    if delivery.temperature is not None and not spec.temperature:
+        raise http_error(
+            http_status.HTTP_400_BAD_REQUEST,
+            "NO_TEMPERATURE",
+            f"{spec.name} has no sampling temperature to set",
+        )
+    if delivery.instruct and not spec.style_instruction:
+        raise http_error(
+            http_status.HTTP_400_BAD_REQUEST,
+            "NO_STYLE_INSTRUCTION",
+            f"{spec.name} takes no style instruction",
+        )
+
+
+async def pick_voice(state: AppState, spec: ModelSpec, voice: str | None) -> Voice:
+    """The voice a request meant, or raise.
+
+    Listing the voices reads the bundle off disk, so a model that is not
+    downloaded fails here, the same way a synthesis would. A named voice is
+    checked here, not left to the engine, which would not raise until it
+    resolves the voice — on a live reply that is after `ready` has gone out,
+    and the caller is then waiting on audio that will never come. Voice ids
+    are case-sensitive, so `yuewen` for `Yuewen` is the easy way to hit it.
+    """
+    with engine_errors():
+        voices = await state.registry.voices(spec.id)
+    voice_id = voice or _default_voice(state, voices)
+    if voice_id is None:
+        raise http_error(
+            http_status.HTTP_409_CONFLICT,
+            "NO_VOICE",
+            f"{spec.name} has no voices — upload a reference recording first",
+        )
+    chosen = next((v for v in voices if v.id == voice_id), None)
+    if chosen is None:
+        match = next((v.id for v in voices if v.id.lower() == voice_id.lower()), None)
+        hint = f"; did you mean {match!r}?" if match else ""
+        raise http_error(
+            http_status.HTTP_404_NOT_FOUND,
+            "UNKNOWN_VOICE",
+            f"{spec.name} has no voice {voice_id!r}{hint}",
+        )
+    return chosen
+
+
+def prepare_segments(
+    state: AppState,
+    spec: ModelSpec,
+    text: str,
+    language: str | None,
+    asked: Switches,
+) -> list[str]:
+    """Run the text path for one request; empty when there is nothing to say."""
+    return prepare(
+        text,
+        text_options(state, spec, text, language, asked),
+        language,
+        reads_numerals=spec.reads_numerals,
+        needs_number_words=spec.needs_number_words,
     )
+
+
+def told_language(spec: ModelSpec, text: str, language: str | None) -> str | None:
+    """What the engine is told to read the text as, where it takes a language.
+
+    Only where the catalog says the model takes one; elsewhere the voice
+    decides, and the tag has done its work in the pipeline. A sniffed tag is
+    passed on too: what the pipeline read the text as is what the model
+    should read it as.
+    """
+    return resolve_language(text, language) if spec.language_choice else None
 
 
 async def _resolve(
@@ -510,100 +576,38 @@ async def _resolve(
     text: str,
     model: str | None,
     voice: str | None,
-    asked: _Switches,
+    asked: Switches,
     delivery: Delivery = Delivery(),
 ) -> _Resolved:
     """Turn a request into everything a synthesis needs, or raise.
 
-    Shared by both endpoints so they cannot disagree about which model a
-    request meant, what the text prepares to, or which voice answers — and so
-    the streaming one raises every one of these before its first byte, after
-    which the status is already 200 and a failure can only truncate the audio.
+    Every refusal happens here, before anything is rendered: which model a
+    request meant, what the text prepares to, and which voice answers.
     """
-    model_id = model or state.preferences.default_model
-    spec = _spec_or_404(state, model_id)
+    spec = spec_or_404(state, model or state.preferences.default_model)
+    check_delivery(spec, delivery)
 
-    # Answered from the catalog, so it does not wait behind a model that has
-    # not been downloaded — a caller asking for a knob this model does not
-    # have should hear that, not "not downloaded".
-    if delivery.temperature is not None and not spec.temperature:
-        raise _http(
-            http_status.HTTP_400_BAD_REQUEST,
-            "NO_TEMPERATURE",
-            f"{spec.name} has no sampling temperature to set",
-        )
-    if delivery.instruct and not spec.style_instruction:
-        raise _http(
-            http_status.HTTP_400_BAD_REQUEST,
-            "NO_STYLE_INSTRUCTION",
-            f"{spec.name} takes no style instruction",
-        )
-
-    options = _text_options(state, spec, text, delivery.language, asked)
     # Whether there is anything to say does not depend on the voice, so it is
     # answered first — before a model with no voices, or one not downloaded,
     # gets to answer instead.
-    segments = prepare(
-        text,
-        options,
-        delivery.language,
-        reads_numerals=spec.reads_numerals,
-        needs_number_words=spec.needs_number_words,
-    )
+    segments = prepare_segments(state, spec, text, delivery.language, asked)
     if not segments:
-        raise _http(
+        raise http_error(
             http_status.HTTP_400_BAD_REQUEST,
             "EMPTY_TEXT",
             "nothing to say once punctuation was stripped",
         )
 
     # The language the text is read in falls back to the voice's when the
-    # request names none, so the voice is resolved before the text is
-    # prepared for real. Listing the voices reads the bundle off disk, so a
-    # model that is not downloaded fails here, the same way a synthesis would.
-    with _engine_errors():
-        voices = await state.registry.voices(model_id)
-    voice_id = voice or _default_voice(state, voices)
-    if voice_id is None:
-        raise _http(
-            http_status.HTTP_409_CONFLICT,
-            "NO_VOICE",
-            f"{spec.name} has no voices — upload a reference recording first",
-        )
-
-    # A named voice is checked here, not left to the engine. The engine raises
-    # when it resolves the voice, which on the streaming path happens after the
-    # first frame has gone out — the caller then gets a 200, a header with
-    # nothing behind it and no error at all. Voice ids are case-sensitive, so `yuewen`
-    # for `Yuewen` is the easy way to hit that.
-    chosen = next((v for v in voices if v.id == voice_id), None)
-    if chosen is None:
-        match = next((v.id for v in voices if v.id.lower() == voice_id.lower()), None)
-        hint = f"; did you mean {match!r}?" if match else ""
-        raise _http(
-            http_status.HTTP_404_NOT_FOUND,
-            "UNKNOWN_VOICE",
-            f"{spec.name} has no voice {voice_id!r}{hint}",
-        )
-
+    # request names none, so the text is prepared again once the voice is
+    # known — only when that changes anything.
+    chosen = await pick_voice(state, spec, voice)
     language = delivery.language or chosen.language
     if language != delivery.language:
-        options = _text_options(state, spec, text, language, asked)
-        segments = prepare(
-            text,
-            options,
-            language,
-            reads_numerals=spec.reads_numerals,
-            needs_number_words=spec.needs_number_words,
-        )
+        segments = prepare_segments(state, spec, text, language, asked)
 
-    # The engine is told the language only where the catalog says it takes
-    # one; elsewhere the voice decides, and the tag has done its work in the
-    # pipeline. A sniffed tag is passed on too: what the pipeline read the
-    # text as is what the model should read it as.
-    told = resolve_language(text, language) if spec.language_choice else None
-    _guard_render_length(state, spec, segments, voice_id)
-    return _Resolved(spec, segments, voice_id, replace(delivery, language=told))
+    told = told_language(spec, text, language)
+    return _Resolved(spec, segments, chosen.id, replace(delivery, language=told))
 
 
 async def _synthesize(
@@ -613,18 +617,41 @@ async def _synthesize(
     model: str | None,
     voice: str | None,
     fmt: AudioFormat,
-    asked: _Switches = _Unasked(),
+    asked: Switches = _Unasked(),
     normalize_level: bool = True,
     delivery: Delivery = Delivery(),
+    request: Request | None = None,
 ) -> tuple[bytes, SpeakStats]:
     spec, segments, voice_id, delivery = await _resolve(
         state, text=text, model=model, voice=voice, asked=asked, delivery=delivery
     )
 
-    with _engine_errors():
-        result = await state.registry.synthesize(
-            spec.id, segments, voice_id, delivery=delivery
-        )
+    # A whole render sends nothing until it is done, so nothing about the
+    # socket is learned by writing to it; the request is asked instead, and
+    # the engine stops at its next checkpoint once the caller has gone.
+    gone = asyncio.Event()
+
+    async def watch() -> None:
+        while request is not None and not gone.is_set():
+            if await request.is_disconnected():
+                gone.set()
+                return
+            await asyncio.sleep(_DISCONNECT_POLL_S)
+
+    watcher = asyncio.create_task(watch())
+    started = time.perf_counter()
+    try:
+        with engine_errors():
+            result = await state.registry.synthesize(
+                spec.id, segments, voice_id, delivery=delivery, stop=gone.is_set
+            )
+    except AbandonedError:
+        _LOGGER.info("%s: caller left before the render finished", spec.id)
+        raise http_error(499, "ABANDONED", "the caller went away") from None
+    finally:
+        gone.set()
+        watcher.cancel()
+    wall = time.perf_counter() - started
 
     audio = encode(result.audio, result.sample_rate, fmt, normalize=normalize_level)
     seconds = len(result.audio) / result.sample_rate
@@ -638,16 +665,14 @@ async def _synthesize(
         rtf=round(result.inference_ms / 1000 / seconds, 3) if seconds else 0.0,
         prepared_text=prepared_text(segments),
     )
-    # What the card shows, split by the kind of voice this was — a clone
-    # costs about twice what a designed voice does on the same model. The
-    # store is asked rather than the voice list, because that is a dict
-    # lookup and the list is a disk read on the hot path.
+    # Split by the kind of voice this was — a clone costs about twice what a
+    # designed voice does on the same model. The store is asked rather than
+    # the voice list, because that is a dict lookup and the list is a disk
+    # read on the hot path. The wall clock, not `inference_ms`: what the
+    # caller waited is what the fit has to predict.
+    kind = voice_kind(state, spec, voice_id)
     await asyncio.to_thread(
-        state.stats.record,
-        spec.id,
-        _voice_kind(state, spec, voice_id),
-        stats.rtf,
-        stats.audio_seconds,
+        state.stats.record, spec.id, kind, render_sample(text, seconds, wall)
     )
     _LOGGER.info(
         "spoke %d chars as %s/%s -> %.2fs audio in %.0fms (RTF %.2f)",
@@ -677,8 +702,16 @@ def _audio_response(audio: bytes, fmt: AudioFormat, stats: SpeakStats) -> Respon
     )
 
 
+def render_sample(text: str, audio_s: float, wall_s: float) -> RenderSample:
+    """One request as the render model learns it, from the caller's own text."""
+    cjk, latin = count_scripts(text)
+    return RenderSample(audio_s=audio_s, wall_s=wall_s, cjk=cjk, latin=latin)
+
+
 @api.post("/speak", responses={200: {"content": {"audio/wav": {}}}})
-async def speak(body: SpeakRequest, state: AppState = Depends(get_state)) -> Response:
+async def speak(
+    body: SpeakRequest, request: Request, state: AppState = Depends(get_state)
+) -> Response:
     """Synthesise text and return the audio file."""
     audio, stats = await _synthesize(
         state,
@@ -689,118 +722,9 @@ async def speak(body: SpeakRequest, state: AppState = Depends(get_state)) -> Res
         asked=body,
         normalize_level=body.normalize_level,
         delivery=body.delivery(),
+        request=request,
     )
     return _audio_response(audio, body.format or "wav", stats)
-
-
-@api.post(
-    "/speak/stream",
-    responses={200: {"content": {"audio/mpeg": {}, "audio/wav": {}}}},
-    response_class=StreamingResponse,
-)
-async def speak_stream(
-    body: SpeakRequest, state: AppState = Depends(get_state)
-) -> StreamingResponse:
-    """Synthesise and send audio as it is produced, not when it is finished.
-
-    Default `mp3`, because a streamed format must be writable without knowing
-    how long the audio will be. MP3 is a bare sequence of self-describing
-    frames and needs nothing declared; WAV has to declare a length it cannot
-    know, and a general-purpose player given the maximal one waits for a file
-    it believes is six hours long. `wav` is still available for a consumer
-    that wants raw PCM. Measured on MOSS-TTS-Nano: 143-178
-    ms to the first chunk against 1.8 s for the whole utterance.
-
-    Every model works here. One that cannot emit mid-utterance sends its whole
-    waveform as a single chunk, which is no worse than `/api/speak` and keeps
-    callers from having to ask which kind of model they picked.
-
-    `flac` and `ogg` are refused rather than quietly answered in another
-    format: both need a size or an index in a header that would have to be
-    written before the audio exists. `temperature` is refused for a model that
-    has none. `normalize_level` is accepted and ignored: it asks for the
-    finished waveform to be scaled to a target peak, which needs a finished
-    waveform. What a stream gets instead is `StreamGain`, which keeps chunks
-    under the same ceiling without ever raising them — see its docstring for
-    why the two are not the same thing.
-
-    `X-Cortex-Bitrate` is the one measurement that can be sent, because it is
-    known before the first sample: a constant bitrate is what lets a consumer
-    turn a byte count into a duration without decoding. The rest of what
-    `/api/speak` returns describes a finished synthesis, and the headers are
-    gone before the first sample exists.
-    """
-    requested = body.format or "mp3"
-    build = STREAM_ENCODERS.get(requested)
-    if build is None:
-        raise _http(
-            http_status.HTTP_400_BAD_REQUEST,
-            "UNSUPPORTED_FORMAT",
-            f"a stream cannot be {requested}: it would have to declare a size "
-            f"or an index before the audio exists. Available: "
-            f"{', '.join(sorted(STREAM_ENCODERS))}",
-        )
-    encoder = build()
-
-    spec, segments, voice_id, delivery = await _resolve(
-        state,
-        text=body.text,
-        model=body.model,
-        voice=body.voice,
-        asked=body,
-        delivery=body.delivery(),
-    )
-
-    # Loading is the last thing that can fail, and it must fail here: once the
-    # generator below has yielded the first frame the status is 200. Resolving
-    # the voice read the bundle off disk but built nothing.
-    with _engine_errors():
-        await state.registry.acquire(spec.id)
-
-    async def frames() -> AsyncIterator[bytes]:
-        gain = StreamGain()
-        samples = 0
-        started = time.perf_counter()
-        yield encoder.open(spec.sample_rate)
-        async for chunk in state.registry.synthesize_stream(
-            spec.id, segments, voice_id, delivery
-        ):
-            samples += len(chunk)
-            yield encoder.encode(gain.frames(chunk))
-        yield encoder.close()
-        # This path has no `inference_ms` to report — nothing here renders a
-        # whole utterance — so the clock is the wall, which for a stream is
-        # the honest number anyway: the listener waits on it. Recorded after
-        # the last chunk because that is when the duration is finally known,
-        # and not at all when the consumer went away mid-reply, which would
-        # bank a real-time factor for a reply nobody heard the end of.
-        seconds = samples / spec.sample_rate
-        if seconds:
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            await asyncio.to_thread(
-                state.stats.record,
-                spec.id,
-                _voice_kind(state, spec, voice_id),
-                round(elapsed_ms / 1000 / seconds, 3),
-                round(seconds, 3),
-            )
-
-    return StreamingResponse(
-        frames(),
-        media_type=encoder.content_type,
-        headers={
-            "X-Cortex-Model": spec.id,
-            "X-Cortex-Voice": voice_id,
-            "X-Cortex-Chunk-Streaming": "1" if spec.chunk_streaming else "0",
-            # The one measurement that exists before the first sample, and the
-            # only way a consumer can tell how much audio it is holding
-            # without decoding it.
-            "X-Cortex-Bitrate": str(encoder.bitrate or spec.sample_rate * 16),
-            # Nothing downstream may buffer this; the point is the first frame.
-            "Cache-Control": "no-store",
-            "X-Accel-Buffering": "no",
-        },
-    )
 
 
 @compat.post("/audio/speech", responses={200: {"content": {"audio/wav": {}}}})
@@ -858,7 +782,7 @@ async def add_reference(
 ) -> ReferenceOut:
     """Store a reference recording and make it available as a cloned voice."""
     if audio.size is not None and audio.size > MAX_REFERENCE_UPLOAD_BYTES:
-        raise _http(
+        raise http_error(
             http_status.HTTP_413_CONTENT_TOO_LARGE,
             "BAD_REFERENCE",
             f"upload is {audio.size / 1_000_000:.0f} MB; a reference is at most "
@@ -880,7 +804,7 @@ async def add_reference(
             )
         )
     except ReferenceError as err:
-        raise _http(
+        raise http_error(
             http_status.HTTP_400_BAD_REQUEST, "BAD_REFERENCE", str(err)
         ) from err
     await state.registry.forget_reference(reference.id)
@@ -914,7 +838,7 @@ async def update_reference(
     except KeyError as err:
         raise _no_reference(reference_id) from err
     except ReferenceError as err:
-        raise _http(
+        raise http_error(
             http_status.HTTP_400_BAD_REQUEST, "BAD_REFERENCE", str(err)
         ) from err
     if body.gender is not None or body.language is not None:
@@ -983,37 +907,41 @@ _WIRE_ERRORS: tuple[tuple[type[Exception], int, str], ...] = (
 
 
 @contextmanager
-def _engine_errors() -> Iterator[None]:
+def engine_errors() -> Iterator[None]:
     """Translate engine failures into the HTTP shape the API promises."""
     try:
         yield
+    except AbandonedError:
+        # Not a failure and not for the wire: the caller's own news coming
+        # back, which each transport answers in its own way.
+        raise
     except tuple(kind for kind, _, _ in _WIRE_ERRORS) as err:
         for kind, status_code, code in _WIRE_ERRORS:
             if isinstance(err, kind):
-                raise _http(status_code, code, str(err)) from err
+                raise http_error(status_code, code, str(err)) from err
         raise
 
 
 def _no_reference(reference_id: str) -> HTTPException:
     """Return the 404 every reference route raises for an unknown id."""
-    return _http(
+    return http_error(
         http_status.HTTP_404_NOT_FOUND,
         "UNKNOWN_REFERENCE",
         f"no reference {reference_id!r}",
     )
 
 
-def _http(status_code: int, code: str, message: str) -> HTTPException:
+def http_error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(
         status_code=status_code, detail={"code": code, "message": message}
     )
 
 
-def _spec_or_404(state: AppState, model_id: str):
+def spec_or_404(state: AppState, model_id: str):
     try:
         return state.registry.spec(model_id)
     except UnknownModelError as err:
-        raise _http(
+        raise http_error(
             http_status.HTTP_404_NOT_FOUND, "UNKNOWN_MODEL", f"no model {model_id!r}"
         ) from err
 

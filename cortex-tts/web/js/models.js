@@ -95,7 +95,7 @@ function actions(m) {
   if (!m.downloaded) return button("download", "Download");
   const load = m.loaded ? button("unload", "Unload") : button("load", "Load");
   // Only offered once there is something to reset; the host's measured RTF
-  // goes stale when the model moves host, and the render guard reads it.
+  // goes stale when the model moves host.
   const reset = m.rtf && m.rtf.length ? ` ${button("reset-stats", "Reset RTF")}` : "";
   return `${load} ${button("delete", armed.has(m.id) ? "Confirm delete" : "Delete", "sm danger")}${reset}`;
 }
@@ -108,7 +108,12 @@ function voiceCount(m) {
 
 const KIND_LABEL = { builtin: "built-in", designed: "designed", reference: "cloned" };
 
-/** The real-time factors this host measured, one per kind of voice. */
+/** The real-time factors this host measured, one per kind of voice.
+ *
+ * `per_audio` and not a plain average of what each request cost: the fixed
+ * cost every request pays is fitted separately, so a card is not read down by
+ * short replies or up by a reply that was rendered in many requests.
+ */
 function rtf(m) {
   const measured = m.rtf || [];
   if (!measured.length) {
@@ -116,10 +121,10 @@ function rtf(m) {
     return `<p class="qual rtf-none">Not measured yet.</p>`;
   }
   const rows = measured.map((r) => {
-    const runs = r.samples === 1 ? "1 run" : `${r.samples} runs`;
+    const n = r.requests === 1 ? "1 request" : `${r.requests} requests`;
     return `<span class="rtf-kind">${esc(KIND_LABEL[r.kind] || r.kind)}</span>
-      <span class="val">${Number(r.rtf).toFixed(2)}</span>
-      <span class="qual">${runs}</span>`;
+      <span class="val">${Number(r.per_audio).toFixed(2)}</span>
+      <span class="qual">${n}</span>`;
   }).join("");
   return `<div class="rtf-rows">${rows}</div>`;
 }

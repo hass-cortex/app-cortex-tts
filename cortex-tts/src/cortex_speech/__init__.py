@@ -35,16 +35,17 @@ from .catalog import (
 )
 from .download import DownloadManager, DownloadProgress, remove_bundle
 from .engine.base import (
+    AbandonedError,
     Delivery,
     EngineError,
     NoAudioError,
+    StopCheck,
     StreamingEngine,
     Synthesis,
     UnknownVoiceError,
     UnsupportedLanguageError,
     Voice,
 )
-from .engine.overrun import estimated_audio_seconds
 from .engine.registry import (
     EngineRegistry,
     ModelNotReadyError,
@@ -53,6 +54,19 @@ from .engine.registry import (
 )
 from .notifications import notify_models_changed
 from .notifications import subscribe as subscribe_models_changed
+from .pacing import (
+    BUFFERED,
+    PACED,
+    STREAMING,
+    Decision,
+    Finished,
+    Planner,
+    RenderModel,
+    RenderSample,
+    Send,
+    Wait,
+)
+from .pacing.model import count_scripts
 from .providers import (
     EXECUTION_PROVIDERS,
     ExecutionProvider,
@@ -95,8 +109,21 @@ __all__ = [
     # references
     # synthesis
     # text
+    "AbandonedError",
     "AudioFormat",
+    "BUFFERED",
     "BY_ID",
+    "count_scripts",
+    "Decision",
+    "Finished",
+    "PACED",
+    "Planner",
+    "RenderModel",
+    "RenderSample",
+    "Send",
+    "STREAMING",
+    "StopCheck",
+    "Wait",
     "CATALOG",
     "CONTENT_TYPES",
     "decode_reference",
@@ -104,7 +131,6 @@ __all__ = [
     "DownloadManager",
     "DownloadProgress",
     "encode",
-    "estimated_audio_seconds",
     "EngineError",
     "EngineRegistry",
     "EXECUTION_PROVIDERS",

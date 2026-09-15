@@ -38,9 +38,11 @@ from ..vendor.moss_runtime import OnnxTtsRuntime
 from .base import (
     Delivery,
     NoAudioError,
+    StopCheck,
     Synthesis,
     UnknownVoiceError,
     Voice,
+    check_stop,
 )
 from .conditioning import ConditioningCache
 from .join import fade_in, join_segments, segment_gap
@@ -239,7 +241,12 @@ class MossEngine:
         self._runtime.rng = np.random.default_rng(_SAMPLING_SEED)
 
     def synthesize(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Synthesis:
         """Render segments with a bundled voice or a cloned one."""
         del delivery  # nothing in it applies; see __init__ and the catalog
@@ -250,11 +257,15 @@ class MossEngine:
         started = time.perf_counter()
         waves: list[np.ndarray] = []
         for text in segments:
+            check_stop(stop)
             self._reseed()
+            # The callback is the only place inside the runtime's decode loop
+            # this code runs, so it is where a lost listener is noticed.
             result = self._runtime.synthesize_single_chunk(
                 text=text,
                 prompt_audio_codes=codes,
                 streaming=True,
+                on_audio_chunk=lambda _chunk: check_stop(stop),
             )
             waves.append(_downmix(np.asarray(result.get("waveform"), dtype=np.float32)))
 
@@ -269,7 +280,12 @@ class MossEngine:
         )
 
     def synthesize_stream(
-        self, segments: list[str], voice: str, *, delivery: Delivery = Delivery()
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
     ) -> Generator[np.ndarray, None, None]:
         """Yield audio as the codec produces it, rather than per segment.
 
@@ -282,6 +298,9 @@ class MossEngine:
         the failure this shape exists to avoid.
         """
         del delivery  # nothing in it applies; see __init__ and the catalog
+        # `stop` is the registry's to ask between chunks: closing this
+        # generator is what stops the worker, and it already does that.
+        del stop
         if not segments:
             raise NoAudioError("no segments to synthesize")
 
@@ -318,8 +337,8 @@ class MossEngine:
         def render() -> None:
             try:
                 for index, text in enumerate(segments):
-                    # The engine no longer joins, so the pause between
-                    # sentences has to be emitted rather than added after.
+                    # Nothing joins these afterwards, so the pause between
+                    # sentences is emitted rather than added after.
                     if index and not offer(gap):
                         return
                     self._reseed()

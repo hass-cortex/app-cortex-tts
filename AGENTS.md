@@ -92,7 +92,8 @@ src/cortex_tts/       ── THE HOME ASSISTANT APP ──
 ├── __main__.py       uvicorn entrypoint
 ├── config.py         what must be settled before the process starts, from the environment
 ├── preferences.py    what the user changes while it runs, stored beside the models
-├── stats.py          what this host measured, per model — a card shows its own
+├── stats.py          what this host measured, per model — one RenderSample per
+│                     request, fitted for both the card and the planner; a card shows its own
 │                     real-time factor or none, never another machine's
 ├── app.py            assembly: lifespan, state, routes, ingress UI mount
 ├── supervisor.py     best-effort POSTs to the Supervisor, and having none
@@ -101,7 +102,10 @@ src/cortex_tts/       ── THE HOME ASSISTANT APP ──
 └── api/
     ├── deps.py       AppState (holds one SpeechService) + the API-key dependency
     ├── schemas.py    request/response bodies
-    └── routes.py     every endpoint (see API Endpoints)
+    ├── routes.py     every HTTP endpoint (see API Endpoints)
+    └── live.py       the WebSocket: a reply spoken while it is written, paced by
+                      the library's planner; owns releasing audio and noticing
+                      that the listener has gone
 
 src/cortex_speech/    ── THE SPEECH LIBRARY ──
 ├── __init__.py       SpeechService, SpeechConfig — the whole public surface
@@ -114,8 +118,14 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 │   ├── options.py    NormalizeOptions, shared so no normaliser imports another
 │   ├── zh/           Chinese: normalize.py, numbers.py, script.py (t2s), readings.py + taiwan_readings.tsv
 │   └── en/           English: normalize.py
+├── pacing/           ── WHEN TO RENDER WHAT ──
+│   ├── model.py      RenderModel: what a request costs here, fitted from requests served
+│   ├── sentences.py  sentences out of text arriving in pieces
+│   └── planner.py    streaming / paced / buffered, the first request's floor
+│                     and ceiling, batches sized to the lead, the opening hold
 ├── engine/
-│   ├── base.py       the Engine and StreamingEngine protocols, Voice, errors
+│   ├── base.py       the Engine and StreamingEngine protocols, Voice, errors,
+│                     and the `stop` check every render takes
 │   ├── backends.py   backend key → builder; how a new engine is added
 │   ├── overrun.py    judging and trimming a waveform, and the seed retry
 │   ├── registry.py   what is resident, LRU eviction, per-engine serialisation
@@ -203,6 +213,32 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 - **One synthesis per engine at a time.** The ONNX sessions drive a stateful
   per-token loop, so the registry serialises calls; concurrency would corrupt
   state, not just slow things down.
+- **A render whose listener left stops within one unit of work.** Every
+  engine takes a `stop` check and asks it between the units it produces — a
+  decode step (Hojo, through a marked deviation in the vendored loop), a
+  diffusion step (OmniVoice, through its generation config), a frame
+  (Qwen3-TTS), a codec chunk (MOSS); the registry asks it between streamed
+  chunks itself. `AbandonedError` comes back, the lock is released, and
+  nothing is recorded against the model. The transports supply the check:
+  `/api/speak` polls the request for a disconnect, and `/api/speak/live` a
+  closed socket, a `cancel` frame or a client that has not read for fifteen
+  seconds. What none
+  of them can see is a player that stopped behind Home Assistant's TTS cache,
+  which drains a stream without back-pressure; that is the boundary.
+- **The app paces a live reply; the integration forwards words.** Over
+  `/api/speak/live` the planner in `cortex_speech/pacing` decides, per reply,
+  between streaming (batches sized to the listener's lead), paced (the whole
+  reply known, an exact opening hold) and buffered (an unmeasured model, or a
+  caller asking), from a `RenderModel` fitted to the requests this host has
+  served — fixed cost plus a per-second factor, and a speech rate per script.
+  Measured on the two production hosts before this existed: a model that hands
+  requests over whole at real time (OmniVoice with a clone) stalled −4.35 s
+  when batches were allowed to grow while the lead did not; a chunk-streaming
+  one at 1.15× (MOSS on a CPU) lost a second per sentence at any batching;
+  splitting a reply into six requests changed pitch wander by nothing
+  measurable. The numbers that came out of that — a three-second floor on the
+  first request, a six-second ceiling, a four-second cap on the opening bank —
+  are in `planner.py` with the measurements beside them.
 - **At most `max_loaded_models` engines are resident**, least-recently-used
   evicted. The 40M beside either 2 GB model costs about 2.8 GB; the 80M and
   MOSS together about 4 GB. Those are host figures and a card's are larger:
@@ -255,17 +291,26 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 - **The library never reaches for Home Assistant.** It publishes to listeners
   via `notifications.py`; `cortex_tts/events.py` is what turns that into an
   event on the HA bus. Enforced by `tests/test_architecture.py`.
-- **A real-time factor belongs to a host, not to a model.** The catalog used
-  to carry an `rtf_hint` measured on the project's reference machine and the
-  UI showed it as plain "RTF"; the integration's own comments record it being
-  "out by 3x here". It is gone. `cortex_tts/stats.py` keeps what this host
-  measured — the median of the last dozen syntheses over a second of audio,
-  **kept per voice kind** — and a card shows that or says "not measured". The
-  kinds are split because the cost is: on OmniVoice a clone measured 7.17
+- **A real-time factor belongs to a host, not to a model.** The catalog
+  carries no figure of its own: one measured on the project's reference
+  machine read 3x out elsewhere. `cortex_tts/stats.py` keeps what this host
+  measured, **per voice kind**, and a card shows that or says "not measured".
+  The kinds are split because the cost is: on OmniVoice a clone measured 7.17
   against 3.46 for a designed voice on one host, since the reference's codec
   frames rejoin the prompt on every synthesis. `scripts/bench_rtf.py` still
   exists, and what it produces is documentation rather than a figure the app
   repeats back to someone else's machine.
+- **One measurement, fitted — not two series averaged.** The store keeps one
+  primitive: a `RenderSample` of raw audio and wall seconds, recorded once per
+  request by every transport. The card's figure and the planner's model are
+  both `RenderModel.fit` of those, so `per_audio` is the factor with the
+  per-request fixed cost held beside it rather than averaged into it. That
+  matters because a paced reply is many short requests of one length: an
+  average of their ratios charges each the whole fixed cost and reads high,
+  while the same points fitted are just the short end of a line the long
+  requests already define. It also leaves no cadence for a transport to get
+  wrong — there is no per-reply call to remember, because a request is the
+  only thing anyone records.
 - **A model declares capabilities, not a category.** `builtin_voices`,
   `designed_voices`, `cloning`, `chunk_streaming`, `temperature`,
   `language_choice` and `style_instruction` are independent, so a model can
@@ -280,24 +325,31 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   waveform; a stream has none, so `StreamGain` holds a gain that only ever
   falls, far enough to keep each chunk under the same ceiling. Scaling a chunk
   to its own peak instead would make every chunk equally loud, which pumps.
-- **A streamed format must not have to declare a length.** `/api/speak/stream`
+- **A streamed format must not have to declare a length.** `/api/speak/live`
   answers MP3 — a bare frame sequence with no container, no length field and no
   index. WAV is still available but is not the default: the maximal length its
   header has to declare is read by a general-purpose player as a six-hour file
-  it then waits to buffer. FLAC and OGG are refused. `X-Cortex-Bitrate` is sent
-  because it is the one measurement that exists before the first sample, and it
-  is what turns a byte count into a duration downstream.
-- **Everything that can fail must fail before the first byte.** Once a header
-  is out the status is 200 and an error can only truncate the audio, so
-  `/api/speak/stream` resolves the model, the text and the voice up front.
+  it then waits to buffer. FLAC and OGG are not offered at all. The `ready`
+  frame carries `bitrate` because it is the one measurement that exists before
+  the first sample, and it is what turns a byte count into a duration
+  downstream.
+- **Everything that can fail must fail before the first byte.** Once audio has
+  started an error can only truncate it, so `/api/speak/live` resolves the
+  model, the voice and the encoder before it sends `ready`.
+- **Chunked audio is the WebSocket's alone.** `/api/speak/live` is the only
+  route that sends audio as it is produced; `/api/speak` answers a finished
+  file, which is what Home Assistant asks for whenever it wants one — a media
+  player that does not stream, `tts_get_url`, the media browser — and what the
+  admin UI auditions a voice with. Two routes because those are two different
+  questions, not because one is a remnant.
 - **Streaming is a second protocol, not an optional method.** `StreamingEngine`
   is what MOSS satisfies and the other two do not; the registry asks with
   `isinstance` rather than making every engine decline a method it has no
   answer for. The capability is therefore written down twice — `ModelSpec.chunk_streaming`
   for a caller who has loaded nothing, the method for the registry — so a test
   pins them to each other. Disagreeing is silent in the direction that matters:
-  a spec claiming the capability without the method makes `/api/speak/stream`
-  answer `X-Cortex-Chunk-Streaming: 1` while whole utterances are rendered.
+  a spec claiming the capability without the method makes `/api/speak/live`
+  report `chunk_streaming: true` while whole utterances are rendered.
 - **A quantised model is not automatically a fast one.** Check the op types
   before believing a small INT8 export is fast: a dynamically quantised
   per-token loop does not scale with threads, and the codec can cost as much
@@ -398,7 +450,7 @@ by `StaticFiles`. Edit and reload.
 ## Testing
 
 ```bash
-uv run pytest -q          # 422 tests, no model weights needed
+uv run pytest -q          # ~700 tests, no model weights needed
 ```
 
 `tests/test_text.py` and `tests/test_english.py` pin the text path — the part
@@ -407,8 +459,16 @@ silently, since a wrong reading produces confident audio rather than an error.
 `tests/test_api.py` covers auth, the model list shape and the errors a caller
 sees. `tests/test_architecture.py` enforces the library/app boundary by reading
 the AST — it loads nothing and runs in milliseconds. `tests/test_catalog.py`
-pins the capability model and the backend table. Synthesis itself is exercised
-by hand against real bundles.
+pins the capability model and the backend table. `tests/test_stats.py` covers
+the one series both the card and the planner read — that it is fitted rather
+than averaged, and that a reply split into many short requests cannot skew it.
+`tests/test_pacing.py` drives the planner with synthetic render models, text a
+character at a time included; `tests/test_live.py` runs the WebSocket over a
+fake engine; `tests/test_abandon.py` pins that a lost listener stops a render
+and is never relabelled as a failure.
+Synthesis itself is exercised by hand against real bundles, and the planner's
+behaviour across render speeds by `scripts/sim_rtf.py` in the workspace's
+`tasks/streaming-segmentation-eval-2026-09-15/`.
 
 ## API Endpoints
 
@@ -421,7 +481,7 @@ serves the OpenAPI. Two things the code guarantees and the reference relies on:
   (422). `app.py` installs both handlers so a client parses one shape.
 - **`/health` carries `api_version`**, bumped when a route, field or header the
   integration reads changes shape; the release version says nothing about the
-  wire. The integration refuses to set up on a mismatch.
+  wire. The integration refuses to set up on a mismatch. It is 3.
 
 ## Home Assistant Discovery
 
