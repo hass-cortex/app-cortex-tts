@@ -26,6 +26,7 @@ from cortex_speech.engine.base import (
     Voice,
     check_stop,
 )
+from cortex_tts.api.live import MAX_FRAME_BYTES
 from cortex_tts.app import create_app
 from cortex_tts.preferences import FILE_NAME
 from cortex_tts.stats import FILE_NAME as STATS_FILE
@@ -121,6 +122,24 @@ def client(
         "cortex_speech.engine.registry.own_voices", lambda backend, path: [VOICE]
     )
     return TestClient(create_app())
+
+
+def _frame_sizes(client: TestClient, text: str, **start) -> list[int]:
+    """Every binary frame's length, in order."""
+    sizes: list[int] = []
+    with client, client.websocket_connect("/api/speak/live", headers=AUTH) as ws:
+        ws.send_json({"type": "start", "model": MODEL, "format": "wav", **start})
+        ws.receive_json()
+        ws.send_json({"type": "text", "text": text})
+        ws.send_json({"type": "end"})
+        while True:
+            frame = ws.receive()
+            if frame.get("bytes") is not None:
+                sizes.append(len(frame["bytes"]))
+            elif frame.get("text") is not None and json.loads(frame["text"])[
+                "type"
+            ] in {"done", "error"}:
+                return sizes
 
 
 def _speak(client: TestClient, text: str, **start) -> tuple[dict, bytes, dict]:
@@ -266,6 +285,24 @@ class TestMeasuredHostStreams:
         assert done["batches"] >= 2
         stored = json.loads((tmp_path / STATS_FILE).read_text())
         assert len(stored[MODEL]["builtin"]["renders"]) == 3 + done["batches"]
+
+    def test_a_held_reply_is_not_one_enormous_frame(
+        self, tmp_path: Path, client: TestClient
+    ) -> None:
+        """A receiver buffers a frame whole, so every client caps one.
+
+        Buffered holds the entire reply and releases it at once; unsliced that
+        is a single frame of the whole answer, and aiohttp — which the
+        integration uses — refuses one over 4 MB by default. The listener then
+        gets a closed socket instead of audio.
+        """
+        _measured(tmp_path)
+        # The fake engine renders 0.25 s per character at 24 kHz, 16-bit.
+        text = "從前有一座山，山上有一間小廟。" * 6
+        sizes = _frame_sizes(client, text, mode="buffered")
+        assert sum(sizes) > MAX_FRAME_BYTES, "the reply was too small to test"
+        assert max(sizes) <= MAX_FRAME_BYTES
+        assert len(sizes) > 1
 
     def test_buffered_can_still_be_asked_for(
         self, tmp_path: Path, client: TestClient

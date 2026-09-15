@@ -62,6 +62,15 @@ STALL_S = 15.0
 # reader wakes it on every frame, so this only bounds the idle case.
 IDLE_POLL_S = 0.5
 
+# The most audio one WebSocket frame carries. A receiver buffers a frame whole
+# before it sees any of it, so every client sets a ceiling — aiohttp's is 4 MB
+# — and a reply held whole is one frame of the entire reply: a three-minute
+# buffered answer is past it, and the listener gets a closed socket rather
+# than audio. Sliced here so no client has to be configured for this one; the
+# bytes are a stream and the receiver concatenates them, so a slice may fall
+# anywhere.
+MAX_FRAME_BYTES = 512 * 1024
+
 # Close codes: policy violation for a bad opening frame, internal error for an
 # engine failure after audio has started.
 _BAD_REQUEST = 1008
@@ -424,7 +433,11 @@ class _Session:
         if not frames:
             return
         try:
-            await asyncio.wait_for(self._ws.send_bytes(frames), STALL_S)
+            for start in range(0, len(frames), MAX_FRAME_BYTES):
+                await asyncio.wait_for(
+                    self._ws.send_bytes(frames[start : start + MAX_FRAME_BYTES]),
+                    STALL_S,
+                )
         except Exception as err:  # noqa: BLE001 - any failure to send is the same news
             self._gone.set()
             raise _GoneError from err
