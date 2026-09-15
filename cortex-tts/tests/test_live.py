@@ -97,7 +97,10 @@ def _measured(data_dir: Path) -> None:
     store = StatsStore(data_dir / STATS_FILE)
     for audio in (2.0, 4.0, 8.0):
         store.record(
-            MODEL, "builtin", RenderSample(audio, 0.2 + 0.3 * audio, int(audio * 4), 0)
+            MODEL,
+            "builtin",
+            VOICE.id,
+            RenderSample(audio, 0.2 + 0.3 * audio, int(audio * 4), 0),
         )
 
 
@@ -284,7 +287,9 @@ class TestMeasuredHostStreams:
         _, _, done = _speak(client, text)
         assert done["batches"] >= 2
         stored = json.loads((tmp_path / STATS_FILE).read_text())
-        assert len(stored[MODEL]["builtin"]["renders"]) == 3 + done["batches"]
+        assert (
+            len(stored[MODEL][f"builtin:{VOICE.id}"]["renders"]) == 3 + done["batches"]
+        )
 
     def test_a_held_reply_is_not_one_enormous_frame(
         self, tmp_path: Path, client: TestClient

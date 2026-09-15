@@ -63,6 +63,7 @@ from cortex_speech import (
 
 from ..events import fire_models_changed
 from ..preferences import save as save_preferences
+from ..stats import split_key
 from .deps import AppState, get_state, require_api_key
 from .schemas import (
     DefaultsResponse,
@@ -231,7 +232,8 @@ def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
         rss_hint_mb=spec.rss_hint_mb,
         rtf=[
             MeasuredRtf(
-                kind=m.kind,
+                kind=split_key(m.kind)[0],
+                voice=split_key(m.kind)[1],
                 per_audio=m.render.per_audio,
                 fixed_s=m.render.fixed_s,
                 spread_s=m.render.spread_s,
@@ -638,6 +640,15 @@ async def _synthesize(
                 return
             await asyncio.sleep(_DISCONNECT_POLL_S)
 
+    # Made resident before the clock starts, the way the live path does it: a
+    # load is not what a request costs, and folding it in teaches the fit a
+    # figure no later request will reproduce. Measured on OmniVoice, a cold
+    # first request recorded 14.3 s against a steady 4.1 s, and that one
+    # sample took the fitted spread from 0.06 s to 3.16 s — a spread every
+    # reply then waits for, because it is added to the opening hold.
+    with engine_errors():
+        await state.registry.acquire(spec.id)
+
     watcher = asyncio.create_task(watch())
     started = time.perf_counter()
     try:
@@ -672,7 +683,7 @@ async def _synthesize(
     # caller waited is what the fit has to predict.
     kind = voice_kind(state, spec, voice_id)
     await asyncio.to_thread(
-        state.stats.record, spec.id, kind, render_sample(text, seconds, wall)
+        state.stats.record, spec.id, kind, voice_id, render_sample(text, seconds, wall)
     )
     _LOGGER.info(
         "spoke %d chars as %s/%s -> %.2fs audio in %.0fms (RTF %.2f)",

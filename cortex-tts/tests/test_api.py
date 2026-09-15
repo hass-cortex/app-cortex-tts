@@ -15,10 +15,11 @@ from fastapi.testclient import TestClient
 
 from cortex_speech import CATALOG, RenderSample
 from cortex_tts import preferences
+from cortex_tts.api import routes
 from cortex_tts.app import create_app
 from cortex_tts.preferences import FILE_NAME
 from cortex_tts.stats import FILE_NAME as STATS_FILE
-from cortex_tts.stats import StatsStore
+from cortex_tts.stats import StatsStore, split_key
 
 INGRESS = {"X-Ingress-Path": "/api/hassio_ingress/x"}
 """What the Supervisor adds; `is_ingress` wants it and the peer both."""
@@ -414,6 +415,7 @@ class TestTheCardsFigure:
             store.record(
                 "hojo-40m",
                 "builtin",
+                "hojo_zh_f_01",
                 RenderSample(audio, 0.3 + 0.5 * audio, int(audio * 4), 0),
             )
 
@@ -437,6 +439,47 @@ class TestTheCardsFigure:
         assert abs(entry["per_audio"] - 0.5) < 0.02
         assert abs(entry["fixed_s"] - 0.3) < 0.05
         assert entry["requests"] == 3
+
+
+class TestWhatAMeasurementCounts:
+    """A load is not what a request costs.
+
+    Measured on OmniVoice: a cold first request recorded 14.3 s against a
+    steady 4.1 s, and that one sample took the fitted spread from 0.06 s to
+    3.16 s — which every later reply waits for, because the spread is added to
+    the opening hold. The live path has always made the model resident before
+    its clock starts; the file path now does the same.
+    """
+
+    def test_the_model_is_resident_before_the_clock_starts(self) -> None:
+        source = (
+            Path(routes.__file__)
+            .read_text(encoding="utf-8")
+            .split("async def _synthesize")[1]
+        )
+        acquire = source.index("registry.acquire")
+        clock = source.index("started = time.perf_counter()")
+        assert acquire < clock, "a load would be folded into the recorded sample"
+
+
+class TestWhatACostIsMeasuredPer:
+    """A clone is measured per voice; everything else per kind.
+
+    Measured on OmniVoice: a reference's codec frames rejoin the prompt on
+    every synthesis, 0.354 s of render per second of recording. Pooled, clones
+    of a 3.4 s and a 6.1 s reference left about a second the line could not
+    explain, and `spread_s` — which every reply waits for — read 2.0 s against
+    0.1 s for the same model's designed voices.
+    """
+
+    def test_a_clone_is_named_by_its_own_voice(self) -> None:
+        assert split_key("reference:ya-ping") == ("reference", "ya-ping")
+
+    @pytest.mark.parametrize("kind", ["builtin", "designed"])
+    def test_a_voice_the_model_brought_is_not(self, kind: str) -> None:
+        """A card names a clone; a model's own voices share one row, because
+        they share one cost line."""
+        assert split_key(kind) == (kind, None)
 
 
 class TestResettingStats:

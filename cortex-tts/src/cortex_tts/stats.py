@@ -24,7 +24,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from cortex_speech import RenderModel, RenderSample, write_json
+from cortex_speech import RenderModel, RenderSample, speech_rates, write_json
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +37,16 @@ FILE_NAME = "stats.json"
 # figure of merit would need, because a fit wants requests of different lengths
 # to find a slope, and a dozen replies to an assistant are mostly one length.
 MAX_RENDERS = 24
+
+
+def split_key(key: str) -> tuple[str, str | None]:
+    """A bucket back into its kind and, for a clone, which voice.
+
+    The other half of `StatsStore._key`, kept beside it so the two cannot
+    drift: a card reads what the store wrote.
+    """
+    kind, _, voice = key.partition(":")
+    return kind, voice or None
 
 
 @dataclass(frozen=True)
@@ -121,7 +131,32 @@ class StatsStore:
             # the caller who only asked for audio.
             _LOGGER.warning("could not write stats: %s", err)
 
-    def record(self, model_id: str, kind: str, sample: RenderSample) -> None:
+    @staticmethod
+    def _key(kind: str, voice_id: str) -> str:
+        return f"{kind}:{voice_id}"
+
+    def _cost_samples(
+        self, model_id: str, kind: str, voice_id: str
+    ) -> list[RenderSample]:
+        """The renders a cost line is fitted from.
+
+        Pooled across a model's own voices, whose cost differs by 4%, and kept
+        apart for clones, whose reference rejoins the prompt every synthesis
+        at 0.354 s of render per second of recording. Pooling is what lets a
+        model with eighteen built-in voices have a cost line at all.
+        """
+        by_key = self._renders.get(model_id) or {}
+        if kind == "reference":
+            return list(by_key.get(self._key(kind, voice_id)) or [])
+        merged: list[RenderSample] = []
+        for key, samples in by_key.items():
+            if key.split(":", 1)[0] == kind:
+                merged.extend(samples)
+        return merged
+
+    def record(
+        self, model_id: str, kind: str, voice_id: str, sample: RenderSample
+    ) -> None:
         """Note how one request went.
 
         Every request counts, short ones included: the fixed cost is exactly
@@ -130,6 +165,8 @@ class StatsStore:
         Args:
             model_id: Catalog id.
             kind: The `Voice.source` it was rendered with.
+            voice_id: Which voice. Kept even where the cost is pooled, because
+                the speech rate never is.
             sample: Audio and wall seconds as measured, undivided. What the
                 render clock means is the caller's to state and the fit's to
                 use; a ratio would hide it.
@@ -137,7 +174,9 @@ class StatsStore:
         if sample.audio_s <= 0 or sample.wall_s <= 0:
             return
         with self._lock:
-            renders = self._renders.setdefault(model_id, {}).setdefault(kind, [])
+            renders = self._renders.setdefault(model_id, {}).setdefault(
+                self._key(kind, voice_id), []
+            )
             renders.append(
                 RenderSample(
                     round(sample.audio_s, 3),
@@ -149,25 +188,48 @@ class StatsStore:
             del renders[:-MAX_RENDERS]
             self._write()
 
-    def render_model(self, model_id: str, kind: str) -> RenderModel | None:
-        """What a request to this model and voice kind costs here, if measured."""
-        with self._lock:
-            renders = list((self._renders.get(model_id) or {}).get(kind) or [])
-        return RenderModel.fit(renders)
+    def render_model(
+        self, model_id: str, kind: str, voice_id: str
+    ) -> RenderModel | None:
+        """What a request in this voice costs here, and how fast it speaks.
 
-    def get(self, model_id: str) -> list[ModelStats]:
-        """Return what this host measured for a model, one entry per kind.
-
-        Empty until it has served enough requests of one kind to fit a line.
-        Ordered so a card renders the same way twice.
+        Two questions with two right groupings: the cost line comes from every
+        voice that shares a cost, the pace only from this one.
         """
         with self._lock:
-            by_kind = {
-                kind: list(renders)
-                for kind, renders in sorted((self._renders.get(model_id) or {}).items())
-            }
-        fitted = ((kind, RenderModel.fit(s)) for kind, s in by_kind.items())
-        return [ModelStats(kind=kind, render=fit) for kind, fit in fitted if fit]
+            cost = self._cost_samples(model_id, kind, voice_id)
+            own = list(
+                (self._renders.get(model_id) or {}).get(self._key(kind, voice_id)) or []
+            )
+        fit = RenderModel.fit(cost)
+        return fit.with_rates(speech_rates(own)) if fit else None
+
+    def get(self, model_id: str) -> list[ModelStats]:
+        """Return what this host measured for a model, one entry per cost line.
+
+        One per clone, because each carries its own recording; one per kind for
+        a model's own voices, because they cost the same. Empty until enough
+        requests exist to fit a line. Ordered so a card renders the same twice.
+        """
+        with self._lock:
+            keys = sorted((self._renders.get(model_id) or {}).keys())
+        seen: set[str] = set()
+        out: list[ModelStats] = []
+        for key in keys:
+            kind, _, voice = key.partition(":")
+            bucket = key if kind == "reference" else kind
+            if bucket in seen:
+                continue
+            seen.add(bucket)
+            # The pooled line, rates included: a row covering a model's own
+            # voices cannot quote one of their paces as if it were the row's.
+            # A clone's bucket is one voice, so there is nothing to pool.
+            with self._lock:
+                cost = self._cost_samples(model_id, kind, voice)
+            fit = RenderModel.fit(cost)
+            if fit:
+                out.append(ModelStats(kind=bucket, render=fit))
+        return out
 
     def clear(self) -> None:
         """Drop every model's measurements.

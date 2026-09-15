@@ -66,7 +66,7 @@ from .pacing import (
     Send,
     Wait,
 )
-from .pacing.model import count_scripts
+from .pacing.model import count_scripts, speech_rates
 from .providers import (
     EXECUTION_PROVIDERS,
     ExecutionProvider,
@@ -120,6 +120,7 @@ __all__ = [
     "Planner",
     "RenderModel",
     "RenderSample",
+    "speech_rates",
     "Send",
     "STREAMING",
     "StopCheck",

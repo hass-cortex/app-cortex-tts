@@ -190,6 +190,7 @@ FACADE = {
     "Planner",
     "RenderModel",
     "RenderSample",
+    "speech_rates",
     "Send",
     "STREAMING",
     "StopCheck",

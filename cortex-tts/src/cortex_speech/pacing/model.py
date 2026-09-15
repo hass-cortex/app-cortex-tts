@@ -82,6 +82,12 @@ class RenderModel:
         cjk, latin = count_scripts(text)
         return cjk / self.cjk_per_s + latin / self.latin_per_s
 
+    def with_rates(self, rates: tuple[float, float] | None) -> RenderModel:
+        """The same cost line, speaking at this voice's own pace."""
+        if rates is None:
+            return self
+        return replace(self, cjk_per_s=rates[0], latin_per_s=rates[1])
+
     def scaled(self, factor: float) -> RenderModel:
         """The same line with every cost dearer by `factor`.
 
@@ -170,6 +176,28 @@ class RenderModel:
             latin_per_s=round(latin_rate, 2),
             samples=len(recent),
         )
+
+
+def speech_rates(samples: Sequence[RenderSample]) -> tuple[float, float] | None:
+    """How fast a voice speaks, from renders of it; `None` with nothing to fit.
+
+    Separate from `RenderModel.fit` because it answers a different question
+    about a different thing. What a request costs belongs to the model and the
+    host — measured across MOSS's built-in voices, the cost of a second of
+    audio varies 4%. How long the text takes to say belongs to the *voice*:
+    the same 26 characters ran 6.64 s as Weiguo and 5.12 s as Yuewen, a 30%
+    spread, and every batch the planner sizes is sized in seconds of speech.
+
+    It is also far cheaper to learn: characters over seconds, from a single
+    render, where a cost line needs several of different lengths.
+    """
+    usable = [s for s in samples if s.audio_s > 0]
+    if not usable:
+        return None
+    cjk = np.array([s.cjk for s in usable], dtype=float)
+    latin = np.array([s.latin for s in usable], dtype=float)
+    audio = np.array([s.audio_s for s in usable])
+    return _speech_rates(cjk, latin, audio)
 
 
 def _speech_rates(

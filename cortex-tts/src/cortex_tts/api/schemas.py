@@ -73,6 +73,9 @@ class MeasuredRtf(BaseModel):
 
     kind: str
     """`builtin`, `designed` or `reference` — see `Voice.source`."""
+    voice: str | None = None
+    """Which voice, when the kind is `reference`: a clone's cost follows the
+    length of its own recording, so clones are measured one voice at a time."""
     per_audio: float
     """Render seconds per audio second."""
     fixed_s: float

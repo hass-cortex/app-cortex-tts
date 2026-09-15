@@ -122,7 +122,12 @@ function rtf(m) {
   }
   const rows = measured.map((r) => {
     const n = r.requests === 1 ? "1 request" : `${r.requests} requests`;
-    return `<span class="rtf-kind">${esc(KIND_LABEL[r.kind] || r.kind)}</span>
+    // A clone is measured per voice: its own recording rejoins the prompt on
+    // every synthesis, so two clones of different lengths cost differently.
+    const label = r.voice
+      ? `${KIND_LABEL[r.kind] || r.kind} · ${r.voice}`
+      : KIND_LABEL[r.kind] || r.kind;
+    return `<span class="rtf-kind">${esc(label)}</span>
       <span class="val">${Number(r.per_audio).toFixed(2)}</span>
       <span class="qual">${n}</span>`;
   }).join("");

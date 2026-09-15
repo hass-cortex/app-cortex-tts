@@ -24,10 +24,12 @@ def _sample(audio: float, fixed: float = 0.3, factor: float = 0.5) -> RenderSamp
     )
 
 
-def _measure(store: StatsStore, model: str, kind: str, **shape: float) -> None:
+def _measure(
+    store: StatsStore, model: str, kind: str, voice: str = "v1", **shape: float
+) -> None:
     """Enough requests, of different lengths, to fit a line."""
     for audio in (2.0, 4.0, 8.0):
-        store.record(model, kind, _sample(audio, **shape))
+        store.record(model, kind, voice, _sample(audio, **shape))
 
 
 @pytest.fixture
@@ -41,16 +43,16 @@ class TestNothingMeasuredIsNothingShown:
 
     def test_one_request_is_not_a_line(self, store: StatsStore) -> None:
         """Better no number than one drawn through a single point."""
-        store.record("hojo-40m", "builtin", _sample(3.0))
-        store.record("hojo-40m", "builtin", _sample(5.0))
+        store.record("hojo-40m", "builtin", "v1", _sample(3.0))
+        store.record("hojo-40m", "builtin", "v1", _sample(5.0))
         assert store.get("hojo-40m") == []
-        assert store.render_model("hojo-40m", "builtin") is None
+        assert store.render_model("hojo-40m", "builtin", "v1") is None
 
     def test_a_request_that_produced_nothing_is_refused(
         self, store: StatsStore
     ) -> None:
         for _ in range(4):
-            store.record("hojo-40m", "builtin", RenderSample(0.0, 1.0, 4, 0))
+            store.record("hojo-40m", "builtin", "v1", RenderSample(0.0, 1.0, 4, 0))
         assert store.get("hojo-40m") == []
 
 
@@ -78,7 +80,7 @@ class TestTheFigureItself:
         """
         _measure(store, "moss-nano", "builtin")
         for _ in range(8):
-            store.record("moss-nano", "builtin", _sample(2.0))
+            store.record("moss-nano", "builtin", "v1", _sample(2.0))
         fit = store.get("moss-nano")[0].render
         assert abs(fit.per_audio - 0.5) < 0.05
 
@@ -92,9 +94,9 @@ class TestTheFigureItself:
 
     def test_only_the_most_recent_are_kept(self, store: StatsStore, tmp_path: Path):
         for i in range(MAX_RENDERS + 10):
-            store.record("hojo-40m", "builtin", _sample(1.0 + i * 0.1))
+            store.record("hojo-40m", "builtin", "v1", _sample(1.0 + i * 0.1))
         stored = json.loads((tmp_path / "stats.json").read_text())
-        assert len(stored["hojo-40m"]["builtin"]["renders"]) == MAX_RENDERS
+        assert len(stored["hojo-40m"]["builtin:v1"]["renders"]) == MAX_RENDERS
 
 
 class TestAcrossRestarts:
@@ -140,7 +142,7 @@ class TestDeletingAModel:
         _measure(store, "omnivoice", "designed")
         store.forget("omnivoice")
         assert store.get("omnivoice") == []
-        assert store.render_model("omnivoice", "designed") is None
+        assert store.render_model("omnivoice", "designed", "v1") is None
 
     def test_forgetting_one_leaves_the_others(self, store: StatsStore) -> None:
         _measure(store, "omnivoice", "designed")
@@ -179,21 +181,66 @@ class TestOneFigurePerKind:
         _measure(store, "omnivoice", "reference", factor=7.17)
         measured = {m.kind: m.render.per_audio for m in store.get("omnivoice")}
         assert abs(measured["designed"] - 3.46) < 0.05
-        assert abs(measured["reference"] - 7.17) < 0.05
+        assert abs(measured["reference:v1"] - 7.17) < 0.05
 
     def test_a_kind_never_served_has_no_fit(self, store: StatsStore) -> None:
         _measure(store, "moss-nano", "reference", factor=1.2)
-        assert store.render_model("moss-nano", "builtin") is None
-        assert store.render_model("moss-nano", "reference") is not None
+        assert store.render_model("moss-nano", "builtin", "v1") is None
+        assert store.render_model("moss-nano", "reference", "v1") is not None
 
     def test_they_are_returned_in_a_stable_order(self, store: StatsStore) -> None:
         """A card that reorders itself between refreshes is unreadable."""
         _measure(store, "moss-nano", "reference", factor=1.4)
         _measure(store, "moss-nano", "builtin", factor=1.07)
-        assert [m.kind for m in store.get("moss-nano")] == ["builtin", "reference"]
+        assert [m.kind for m in store.get("moss-nano")] == ["builtin", "reference:v1"]
 
     def test_forgetting_a_model_drops_every_kind(self, store: StatsStore) -> None:
         _measure(store, "omnivoice", "designed")
         _measure(store, "omnivoice", "reference")
         store.forget("omnivoice")
         assert store.get("omnivoice") == []
+
+
+class TestWhoOwnsWhichNumber:
+    """Cost belongs to the model and the host; pace belongs to the voice.
+
+    Measured on MOSS, one host, the same 26 characters: the cost of a second
+    of audio varied 4% across its built-in voices while the speech rate varied
+    30% — 6.64 s as Weiguo against 5.12 s as Yuewen. Every batch the planner
+    sizes is sized in seconds of speech, so pooling the rate mis-sizes them.
+    """
+
+    @staticmethod
+    def _at(rate: float) -> RenderSample:
+        """One render of 40 characters spoken at `rate` characters a second."""
+        audio = 40 / rate
+        return RenderSample(audio_s=audio, wall_s=0.3 + 0.5 * audio, cjk=40, latin=0)
+
+    def test_a_voice_speaks_at_its_own_pace(self, store: StatsStore) -> None:
+        for voice, rate in (("weiguo", 3.92), ("yuewen", 5.08)):
+            for _ in range(3):
+                store.record("moss-nano", "builtin", voice, self._at(rate))
+        slow = store.render_model("moss-nano", "builtin", "weiguo")
+        fast = store.render_model("moss-nano", "builtin", "yuewen")
+        assert slow is not None and fast is not None
+        assert abs(slow.cjk_per_s - 3.92) < 0.05
+        assert abs(fast.cjk_per_s - 5.08) < 0.05
+
+    def test_but_they_share_one_cost_line(self, store: StatsStore) -> None:
+        """Split per voice, MOSS's eighteen would never reach three samples."""
+        store.record("moss-nano", "builtin", "weiguo", _sample(2.0))
+        store.record("moss-nano", "builtin", "yuewen", _sample(4.0))
+        store.record("moss-nano", "builtin", "junhao", _sample(8.0))
+        fit = store.render_model("moss-nano", "builtin", "weiguo")
+        assert fit is not None, "one render each, pooled, is still a line"
+        assert abs(fit.per_audio - 0.5) < 0.02
+
+    def test_a_clone_keeps_its_own_cost_line(self, store: StatsStore) -> None:
+        """Its recording rejoins the prompt every synthesis, so it cannot pool."""
+        _measure(store, "omnivoice", "reference", "ya-ping", factor=0.8)
+        _measure(store, "omnivoice", "reference", "anna-su", factor=1.2)
+        near = store.render_model("omnivoice", "reference", "ya-ping")
+        far = store.render_model("omnivoice", "reference", "anna-su")
+        assert near is not None and far is not None
+        assert abs(near.per_audio - 0.8) < 0.02
+        assert abs(far.per_audio - 1.2) < 0.02

@@ -147,7 +147,7 @@ class _Session:
         self._ready_at = time.perf_counter()
         kind = voice_kind(state, spec, voice.id)
         planner = Planner(
-            state.stats.render_model(spec.id, kind),
+            state.stats.render_model(spec.id, kind, voice.id),
             chunk_streaming=spec.chunk_streaming,
             mode=start.mode,
         )
@@ -345,6 +345,7 @@ class _Session:
                 self._state.stats.record,
                 spec.id,
                 kind,
+                voice_id,
                 render_sample(text, seconds, wall),
             )
 
