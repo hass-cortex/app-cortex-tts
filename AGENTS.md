@@ -5,6 +5,15 @@ ingress admin UI. Which models it offers is `catalog.py`, and the README's
 **Models** table is the copy written for people; both are edited in one place
 when the line-up changes, which is the point.
 
+**What a model costs is `docs/models.md`, and only there.** Every measured
+figure — real-time factors, what a card buys, what cloning adds — lives in its
+tables, and every other page points at them rather than quoting one. A number
+a reader can find in two places is a number that will disagree with itself:
+the same MOSS-on-a-GPU measurement was carried by four pages in three
+versions, and the page that had drifted furthest used its stale pair to draw a
+conclusion its own table contradicted. The test is whether a re-measurement
+can be applied by editing one file.
+
 The models ship no text front-end, so the app carries one: numeral/unit/date
 normalisation, and for Chinese also Traditional-to-Simplified glyph conversion
 and Taiwan readings by homophone (垃圾 → 乐色, from a generated table — no
@@ -119,7 +128,8 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 │   ├── zh/           Chinese: normalize.py, numbers.py, script.py (t2s), readings.py + taiwan_readings.tsv
 │   └── en/           English: normalize.py
 ├── pacing/           ── WHEN TO RENDER WHAT ──
-│   ├── model.py      RenderModel: what a request costs here, fitted from requests served
+│   ├── model.py      RenderModel: what a request costs here and how fast a voice
+│   │                 speaks, both fitted from the requests served
 │   ├── sentences.py  sentences out of text arriving in pieces
 │   └── planner.py    streaming / paced / buffered, the first request's floor
 │                     and ceiling, batches sized to the lead, the opening hold
@@ -228,7 +238,9 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 - **The app paces a live reply; the integration forwards words.** Over
   `/api/speak/live` the planner in `cortex_speech/pacing` decides, per reply,
   between streaming (batches sized to the listener's lead), paced (the whole
-  reply known, an exact opening hold) and buffered (an unmeasured model, or a
+  reply known, so the first batch carries no figure: the transport banks the
+  opening audio and releases it once it covers what the rest is predicted to
+  lose, asked again as each chunk arrives) and buffered (an unmeasured model, or a
   caller asking), from a `RenderModel` fitted to the requests this host has
   served — fixed cost plus a per-second factor, and a speech rate per script.
   Measured on the two production hosts before this existed: a model that hands
@@ -238,7 +250,10 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   splitting a reply into six requests changed pitch wander by nothing
   measurable. The numbers that came out of that — a three-second floor on the
   first request, a six-second ceiling, a four-second cap on the opening bank —
-  are in `planner.py` with the measurements beside them.
+  are in `planner.py` with the measurements beside them. How a paced reply is
+  cut is not among them: `Planner._best_batches` groups the sentences at every
+  limit that moves a boundary and takes the plan whose first word comes
+  soonest, a tie going to the fewest boundaries.
 - **At most `max_loaded_models` engines are resident**, least-recently-used
   evicted. The 40M beside either 2 GB model costs about 2.8 GB; the 80M and
   MOSS together about 4 GB. Those are host figures and a card's are larger:
@@ -295,14 +310,16 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   carries no figure of its own: one measured on the project's reference
   machine read 3x out elsewhere. `cortex_tts/stats.py` keeps what this host
   measured, **per voice kind**, and a card shows that or says "not measured".
-  The kinds are split because the cost is: on OmniVoice a clone measured 7.17
-  against 3.46 for a designed voice on one host, since the reference's codec
-  frames rejoin the prompt on every synthesis. `scripts/bench_rtf.py` still
+  The kinds are split because the cost is: a clone runs about twice what a
+  designed voice does on the same model, since the reference's codec frames
+  rejoin the prompt on every synthesis — `docs/models.md` has the figures. `scripts/bench_rtf.py` still
   exists, and what it produces is documentation rather than a figure the app
   repeats back to someone else's machine.
 - **One measurement, fitted — not two series averaged.** The store keeps one
   primitive: a `RenderSample` of raw audio and wall seconds, recorded once per
-  request by every transport. The card's figure and the planner's model are
+  request by every transport, with the model made resident before the clock
+  starts — a load is not what a request costs, and folding one in taught the
+  fit a figure no later request would reproduce. The card's figure and the planner's model are
   both `RenderModel.fit` of those, so `per_audio` is the factor with the
   per-request fixed cost held beside it rather than averaged into it. That
   matters because a paced reply is many short requests of one length: an
@@ -317,8 +334,10 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   have bundled voices _and_ clone. `EngineRegistry.voices` concatenates both
   sources rather than choosing. **One pair is the exception**, and it is an
   exception the code relies on: `builtin_voices` and `designed_voices` are
-  mutually exclusive, because `routes._voice_kind` settles which kind a
-  rendered voice was from the spec alone rather than looking the voice up.
+  mutually exclusive, because `routes.voice_kind` settles which of those two a
+  rendered voice was from the spec alone rather than looking the voice up. A
+  stored recording is a clone whichever model spoke it, so that case is
+  decided before the spec is consulted.
   `tests/test_catalog.py` pins it, so a future entry that sets both fails the
   build instead of silently mislabelling every measurement it makes.
 - **A stream has its own level control.** `encode` peak-normalises a finished
@@ -333,6 +352,13 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   frame carries `bitrate` because it is the one measurement that exists before
   the first sample, and it is what turns a byte count into a duration
   downstream.
+- **One audio frame is bounded, not one reply.** A receiver buffers a
+  WebSocket frame whole before it sees any of it, so every client caps one —
+  aiohttp's default is 4 MB — and the opening hold of a buffered reply is the
+  entire reply in a single frame. `MAX_FRAME_BYTES` slices it at 512 KB on the
+  way out; the bytes are a stream and the receiver concatenates them, so a
+  slice may fall anywhere. Fixed here so no client has to be configured for
+  this server.
 - **Everything that can fail must fail before the first byte.** Once audio has
   started an error can only truncate it, so `/api/speak/live` resolves the
   model, the voice and the encoder before it sends `ready`.
@@ -359,8 +385,8 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   `onnxruntime.get_available_providers()` is a claim about the build, not a
   promise — measured on a GTX 1650 host it listed CUDA and then created every
   session on the CPU — so `providers.in_use` reads the sessions instead, and
-  `/health` reports what was asked for beside what arrived. MOSS-TTS-Nano
-  measured RTF 1.025 on a laptop i7 against **0.354** on that GTX 1650.
+  `/health` reports what was asked for beside what arrived. What the card
+  buys each model is measured in `docs/models.md` and nowhere else.
 - **A backend is looked up, never branched on.** `ModelSpec.backend` keys into
   `engine/backends.py`; adding an engine is a module plus a registration, and
   builders import lazily so a heavy backend costs nothing until it is used.
@@ -479,6 +505,13 @@ serves the OpenAPI. Two things the code guarantees and the reference relies on:
 - **Every error body is `{"code", "message"}`** — what a route raised, what the
   router could not match (404 on an unknown path) and what pydantic refused
   (422). `app.py` installs both handlers so a client parses one shape.
+- **The mode is said twice on the socket and only the last is final.**
+  `ready` carries what the reply starts as, before any decision has been
+  taken; `batch` carries the plan in force and goes out before each request;
+  `done` replaces it with what happened, forced to `whole` whenever the reply
+  fitted one request. The integration writes its mode sensor from the last two,
+  so every value either can carry has to be in that sensor's options — an enum
+  handed a state outside them raises, and the reply never plays at all.
 - **`/health` carries `api_version`**, bumped when a route, field or header the
   integration reads changes shape; the release version says nothing about the
   wire. The integration refuses to set up on a mismatch. It is 3.
@@ -503,8 +536,8 @@ Download completion is the library's: `download.py` calls
 `notifications.notify_models_changed` and the app subscribes at startup. The
 three routes — reference add, reference delete, model delete — call
 `fire_models_changed` from the app directly. `PATCH /api/references/{id}` fires
-it only when the gender label changed: a corrected transcript changes nothing
-the picker shows, a relabelled voice does. The split still matters
+it only when the gender label or the language changed: a corrected transcript
+changes nothing the picker shows, a relabelled voice does. The split still matters
 where it exists: the library states a fact, the app decides that Home Assistant
 is who hears it.
 

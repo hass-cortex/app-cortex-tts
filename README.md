@@ -10,6 +10,25 @@ run on your own CPU or GPU, with built-in voices, voices designed from a set
 of attributes, or one cloned from a short recording — plus the Chinese text
 front-end none of the models ship. No cloud, no per-character bill.
 
+```
+Text ──► Text pipeline ──► Cortex TTS Server ──► Audio
+          │                 │
+          │                 ├── Hojo 40M       15 built-in voices
+          │                 ├── Hojo 80M       cloning only
+          │                 ├── MOSS-TTS-Nano  18 built-in + cloning, audible mid-sentence
+          │                 ├── Qwen3-TTS      9 speakers across 10 languages, or cloning
+          │                 └── OmniVoice      voices designed from attributes, or cloning
+          │
+          ├── Normalisation (numbers, units, clocks, dates)
+          ├── Script conversion
+          └── Regional readings
+```
+
+The pipeline on the left is the part the models do not ship: none of them
+pronounces an Arabic numeral, and a Traditional sentence read as-is comes out
+as the wrong words. It is why the character error rate on Chinese is 4% here
+and 32% without it.
+
 ## Features
 
 - **Runs on your hardware** — inference happens locally, on the CPU or on a

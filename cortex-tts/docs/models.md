@@ -26,11 +26,13 @@ RTF — real-time factor, render seconds divided by audio seconds; below 1 means
 the model speaks faster than the audio plays. The column is one measurement,
 not one per model: every model on the same host, the same text, the same settings, so
 the figures are comparable with each other. **They are not a prediction about
-your machine**, and the app does not pretend otherwise: a model card shows the
-real-time factor that host has measured, or says it has none yet — the fitted
-factor, the per-second part with each request's fixed cost held separately, so
-on a comparable host it reads a little under this column, which divides the
-whole cost of each sentence. This table
+your machine**, and the app does not pretend otherwise: a model card shows
+what this host measured, or says it has none yet — one line for the model's
+own voices, whose cost differs by 4%, and one for each cloned voice, whose
+recording rejoins the prompt on every synthesis. The number on it is the
+fitted per-second part with each request's fixed cost held separately, so on a
+comparable host it reads at or under this column, which divides the whole cost
+of each sentence. This table
 is for choosing between models before you have run any of them. That host is a 4-vCPU virtual
 machine on an Intel Core i7-9750H running the app at two threads on the CPU —
 deliberately the kind of machine Home Assistant usually lives on, not a
@@ -83,7 +85,12 @@ because neither is wrong: the reference VM can hold all six models, and the
 Home Assistant VM — 8 GB, shared with Home Assistant itself — is the
 constraint that matters for what you can actually run there.
 
-## Hardware, and running it elsewhere
+## Measured across the models
+
+Everything below is a figure, measured on a host named here and re-measured
+when it changes. What each model _is_ follows after it, one section each.
+
+### Hardware, and running it elsewhere
 
 The same script, the same text, four environments. Every figure is the median
 over the four sentences above; the reference host is the first column.
@@ -156,7 +163,52 @@ What the table says:
 
 Both of the last two placements are [Running it elsewhere](standalone.md).
 
-## Hojo TTS Light 40M
+### What batching costs
+
+How a reply is cut into requests is the app's decision, and [Keeping
+up](streaming.md) explains it. These are the measurements it rests on.
+
+The same six-sentence paragraph, sent back to back, with playback starting on
+the first byte; the column is the least audio the listener still held when the
+next request's audio landed.
+
+| Model, host                       | Streams inside a request | Cost measured             | One request per sentence | Grouped to 9 s | Grouped to 14 s |
+| --------------------------------- | ------------------------ | ------------------------- | ------------------------ | -------------- | --------------- |
+| OmniVoice, GTX 1650, cloned voice | no                       | ~1.5 s fixed + 1.0× audio | −0.58 s                  | −0.25 s        | **−4.35 s**     |
+| Hojo 40M, GTX 1650                | no                       | 0.35×                     | +2.8 s                   | +2.8 s         | +2.9 s          |
+| Hojo 40M, HA VM CPU               | no                       | 0.7×                      | +0.9 s                   | +1.0 s         | +0.65 s         |
+| MOSS-TTS-Nano, HA VM CPU, cloned  | yes                      | 1.14–1.21×                | −4.9 s                   | −4.9 s         | −4.8 s          |
+
+Splitting a reply does not cost consistency at this granularity: rendered as
+one, three and six requests it changed pitch wander by nothing measurable (f0
+variation over 4-second windows: Hojo 9–11%, OmniVoice 7–10% in every
+condition; MOSS drifted _more_ in one long generation, 17.6%, than in six
+sentences, 10.5%).
+
+Coalescing sentences removes the fixed cost of sending one at a time — 0.37 s
+of dead air per boundary on MOSS — but a request that is too long costs more
+than it saves. Measured on MOSS-TTS-Nano, the same 55-second story sent in
+pieces of different sizes, as the fraction by which rendering fell behind
+playback:
+
+| Per request         | Behind playback |
+| ------------------- | --------------- |
+| ~1 s (one sentence) | +41%            |
+| ~9 s                | +4.1%           |
+| ~19 s               | +5.6%           |
+| ~28 s               | +6.5%           |
+| ~55 s (one request) | +17.8%          |
+
+On a GTX 1650 the same 48-character reply has OmniVoice speaking at 5.32 s in
+three requests against 8.92 s in one, for the same total render, while MOSS
+gains nothing by splitting and stays in one at 0.37 s.
+
+## The models
+
+What each one does, what it cannot, and the quirks that decide whether it
+suits a use. The figures are the ones measured above.
+
+### Hojo TTS Light 40M
 
 [HojoAI/Hojo-TTS-Light](https://github.com/HojoAI/Hojo-TTS-Light), the 40M
 export. The cheapest model by a wide margin and the one to start with.
@@ -169,7 +221,7 @@ export. The cheapest model by a wide margin and the one to start with.
   over-runs).
 - Renders whole segments; no mid-sentence chunk streaming.
 
-## Hojo TTS Light 80M (voice cloning)
+### Hojo TTS Light 80M (voice cloning)
 
 The same family's 80M export, which speaks only in a voice cloned from a
 [reference recording](cloning.md). It pulls in torch and librosa for its mel
@@ -189,7 +241,7 @@ front-end, which is why the image is as large as it is.
 - **Sampling temperature** applies.
 - Renders whole segments; no chunk streaming.
 
-## MOSS-TTS-Nano
+### MOSS-TTS-Nano
 
 [OpenMOSS/MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano), the 100M
 ONNX export, shipped as two bundles (weights and audio codec) that are
@@ -202,20 +254,24 @@ downloaded together.
 - **How it clones**: there is no speaker encoder. The whole recording (2–20 s),
   as codec tokens, is the voice, so its length and content do shape the clone.
   Every second is paid for once per reference, then cached.
-- **Chunk streaming**: the only model that emits audio before a sentence is
-  finished: measured over a chunked stream, the first audio arrives 143–178 ms
-  after the request against 1.8 s for the whole utterance.
+- **Chunk streaming**: audio leaves before the sentence is finished —
+  measured over a chunked stream, the first audio arrives 143–178 ms after the
+  request against 1.8 s for the whole utterance. Qwen3-TTS streams too, but
+  only MOSS is cheap enough here for it to shorten the wait rather than
+  merely pace it.
 - **No sampling temperature**: sampling is fused into a dedicated ONNX graph.
   The setting is ignored for it, and a request that names one is refused
   (`NO_TEMPERATURE`).
 - **Reads Latin words poorly** — measured at 32% character error on a reply
   containing a product name, against 0–9% for the Hojo models — so it suits
   replies that are Chinese throughout.
-- **Gains the most from a GPU**: RTF 1.025 on a laptop i7 against **0.354** on
-  a GTX 1650. Home Assistant OS ships no NVIDIA driver, so that needs the app
+- **A GPU takes it under real time**: 1.06 on the reference host against
+  **0.37** on a GTX 1650 — the difference between a model that cannot stream
+  here and one that streams comfortably. The largest gain any model here gets
+  from a card is OmniVoice's, 3.83 to 0.80. Home Assistant OS ships no NVIDIA driver, so that needs the app
   [run outside HAOS](standalone.md).
 
-## OmniVoice 0.8B
+### OmniVoice 0.8B
 
 [k2-fsa/OmniVoice](https://github.com/k2-fsa/OmniVoice): a 0.6B Qwen3 language
 model over a 0.2B Higgs Audio V2 tokenizer. The language model runs from an
@@ -226,7 +282,9 @@ is the reason the image carries torch, torchaudio and transformers.
   There are no bundled speakers. The two are not the same cost: measured on
   the Home Assistant VM, a designed voice rendered at RTF 3.46 and a clone of
   a ten-second recording at 7.17, because the reference's codec frames rejoin
-  the prompt on every synthesis. The app measures them apart for that reason.
+  the prompt on every synthesis. The app measures them apart for that reason —
+  the nine designed voices share one line, and every clone gets its own,
+  because what a clone costs follows the length of its own recording.
 - **Languages**: upstream claims more than 800, and the engine will ask for
   any of the 646 its own table names. The catalog lists the ten this project
   has actually exercised, and those are what the admin UI offers — the rest
@@ -268,7 +326,7 @@ is the reason the image carries torch, torchaudio and transformers.
   MOSS moves the other way on the same hardware, so "Inference threads" is a
   trade between the two rather than a number to raise.
 
-## Qwen3-TTS 0.6B
+### Qwen3-TTS 0.6B
 
 [QwenLM/Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS), the 12 Hz 0.6B
 checkpoints, from the `onnx-community` int4 export. Two catalog entries, two
@@ -357,23 +415,26 @@ fine. For a conversation the wait is the product, and it is the one number to
 optimise.
 
 **Is the reply long?** Past about half a minute the wait stops being the
-problem and keeping up starts. The integration can stream — speak the opening
-while the rest is still being made — which removes almost all of the wait, but
-only if the model renders faster than the audio plays. A model at RTF 1.1
-falls a second behind for every ten seconds it speaks, and a long reply
-stutters to a halt near the end. [Keeping up](streaming.md) is about that.
+problem and keeping up starts. The app speaks the opening while the rest is
+still being written and sizes every request after it to the lead the listener
+actually holds — but only a model that renders faster than the audio plays
+can gain lead that way. One that cannot is not streamed at all: the whole
+reply is planned and enough audio is banked before playback starts that the
+speaker never catches the renderer, so it never stutters, it waits. A model
+at RTF 1.1 falls a second behind for every ten seconds it speaks, and that
+second is paid up front. [Keeping up](streaming.md) is about that.
 
 Putting both together:
 
-| You want                                 | Use                                                  | Because                                                                     |
-| ---------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------- |
-| Announcements, notifications, timers     | **Hojo 40M**                                         | Cheapest by a wide margin, and 15 voices without uploading anything         |
-| A voice assistant that answers questions | **Hojo 40M**, or **MOSS Nano** if you want the voice | The wait is what you feel; both are usable, MOSS costs 2 GB                 |
-| Japanese                                 | **MOSS Nano**                                        | The 40M and 80M speak Chinese and English only, MOSS adds Japanese          |
-| Korean, German, French, Russian, …       | **Qwen3-TTS**, on a fast machine                     | Ten languages against three, and it is the only one that reads most of them |
-| One specific person's voice              | **MOSS Nano**                                        | Clones, and still has built-in voices to fall back on                       |
-| A voice nobody has recorded              | **OmniVoice**                                        | Sex, age, pitch, whisper, an accent or a dialect — no upload, no training   |
-| Long replies read aloud without stalling | whichever your host measures **under 0.5**           | Check `sensor.<model>_real_time_factor`, not the table                      |
+| You want                                  | Use                                                  | Because                                                                                                                                                                              |
+| ----------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Announcements, notifications, timers      | **Hojo 40M**                                         | Cheapest by a wide margin, and 15 voices without uploading anything                                                                                                                  |
+| A voice assistant that answers questions  | **Hojo 40M**, or **MOSS Nano** if you want the voice | The wait is what you feel; both are usable, MOSS costs 2 GB                                                                                                                          |
+| Japanese                                  | **MOSS Nano**                                        | The 40M and 80M speak Chinese and English only, MOSS adds Japanese                                                                                                                   |
+| Korean, German, French, Russian, …        | **Qwen3-TTS**, on a fast machine                     | Ten languages against three, and it is the only one that reads most of them                                                                                                          |
+| One specific person's voice               | **MOSS Nano**                                        | Clones, and still has built-in voices to fall back on                                                                                                                                |
+| A voice nobody has recorded               | **OmniVoice**                                        | Sex, age, pitch, whisper, an accent or a dialect — no upload, no training                                                                                                            |
+| Long replies read aloud with a short wait | whichever your host measures **under about 0.8**     | Below that the opening is spoken while the rest still renders; above it the reply is paced and the wait grows with its length. Read `sensor.<model>_real_time_factor`, not the table |
 
 The last two rows come with a bill. OmniVoice and Qwen3-TTS measured 3.83 and
 6.72 on the reference host, which is 7x and 12x the 40M — a nine-second answer
@@ -389,7 +450,11 @@ CPU or a GPU and neither belongs in a conversation on a Home Assistant box.
 - **A wrong transcript fails silently.** Give a reference the wrong text and
   you get confident audio that is simply less like the person. Nothing warns
   you; see [Cloned voices](cloning.md).
-- **No speed, pitch or emotion control.** None of the models expose any.
+- **No speed, pitch or emotion dial.** Nothing here takes a rate, a pitch or
+  an emotion as a number. The nearest are Qwen3-TTS's style instruction — a
+  plain-language note the model interprets as it sees fit — and OmniVoice's
+  pitch and whisper attributes, which describe the voice being designed
+  rather than control one you already have.
 - **Stopping is probabilistic.** A model stops when it _samples_ an
   end-of-speech token, so at a high sampling temperature it occasionally
   over-runs the text with an invented syllable. Temperature 0 is reproducible
@@ -399,6 +464,9 @@ CPU or a GPU and neither belongs in a conversation on a Home Assistant box.
   silent or replaced by an unrelated word (`80` came out as "a bay"), and
   Traditional Chinese glyphs come out as the wrong words. The
   [text pipeline](text-pipeline.md) exists because of this.
-- **No language parameter.** The prompt is the text plus a speaker slot, so
-  pronunciation comes entirely from the voice.
+- **A language tag means two things.** On every model it picks the text
+  pipeline's locale — which words numbers become, which rewrites run. On
+  Qwen3-TTS and OmniVoice it is also what the model is told to read the text
+  as; on the Hojo models and MOSS the prompt is the text plus a speaker slot,
+  so pronunciation comes from the voice and the tag never reaches the model.
 - **amd64 only**, matching the published ONNX Runtime builds.

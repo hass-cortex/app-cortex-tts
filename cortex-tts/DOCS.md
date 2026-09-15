@@ -14,13 +14,15 @@ with the Chinese text front-end none of them ship.
 | **Qwen3-TTS clone** | clones only                       | 10         | 6.87          | ~2.1 GB | 1.3 GB |
 
 **That column is not a prediction about your machine.** It is render time over
-audio time with every model measured on one host — a VM with 4 vCPU of an
-Intel Core i7-9750H, two inference threads, CPU — so it ranks the models
-against each other and nothing else; below 1 means the model outran playback
-_there_. Once the app is running, each model's card shows what **your** host
-measured, or says it has none yet. The card fits the per-second part apart
+audio time with every model measured on one host — the reference host in
+[Models][models], which is where the figures are measured and edited; this
+table quotes them. It ranks the models against each other and nothing else;
+below 1 means the model outran playback _there_. Once the app is running, each model's card shows what **your** host
+measured, or says it has none yet: one figure covering the model's own
+voices, which cost the same, and one for each cloned voice, whose recording
+rejoins the prompt on every synthesis and so costs by its own length. The card fits the per-second part apart
 from the fixed cost every request pays, so it reads a little under this column
-even on the same machine; it also needs three replies before it says anything. Start at the top of the table; the lower
+even on the same machine — level with it where a model's requests are all about one length, because there is no slope to fit and the plain ratio is taken instead. Each figure needs three requests before it says anything, and a reply spoken as it is written is rendered in several of them. Start at the top of the table; the lower
 entries want a faster machine or a GPU. Which model suits what, how each one
 clones, and what a faster CPU or a GPU changes is in [Models][models].
 
@@ -58,8 +60,9 @@ has no Cortex TTS platform without it, and nothing will be discovered.
 After the restart a **Cortex TTS discovered** card appears under **Settings →
 Devices & services**. Click **Configure** and confirm — the address and the API
 key come from the app itself, so there is nothing to type. Each downloaded
-model becomes its own TTS entity (`tts.hojo_tts_light_40m`,
-`tts.hojo_tts_light_80m_voice_cloning`, `tts.moss_tts_nano`).
+model becomes its own TTS entity, named after the model —
+`tts.hojo_tts_light_40m`, `tts.moss_tts_nano`, and one for each of the others
+in the table above.
 
 ### 4. Assign it to a voice pipeline
 
@@ -134,9 +137,11 @@ only when it _samples_ its end-of-speech token, so a higher value occasionally
 over-runs the text with an invented syllable.
 
 `0` is greedy: reproducible, flatter, and on the Hojo models it never
-over-runs. **Not on Qwen3-TTS** — there, greedy decoding often fails to sample
-end-of-speech at all, and the reply is cut off at the model's own ceiling
-instead.
+over-runs. **Not on Qwen3-TTS** — there greedy decoding reliably fails to
+sample end-of-speech, so every sentence runs on to the app's own ceiling: two
+and a half times the time the text needs, plus four seconds. A finished file
+has that invented tail trimmed off; a reply spoken while it is written does
+not, because the audio has already gone.
 
 The Hojo models and Qwen3-TTS read this setting. MOSS and OmniVoice fuse their
 sampling into a dedicated graph and have no temperature at all, so a request
@@ -169,17 +174,18 @@ to fall back, which is what you want on a host that has a card: a GPU build
 quietly running on the CPU is the failure nobody notices. What each loaded
 model actually got is printed on its card, beside **loaded**.
 
-MOSS-TTS-Nano measured 1.025x real time on a laptop i7 against **0.354x** on a
-GTX 1650 — the difference between a long reply outrunning the speaker and not.
-A CUDA-capable image is needed for `cuda` to answer at all, and Home Assistant
-OS ships no NVIDIA driver.
+A card is the difference between a long reply outrunning the speaker and not;
+what it buys each model is in [Models][models], measured rather than
+estimated. A CUDA-capable image is needed for `cuda` to answer at all, and
+Home Assistant OS ships no NVIDIA driver.
 
 ### Models kept in memory
 
-How many models may stay in memory at once. The 40M needs about 780 MB, the
-80M and MOSS about 2 GB each, so the default of `1` swaps between them on
-demand. Raise it to `2` only if the host can hold two — about 2.8 GB for the
-40M beside either of the others, about 4 GB for the 80M beside MOSS.
+How many models may stay in memory at once. The 40M needs about 780 MB and
+every other entry between 1.1 and 2.1 GB — the table above has each — so the
+default of `1` swaps between them on demand. Raise it to `2` only if the host
+can hold both at once: about 2.8 GB for the 40M beside a larger one, about
+4 GB for two larger ones.
 
 ### Unload when idle
 
@@ -204,7 +210,8 @@ a rule for that one call.
 
 **No voices in the pipeline picker.** The model is probably not downloaded —
 check the app's **Models** cards. A cloning model with no reference recording
-uploaded yet also shows no voices, by design; the 80M has no built-in ones at
+uploaded yet also shows no voices, by design; the 80M and the Qwen3-TTS
+cloning entry have no built-in ones at
 all.
 
 **I do not know what to write for `voice:`.** The app's UI lists every voice
@@ -215,7 +222,9 @@ model — see [Models][models].
 playback on this host, and the app's estimate of it was too optimistic. Read
 `sensor.<model>_playback_margin`; negative means the renderer lost the race.
 The app learns from every request and paces the next reply from what it
-measured, so one stutter usually corrects itself; a model that keeps losing
+measured, and it watches the reply in hand too: once one has produced a second
+of audio its own pace is believed over the fit's, so a reply that meets a busy
+moment widens its own hold. One stutter usually corrects itself; a model that keeps losing
 can be set to buffered in the integration ([Keeping up][streaming]).
 
 **Chinese sounds like the wrong words.** Check that `convert_script` was not

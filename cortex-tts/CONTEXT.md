@@ -142,8 +142,9 @@ chosen in `engine/omni.py` rather than read off disk, and the model refuses an
 attribute outside its vocabulary instead of approximating it. They are
 reported as `source: designed`, a third value beside `builtin` and
 `reference`, because the three cost different amounts to render — a clone
-measured 7.17 against 3.46 for a designed voice on the same model and host —
-and a caller comparing them has to know which it is looking at.
+runs about twice what a designed voice does on the same model, the figures
+being in `docs/models.md` — and a caller comparing them has to know which it
+is looking at.
 _Avoid_: "prompt", "style" (the model validates them as a fixed list, not free
 text), "preset" (that is the 40M's word)
 
@@ -179,17 +180,22 @@ seconds via the models-changed event.
 A reply spoken over `/api/speak/live` while the writer is still producing it:
 text frames in, audio frames out, one WebSocket per reply. The _app_ decides
 what to render when (`cortex_speech/pacing`); the integration only forwards
-the words and plays the sound. Replaces the integration's per-sentence
-`/api/speak` calls, which split the reply without knowing what it cost.
+the words and plays the sound. Where a reply is split is the app's to
+decide, because only the app holds the measurements that say what a split
+costs.
 _Avoid_: "streaming" unqualified (see Flagged ambiguities)
 
 **Render model**:
-What this host has measured about one model and voice kind: a request costs a
-fixed part plus a part per second of audio (`fixed_s`, `per_audio`), and the
-voice speaks so many characters a second per script. Fitted from the requests
-the host actually served, never carried from another machine; `None` until
-three of them exist, and a reply to an unmeasured model is **buffered**.
-_Avoid_: "RTF" for the whole thing (the factor is one of its four numbers)
+What this host has measured for one model and one voice: a request costs a
+fixed part plus a part per second of audio (`fixed_s`, `per_audio`), with one
+standard deviation of what that line failed to explain held beside it
+(`spread_s`), and the voice speaks so many characters a second per script.
+The cost pools across a model's own voices and is kept apart for each clone;
+the speech rate never pools. Fitted from the requests the host actually
+served, never carried from another machine; `None` until three of them exist,
+and a reply to an unmeasured model is **buffered**.
+_Avoid_: "RTF" for the whole thing (the factor is one of its five numbers,
+and the spread beside it is what every opening hold is widened by)
 
 **Lead**:
 Audio handed to the listener minus wall time since the first byte left: how
@@ -206,18 +212,24 @@ audio for one that hands requests over whole, or everything until the end.
 _Avoid_: "head start" (the integration's old user-facing number)
 
 **Streaming / paced / buffered**:
-The three plans for a live reply, chosen per reply and reported in the
-`ready` frame. _Streaming_: the model gains lead on every request, so batches
-go out as the lead allows. _Paced_: the whole reply was known before anything
-had to be sent, or the model cannot gain lead, so every batch is known and
-the hold is computed exactly. _Buffered_: nothing until it is all rendered —
-an unmeasured model, or a caller that asked.
+The three plans for a live reply, chosen per reply and named in the `batch`
+frame that precedes each request. The `ready` frame carries only what the
+reply starts as, before any decision has been taken. _Streaming_: the model
+gains lead on every request, so batches go out as the lead allows. _Paced_:
+the whole reply was known before anything had to be sent, or the model cannot
+gain lead, so every batch is known — and the wait is not a figure but a bank,
+released once it covers what the requests still to come are predicted to
+lose. _Buffered_: nothing until it is all rendered — an unmeasured model, or
+a caller that asked.
 
 **Whole**:
 What the `done` frame reports, in place of the plan, when the reply fit one
 request: nothing was streamed or paced, whichever plan was in force. The
-outcomes are therefore _whole_, _streaming_ and _paced_; the integration's
-mode sensor shows those, and its setting stays automatic or buffered.
+`done` outcomes are therefore _whole_, _streaming_ and _paced_. The
+integration's mode sensor carries a fourth, _buffered_, because it is written
+from the `batch` frame first and corrected by `done` afterwards — and an enum
+sensor handed a state outside its options raises, so the reply never plays at
+all. Its setting stays automatic or buffered.
 
 **Abandoned**:
 A render whose listener left. Every engine takes a `stop` check and asks it
@@ -314,13 +326,13 @@ waits for a restart.
   scales a waveform's amplitude. They run in the same call and share no
   vocabulary. Say "text normalisation" or "level normalisation" — never the
   bare verb.
-- **"streaming" is three things.** Home Assistant's _streaming input_ (the
+- **"streaming" is four things.** Home Assistant's _streaming input_ (the
   conversation agent feeding text in as it is written), a **Live reply**
-  (text in, audio out over one socket, paced by the app), and **Chunk
-  streaming** (an engine emitting audio mid-segment, which MOSS and Qwen3-TTS
-  can do). _Streaming_ is also one of the three ways a live reply is spoken,
-  beside _paced_ and _buffered_. Name which one, every time: a sensor whose
-  name promised the first and whose clock measured another was unreadable.
+  (text in, audio out over one socket, paced by the app), **Chunk streaming**
+  (an engine emitting audio mid-segment, which MOSS and Qwen3-TTS can do), and
+  _streaming_ the plan — one of the three ways a live reply is spoken, beside
+  _paced_ and _buffered_. Name which one, every time: a sensor whose name
+  promised the first and whose clock measured another was unreadable.
 - **"voice" without a model is meaningless.** `hojo_zh_f_01` exists on the 40M
   and nowhere else, `Yuewen` only on MOSS, and the 80M's voices are whatever
   references have been uploaded. A reference is a voice on _every_ model that

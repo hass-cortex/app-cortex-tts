@@ -15,9 +15,9 @@ or a GPU, which the Home Assistant OS host cannot offer.
   the 4-core HAOS VM this project runs on, every model is two to three times
   slower than on a laptop CPU, and MOSS-TTS-Nano does not keep up with
   playback there at all — see [Models](models.md).
-- **A GPU changes the answer.** MOSS-TTS-Nano measured RTF 1.025 on a laptop
-  i7 against **0.354** on a GTX 1650: the difference between a long reply
-  stuttering and outrunning the speaker.
+- **A GPU changes the answer** — for some models by more than others, and by
+  enough to move one from stuttering to outrunning the speaker. The per-model
+  figures are in [Models](models.md#hardware-and-running-it-elsewhere).
 
 ## What you get, and what you do not
 
@@ -97,9 +97,10 @@ laptop and want a driver newer than the 575 this project's GTX 1650 host runs.
 1.26.0 is CUDA 12, loads the int4 graphs and is what the figures on this page
 were measured with.
 
-Measure before you trust it. Beside a 4-vCPU i7-9750H a GTX 1650 took the
-40M from 0.54 to 0.31 and MOSS from 1.04 to 0.37; beside a 16-core Ryzen an
-RTX 5070 Ti on Windows was slower than the CPU for both — the per-token
+Measure before you trust it. A GTX 1650 beside a 4-vCPU i7-9750H took every
+model well under what the CPU managed ([Models](models.md#hardware-and-running-it-elsewhere)
+has the pairs); beside a 16-core Ryzen an RTX 5070 Ti on Windows was slower
+than the CPU for both — the per-token
 loop is bound by kernel launch latency, which a fast CPU beats and a Windows
 GPU scheduler makes jittery. Prefer native
 Linux for a GPU deployment. The 80M does not load on CUDA

@@ -23,13 +23,27 @@ two ways:
 
 Neither number survives a change of host, execution provider, thread count or
 reference recording. So the app does not carry them: it fits them from the
-requests it has actually served, per model and per kind of voice, and refits
-as they arrive. The stats card in the admin UI shows the fit.
+requests it has actually served and refits as they arrive. What a request
+costs belongs to the model and the host, so a model's own voices share one
+line — which is what lets one with eighteen built-in voices have a line at
+all — while a clone keeps its own, because its recording rejoins the prompt on
+every synthesis. How fast a voice speaks is the other question and never
+pools.
+
+What is fitted together is what shares a cost. A model's own voices pool into
+one cost line — measured on MOSS, one host, the cost of a second of audio
+varies 4% across them — while each clone keeps its own, because its recording
+rejoins the prompt on every synthesis at 0.354 s of render per second of
+reference. How fast a voice speaks is the other question and never pools: the
+same 26 characters ran 6.64 s in one built-in voice and 5.12 s in another, a
+30% spread, and every request the app sizes is sized in seconds of speech.
+The stats card in the admin UI shows the fit.
 
 ## The three ways a reply is spoken
 
-The `done` frame of a live reply, and the integration's **Last synthesis
-mode** sensor, say which one it was.
+The `batch` frame of a live reply names the plan in force before any audio
+exists; the `done` frame replaces it with what happened. The integration's
+**Delivery mode** sensor is written from both.
 
 - **Streaming.** The model gains lead on every request — it renders faster
   than the audio plays, by enough to pay the fixed part. The first request
@@ -42,10 +56,12 @@ mode** sensor, say which one it was.
 - **Paced.** The whole reply was written before anything had to be sent (a
   one-line answer, or a fast writer), or the model cannot gain lead, so
   nothing could be sent safely before the reply was known. Every request is
-  known, so the opening hold is computed exactly: the least wait after which
-  playback never catches the renderer. For OmniVoice with a clone on a GTX
-  1650 that is about a second and a half; for MOSS-TTS-Nano on a CPU, several
-  seconds — still far short of waiting for the whole reply.
+  known, so the wait is not a number settled before the render starts: the
+  app banks the opening audio and releases it the moment the bank covers what
+  the requests still to come are predicted to lose. That question is asked
+  again as each piece of audio arrives, and charged to the pace this reply is
+  actually running at rather than to the host's average day — still far short
+  of waiting for the whole reply.
 - **Buffered.** Nothing is released until everything is rendered. What a
   model gets while this host has not measured it (three requests are enough),
   and what **Speaking mode: buffered** asks for outright.
@@ -60,7 +76,11 @@ planner's margin (0.5 s) on a typical batch of about six seconds:
 b < 1 − (a + 0.5) / 6      a = 0.3 s → b < 0.87      a = 1.5 s → b < 0.67
 ```
 
-That is the whole rule. A whole-render engine with a small fixed cost
+That is the first of two tests. The second is the opening hold itself:
+whatever of the first boundary's cost this batch's own playback does not
+cover, plus the margin and the fit's spread, has to come to under four
+seconds. A bank larger than that would go on growing with a reply whose
+length nobody yet knows, so such a reply is paced instead. A whole-render engine with a small fixed cost
 (Hojo) streams under about 0.85; a cloned voice on OmniVoice carries a
 1.5 s fixed cost and needs 0.67; a chunk-streaming engine (MOSS, Qwen3-TTS)
 streams under about 0.9. Past the threshold a reply is paced: it never
@@ -71,60 +91,35 @@ replies of 6–60 s and two writer speeds (224 runs) produced no negative lead
 anywhere; at RTF 1.5 a 30 s reply waits 21–33 s, at 2.0 it waits 37–49 s.
 From 1.2 upwards the answer is a faster host or model, not a setting.
 
-## What the measurements said
+## What the measurements settled
 
-Why the app sizes the requests and the integration does not. The same
-six-sentence paragraph, sent back to back, with playback starting on the first
-byte; the column is the least audio the listener still held when the next
-request's audio landed.
+Two results from the tables in [Models](models.md#what-batching-costs), which
+is where they are measured and re-measured:
 
-| Model, host                       | Streams inside a request | Cost measured             | One request per sentence | Grouped to 9 s | Grouped to 14 s |
-| --------------------------------- | ------------------------ | ------------------------- | ------------------------ | -------------- | --------------- |
-| OmniVoice, GTX 1650, cloned voice | no                       | ~1.5 s fixed + 1.0× audio | −0.58 s                  | −0.25 s        | **−4.35 s**     |
-| Hojo 40M, GTX 1650                | no                       | 0.35×                     | +2.8 s                   | +2.8 s         | +2.9 s          |
-| Hojo 40M, HA VM CPU               | no                       | 0.7×                      | +0.9 s                   | +1.0 s         | +0.65 s         |
-| MOSS-TTS-Nano, HA VM CPU, cloned  | yes                      | 1.14–1.21×                | −4.9 s                   | −4.9 s         | −4.8 s          |
+A model that is not gaining lead cannot be streamed by any grouping, and a
+fixed grouping is wrong in both directions — growing the batch while the lead
+does not grow is how OmniVoice fell behind, and a fast model gains from any
+split. So the batch follows the lead. Splitting costs nothing in consistency:
+the same paragraph as one, three and six requests changed pitch wander by
+nothing measurable, so there is no mode that trades latency for fewer pieces.
 
-Two things follow. A model that is not gaining lead cannot be streamed by any
-grouping, and a fixed grouping is wrong in both directions: growing the batch
-while the lead does not grow is exactly how OmniVoice fell 4.35 s behind, and
-a fast model gains from any split. The batch has to follow the lead.
-
-The same paragraph rendered as one, three and six requests changed pitch
-wander by nothing measurable (f0 variation over 4-second windows: Hojo 9–11%,
-OmniVoice 7–10% in every condition; MOSS drifted _more_ in one long generation,
-17.6%, than in six sentences, 10.5%). Splitting a reply does not cost
-consistency at this granularity, so there is no mode that trades latency for
-fewer pieces.
-
-## What a request should hold
-
-Coalescing sentences removes the fixed cost of sending one at a time — 0.37 s
-of dead air per boundary on MOSS — but a request that is too long costs more
-than it saves: an autoregressive model attends over everything it has
-generated, so the bill grows with the square of the request. Measured on
-MOSS-TTS-Nano, the same 55-second story sent in pieces of different sizes, as
-the fraction by which rendering fell behind playback:
-
-| Per request         | Behind playback |
-| ------------------- | --------------- |
-| ~1 s (one sentence) | +41%            |
-| ~9 s                | +4.1%           |
-| ~19 s               | +5.6%           |
-| ~28 s               | +6.5%           |
-| ~55 s (one request) | +17.8%          |
-
-A valley with a cliff on either side. A paced reply groups sentences to about
-twelve seconds; a streamed one is bounded by the lead, which sits in the same
-range on any model that is gaining it.
+And the cost of a request against its size is a valley with a cliff on either
+side. Too small and every boundary repays the fixed cost; too large and an
+autoregressive model's attention over what it has already generated turns the
+bill quadratic. Twelve seconds is where a paced reply stops looking, because
+past it the fitted line is knowingly wrong. Inside it the grouping is a search
+rather than a constant: the sentences are grouped at every cut that moves a
+boundary, and the plan whose first word comes soonest wins, a tie going to the
+fewest boundaries. A streamed reply is bounded by the lead instead, which sits
+in the same range on any model that is gaining it.
 
 ## The sensors that answer it
 
-| Sensor                            | Reads                                                                    |
-| --------------------------------- | ------------------------------------------------------------------------ |
-| `sensor.<model>_real_time_factor` | What the last synthesis actually cost on **this** host                   |
-| `sensor.<model>_playback_margin`  | The least audio the listener still held over the reply; negative ran dry |
-| `sensor.<model>_delivery_mode`    | `whole`, `streaming` or `paced` — how the last reply was actually spoken |
+| Sensor                            | Reads                                                                                                                                                 |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sensor.<model>_real_time_factor` | What the last synthesis actually cost on **this** host                                                                                                |
+| `sensor.<model>_playback_margin`  | The least audio the listener still held over the reply; negative ran dry                                                                              |
+| `sensor.<model>_delivery_mode`    | `whole`, `streaming`, `paced` or `buffered` — how the last reply was actually spoken; `whole` whenever it fitted one request, whichever plan chose it |
 
 **Margin is the one to watch.** Positive means the speaker always had something
 left to play. Negative means it caught up with the renderer and waited, and the
@@ -135,8 +130,12 @@ the render.
 
 ## If margin is negative
 
-The app's estimate of the model was too optimistic for that reply. It learns
-from every request, so the next reply is paced from a corrected fit, and one
+The app's estimate of the model was too optimistic for that reply. A paced
+reply corrects itself while it runs: once it has produced a second of audio
+its own pace is believed over the fit's — the request still rendering
+included — and the hold is taken from the dearer line. On a host made 1.4×
+dearer than its fit, that turned 16 s of dry playback into under two. It also
+learns from every request, so the next reply is paced from a corrected fit, and one
 stutter usually corrects itself. If a model keeps losing:
 
 - **Set that model's Speaking mode to buffered** in the integration.
@@ -154,15 +153,3 @@ the render at the engine's next checkpoint: a decode step, a diffusion step, a
 codec chunk. Nothing an abandoned reply cost is recorded against the model.
 The one thing the app cannot see is a media player that stopped: Home
 Assistant's TTS cache drains the stream regardless, so that render finishes.
-
-## Why a stream is MP3
-
-`/api/speak/live` answers MP3: a bare sequence of
-self-describing frames, with no container, no length field and no index, which
-is the only honest thing to send when the length is not known yet. A WAV
-stream has to declare a length before the audio exists, and a general-purpose
-player given the maximal one waits for a file it believes is six hours long.
-FLAC and OGG both need a size or an index written before the audio exists, so
-they are refused. The bitrate — `bitrate` in the `ready` frame — is the one
-measurement that exists before the first sample, and it is what turns a byte
-count into a duration downstream.
