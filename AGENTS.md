@@ -181,18 +181,28 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   carries no tag. A language the pipeline has no locale for still gets numbers
   read (`num2words`) and a sentence-final stop, never another language's
   words.
-- **A pass that can misjudge is opt-in.** Script conversion and Taiwan
-  readings cannot read a word wrong, and a number with a unit, a clock colon
-  or a date around it says what it is; those run by default. A bare number
-  does not say what it is — `撥打 110`, `302號房`, `RTX 4090`, `John 3:16`
-  were all read as quantities — so `expand_numbers` is off unless the caller
-  says otherwise, in every locale. A rule that guesses is not a fix for what
+- **A pass that can misjudge is opt-in.** Script conversion is glyph-for-glyph
+  and a number with a unit, a clock colon or a date around it says what it
+  is; those run by default. Taiwan readings run by default too, but only
+  because the one way they could misjudge is now decided per occurrence:
+  the table is keyed by words and the text is not segmented, so an entry
+  could match a span that is not a word there — `在为` matched across
+  `正在 | 为你` and had the model read wéi where the sentence says wèi, on
+  the commonest shape an Assist reply has. `readings._straddles` offers each
+  edge to its neighbour and the more common word keeps the character.
+  Dropping entries cannot substitute for it: 5200 of the 5214 can straddle
+  in principle, and the ones that do are not the rare ones — `在为` occurs
+  100 times in the corpus against `夕阳`'s 116. A bare number does not say
+  what it is — `撥打 110`, `302號房`, `RTX 4090`, `John 3:16` were all read
+  as quantities — so `expand_numbers` is off unless the caller says
+  otherwise, in every locale. A rule that guesses is not a fix for what
   a model cannot read: wrong misleads, unread merely goes unheard, and the
   place to say what a number is remains the caller that knows.
 - **Pass order is a contract.** Normalisation emits Traditional number words,
   so it must precede script conversion, and Taiwan readings are keyed by the
-  Simplified form so they run last. Within a normaliser, a construct claims
-  its number before the bare-number pass reads that digit as a quantity.
+  Simplified form — as is their boundary-word list — so they run last.
+  Within a normaliser, a construct claims its number before the bare-number
+  pass reads that digit as a quantity.
   `text/passes.py` owns the order; each locale only supplies readings.
 - **Every segment ends in sentence-final punctuation.** Without it the model
   misses its cue to stop and invents a syllable.
@@ -376,7 +386,13 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   invalidation rule, and the first one to diverge is silent — it still produces
   audio, in the previous voice.
 - **A reference is audio _and_ transcript.** Neither alone defines a voice, and
-  a wrong transcript degrades the clone with no error — so it is validated on
+  a wrong transcript degrades the clone with no error. Whether a given model
+  is told what the recording says is a capability,
+  `ModelSpec.reads_reference_transcript`, declared per entry and pinned
+  against the engine that would read it — a flag set the permissive way
+  promises a caller their transcript matters when nothing will ever see it.
+  One recording is a voice on every cloning model at once, so validation is
+  the strict case's whatever the resident model reads: it is validated on
   the way in (2–20 s, non-empty, pronounceable, and ending in silence). The
   last of those is the same class of silent failure: the models that clone
   best read the whole recording as a worked example, so a clip cut by a clock

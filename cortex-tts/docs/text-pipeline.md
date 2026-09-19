@@ -56,6 +56,41 @@ The result is 5,214 words in `src/cortex_speech/text/zh/taiwan_readings.tsv`,
 keyed by the Simplified form because the pass runs after script conversion;
 each rewrite is listed in the **Rewrites** ledger as `reading`.
 
+### Which occurrences it fires on
+
+The table is keyed by words; the text it is looked up in is not segmented. A
+match is therefore not yet evidence that those characters are a word *in this
+sentence*, and the difference is not cosmetic. `在为` is an entry — 在為 read
+zài wéi — and `正在为你查询` contains those two characters in a row, so the
+substituter took them and the model read wéi. The sentence says wèi, and 在
+was never available: it belongs to 正在. Measured over 15 ordinary sentences,
+10 were rewritten and 4 of those were wrong, all of them the commonest shape
+an Assist reply takes: 正在為您…, 現在為您…, 這只是….
+
+Dropping the offending entries does not fix this. **5,200 of the 5,214 can
+straddle a boundary in principle**, and the ones that do are not the rare
+ones that a frequency floor would catch — `在为` occurs 100 times in the
+corpus, against 116 for `夕阳`. Nor does collocation strength separate them:
+sorted by pointwise mutual information, `理发` (−0.78), `长发` (−0.66) and
+`法子` (−0.55) are words worth rewriting and sit below artefacts like `为对`
+(−0.99) and `而为` (−0.90). Whether a span is a word is a property of the
+occurrence, not of the entry, so it is decided there.
+
+`readings._straddles` offers each edge of a match to its neighbour: if the
+character before it forms a word with the match's first character, or the
+character after forms one with its last, and that word is at least as common
+as the match, the match loses the character. The words and their counts are
+`boundary_words.tsv`, written by the same generator from the same corpus —
+53,521 of them, being every two-character word that can reach an entry's
+edge.
+
+Counts are what make it an arbitration rather than a veto. `不中用` would
+otherwise be lost: 中用 is a word and could claim the 中, but it is rarer
+than the entry, so the entry keeps it. Where the comparison goes the other
+way the pass simply does not fire, which is the safe direction — an
+unrewritten word keeps the mainland reading and is understood, while a
+wrongly rewritten one is a different word.
+
 Japanese never meets it. Kanji share glyphs with the table (研究) and none of
 its readings, and the pass is Chinese's: a `ja` request has no such pass, and
 an untagged text with kana in it is read as `ja`.

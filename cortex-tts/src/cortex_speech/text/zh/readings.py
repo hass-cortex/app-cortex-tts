@@ -12,6 +12,13 @@ from the McBopomofo dictionary and keyed by the Simplified form, so this pass
 runs after script conversion. It is a Chinese rewrite: the locale runs it, so
 Japanese — which shares glyphs with the keys (研究) and none of the readings —
 never meets it.
+
+It is keyed by *words* and looked up in text that is not segmented, so a match
+is not yet evidence that the span is a word in that sentence.
+``boundary_words.tsv``, from the same generator, is what settles it: each edge
+of a match is offered to its neighbour, and the more common word keeps the
+character. Without that, `在为` matched across `正在 | 为你` and the model read
+wéi where the sentence says wèi.
 """
 
 from __future__ import annotations
@@ -36,6 +43,52 @@ def _table() -> tuple[dict[str, str], int]:
     return words, max(map(len, words), default=0)
 
 
+@lru_cache(maxsize=1)
+def _boundaries() -> dict[str, int]:
+    """Words the substituter arbitrates against, with their corpus counts."""
+    words: dict[str, int] = {}
+    text = (
+        resources.files(__package__)
+        .joinpath("boundary_words.tsv")
+        .read_text(encoding="utf-8")
+    )
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        word, count = line.split("\t")
+        words[word] = int(count)
+    return words
+
+
+def _straddles(text: str, start: int, end: int) -> bool:
+    """Whether a neighbouring word has the better claim on an edge character.
+
+    The table is keyed by words and the text it is looked up in is not
+    segmented, so a match is not yet evidence that the span is a word *here*.
+    `在为` is an entry, and `正在为你查詢` contains those two characters in a
+    row — but the 在 belongs to 正在, and substituting had the model read
+    wéi where the sentence says wèi.
+
+    So each edge is offered to its neighbour: if the character before the
+    match forms a word with the match's first character, or the character
+    after forms one with its last, and that word is at least as common as the
+    match itself, the match loses. Comparing counts is what keeps 不中用 —
+    中用 is a word, but a rarer one than 不中, so it does not take the 中.
+
+    Erring towards refusing is deliberate and is the reason a simple test is
+    enough: a refused rewrite leaves the mainland reading, which is
+    understood, while a wrong one says a different word.
+    """
+    known = _boundaries()
+    mine = known.get(text[start:end], 0)
+    before = text[start - 1 : start + 1] if start else ""
+    after = text[end - 1 : end + 1]
+    for neighbour in (before, after):
+        if len(neighbour) == 2 and known.get(neighbour, -1) >= mine:
+            return True
+    return False
+
+
 def taiwan_readings(text: str) -> list[tuple[str, str]]:
     """Return the (word, stand-in) rewrites the text would get, in order."""
     return _substitute(text)[1]
@@ -56,7 +109,7 @@ def _substitute(text: str) -> tuple[str, list[tuple[str, str]]]:
         for size in range(min(longest, len(text) - i), 1, -1):
             candidate = text[i : i + size]
             standin = words.get(candidate)
-            if standin is not None:
+            if standin is not None and not _straddles(text, i, i + size):
                 out.append(standin)
                 rewrites.append((candidate, standin))
                 i += size

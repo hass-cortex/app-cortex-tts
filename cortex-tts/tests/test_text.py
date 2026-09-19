@@ -194,6 +194,47 @@ class TestTaiwanReadings:
             ("研究", "研就"),
         ]
 
+    # A match is not yet evidence that the span is a word here: the table is
+    # keyed by characters and the text is not segmented. These are the cases
+    # that decided the arbitration rule — the first four were measured wrong
+    # in production, the rest must survive fixing them.
+    STRADDLES = [
+        "正在为你查询海底捞的电话号码",  # 正在 | 为你 — 为 is wèi, not wéi
+        "现在为您播放音乐",
+        "我在为明天的会议做准备",
+        "这只是一个提醒",  # 这 | 只是 — 只 is zhǐ, not zhī
+    ]
+    READS_DIFFERENTLY = [
+        ("明天记得去理发", "明天记得去理法"),
+        ("她留着一头长发", "她留着一头长法"),
+        ("会议的期中报告已经送出", "会议的其中报告已经送出"),
+        ("这个方法不中用", "这个方法不众用"),
+        ("他好出风头", "他号出风头"),
+        ("今天要到垃圾", "今天要到乐色"),
+        ("企业的星期五会议", "气业的星其五会议"),
+    ]
+
+    @pytest.mark.parametrize("text", STRADDLES)
+    def test_a_match_across_a_word_boundary_is_refused(self, text: str) -> None:
+        """The failure the arbitration exists for.
+
+        `在为` is an entry, and `正在为你` contains those characters in a row —
+        but the 在 belongs to 正在. Substituting had the model read wéi where
+        the sentence says wèi, on the most ordinary shape an Assist reply
+        has.
+        """
+        assert taiwan_readings(text) == []
+
+    @pytest.mark.parametrize(("text", "expected"), READS_DIFFERENTLY)
+    def test_a_word_of_its_own_still_wins(self, text: str, expected: str) -> None:
+        """Refusing a straddle must not refuse the pass its whole job.
+
+        `不中用` is the tight one: 中用 is a word and could claim the 中, but
+        it is rarer than the entry, which is why the arbitration compares
+        counts rather than merely asking whether a neighbour exists.
+        """
+        assert apply_taiwan_readings(text) == expected
+
     def test_words_read_alike_on_both_sides_are_untouched(self) -> None:
         assert apply_taiwan_readings("客厅的灯已经打开了。") == "客厅的灯已经打开了。"
 
