@@ -4,12 +4,12 @@ One recording, to try cloning with before committing your own. Upload it in
 the app's **Cloned voices** panel with the fields below, then pick the voice
 it creates on any model that clones.
 
-| Field | Value |
-| ----- | ----- |
-| File | `zh-tw-female.wav` |
-| Transcript | `清晨的阳光跳上窗台，让我们带着笑脸去赴一场春天的约会吧。` |
-| Language | `zh-TW` |
-| Gender label | `female` |
+| Field        | Value                                                      |
+| ------------ | ---------------------------------------------------------- |
+| File         | `zh-tw-female.wav`                                         |
+| Transcript   | `清晨的阳光跳上窗台，让我们带着笑脸去赴一场春天的约会吧。` |
+| Language     | `zh-TW`                                                    |
+| Gender label | `female`                                                   |
 
 24 kHz mono 16-bit, 6.12 s. Name it whatever you like — the id is derived
 from the name at upload and is what a synthesis request then asks for.

@@ -59,8 +59,8 @@ each rewrite is listed in the **Rewrites** ledger as `reading`.
 ### Which occurrences it fires on
 
 The table is keyed by words; the text it is looked up in is not segmented. A
-match is therefore not yet evidence that those characters are a word *in this
-sentence*, and the difference is not cosmetic. `在为` is an entry — 在為 read
+match is therefore not yet evidence that those characters are a word _in this
+sentence_, and the difference is not cosmetic. `在为` is an entry — 在為 read
 zài wéi — and `正在为你查询` contains those two characters in a row, so the
 substituter took them and the model read wéi. The sentence says wèi, and 在
 was never available: it belongs to 正在. Measured over 15 ordinary sentences,
