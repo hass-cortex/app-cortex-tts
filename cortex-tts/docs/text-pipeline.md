@@ -52,7 +52,7 @@ Each differing syllable gets the most common character that both sides read
 that way by default. A word whose reading is contextual (長, 當, 重) is kept
 only when the dictionary's own default settles it, and a word for which no
 clean stand-in exists (熟悉 shóu has none) is left as the model would read it.
-The result is 5,237 words in `src/cortex_speech/text/zh/taiwan_readings.tsv`,
+The result is 5,214 words in `src/cortex_speech/text/zh/taiwan_readings.tsv`,
 keyed by the Simplified form because the pass runs after script conversion;
 each rewrite is listed in the **Rewrites** ledger as `reading`.
 
@@ -85,7 +85,7 @@ languages), its unit symbols named the way CLDR names them in that language
 (`26.5°C` → "sechsundzwanzig Komma fünf Grad Celsius"; `%`, `kWh`, `km/h`,
 `hPa` and the rest of the table above), an ISO date laid out the way CLDR
 lays it out with its numbers in words (`2026-09-14` → "vierzehnte September
-zweitausendsechsundzwanzig", "2026年9月14日"), and a clock literal as hour
+zweitausendsechsundzwanzig", "二千二十六年九月十四日"), and a clock literal as hour
 words then minute words (`14:35` → "vierzehn fünfunddreißig") — so a German
 sentence never gets English words. A decimal comma is read where the
 language writes one (`26,5`), while Home Assistant's own `26.5` and `1,234`
@@ -132,8 +132,9 @@ default; `expand_numbers` in the request still overrides it either way, and
 `/api/models` reports the flag.
 
 With bare numbers on, a number welded after a letter is an identifier and is
-read digit by digit (`P0` → "P zero"); one before a letter carries a unit and
-stays a quantity (`24V` → "twenty-four V"). A range is read with its unit
+read digit by digit (`P0` → "P zero"); one before a letter the unit table
+knows is a quantity, and the unit is read out (`24V` → "twenty-four volts")
+whether or not bare numbers are on. A range is read with its unit
 once (`25-30°C` → 攝氏二十五到三十度) whether or not bare numbers are on;
 thousands separators are dropped rather than read as pauses.
 
@@ -159,8 +160,15 @@ number words and only the conversion pass can make them pronounceable. Within
 a normaliser, a construct claims its number before the bare-number pass reads
 that digit as a quantity: `68%` is a percentage before `68` is a count.
 
-The prepared text is then split into segments of at most 120 characters, and
-**every segment ends in sentence-final punctuation**. The model stops only when
+The prepared text is then split into segments the chosen model can say whole.
+What bounds one is the model's own generator ceiling, counted in audio: past it
+a call comes back truncated rather than slow, with the rest of the text never
+spoken. `ModelSpec.segment_limit` turns that ceiling into a length of text with
+the speech rate of the script, and a model that establishes no ceiling is split
+on sentence boundaries alone rather than at a number nobody measured; the
+figures are listed per model in
+[Models](models.md#how-much-text-one-synthesis-takes). **Every segment
+ends in sentence-final punctuation.** The model stops only when
 it samples an end-of-speech token; without a stop in the text it misses the
 cue and invents a syllable. Measured: `客廳的燈已經打開了` produced a stray
 「哈」, the same text with a full stop did not. A caller need not end a message
@@ -174,13 +182,14 @@ that cannot say a digit (see above). Between the request and those built-in
 answers sit the settings: a rule per model and language (`text_rules`, on
 the app's Settings page) answers any switch the request left out, so a
 household that wants bare numbers read on MOSS in Chinese, or Taiwan
-readings off for one voice, sets that once instead of on every call. `convert_script` and
+readings off for one model, sets that once instead of on every call. A rule is
+keyed by model and language only; there is no per-voice rule. `convert_script` and
 `taiwan_readings` are Chinese's alone: left out of a request, the language
 decides them — conversion is always on, readings are on for `zh-TW` and
 `zh-Hant` (a bare `zh` counts when the text is Traditional) and off for
 `zh-CN` — and a request may still say `true` or `false` outright, though
-readings cannot run with conversion off, being keyed by the Simplified form. On `/api/speak` they are fields; in a `tts.speak`
-call they are the same names under `options:`. `/api/preview` answers with
+readings cannot run with conversion off, being keyed by the Simplified form. On the wire they are fields of a reply's opening
+frame; in a `tts.speak` call they are the same names under `options:`. `/api/preview` answers with
 `passes`: every switch the language has and what it was decided to be, which
 is what the UI's chips show — and why the two Chinese chips are not there for
 a German text.
@@ -201,6 +210,7 @@ beside the composer, so you can read it before spending a synthesis on it.
 Left is what you typed; right is what the model receives. Each row under
 **Rewrites** is one change: `number` for an expansion, `script` for the glyph
 conversion with the count of glyphs it touched, `reading` for a word respelled
-for its Taiwan reading, `stop` for punctuation added at the end. A pass that did not fire leaves no row — which is how you tell "nothing
+for its Taiwan reading, `stop` for punctuation added at the end, and `text`
+for a rewrite carrying no digit. A pass that did not fire leaves no row — which is how you tell "nothing
 needed rewriting" from "the switch is off". `POST /api/preview` returns the
 same thing without loading a model.

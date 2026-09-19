@@ -16,7 +16,8 @@ Text ──► Text pipeline ──► Cortex TTS Server ──► Audio
           │                 ├── Hojo 40M       15 built-in voices
           │                 ├── Hojo 80M       cloning only
           │                 ├── MOSS-TTS-Nano  18 built-in + cloning, audible mid-sentence
-          │                 ├── Qwen3-TTS      9 speakers across 10 languages, or cloning
+          │                 ├── Qwen3-TTS      9 speakers across 10 languages, or cloning,
+          │                 │                  audible mid-sentence
           │                 └── OmniVoice      voices designed from attributes, or cloning
           │
           ├── Normalisation (numbers, units, clocks, dates)
@@ -25,9 +26,10 @@ Text ──► Text pipeline ──► Cortex TTS Server ──► Audio
 ```
 
 The pipeline on the left is the part the models do not ship: none of them
-pronounces an Arabic numeral, and a Traditional sentence read as-is comes out
-as the wrong words. It is why the character error rate on Chinese is 4% here
-and 32% without it.
+reads a unit symbol, a time or a date, the two Hojo models cannot say a bare
+digit at all, and a Traditional sentence read as-is comes out as the wrong
+words. It is why the character error rate on Chinese, measured on the 40M, is
+4% here and 32% without it.
 
 ## Features
 
@@ -45,8 +47,8 @@ and 32% without it.
 - **A reply is paced by the app, from what it measured on your host** — a
   model that outruns the speaker starts on the opening sentences; one that
   cannot is held back just long enough that playback never catches the
-  renderer; an unmeasured one is buffered. The integration's one setting per
-  model is Automatic or Buffered.
+  renderer; an unmeasured one is planned from its own first request. The
+  integration's one setting per model is Automatic or Buffered.
 - **Discovered by Home Assistant** through the Supervisor, so the companion
   integration needs no address or key typed in.
 
@@ -114,7 +116,7 @@ configuration, settings and troubleshooting.
 | [Models](cortex-tts/docs/models.md)                   | The line-up, what each costs, how each clones, which to pick      |
 | [The text pipeline](cortex-tts/docs/text-pipeline.md) | Why Traditional Chinese and numbers are rewritten, and into what  |
 | [Cloned voices](cortex-tts/docs/cloning.md)           | The recording, the transcript, the name                           |
-| [Keeping up](cortex-tts/docs/streaming.md)            | How a reply is paced, where the RTF threshold is, and the sensors |
+| [Keeping up](cortex-tts/docs/delivery.md)             | How a reply is paced, where the RTF threshold is, and the sensors |
 | [Running it elsewhere](cortex-tts/docs/standalone.md) | A faster CPU or a GPU outside Home Assistant OS                   |
 | [HTTP API](cortex-tts/docs/api.md)                    | Using the app without the integration                             |
 | [App Store page](cortex-tts/DOCS.md)                  | Install, configure, troubleshoot                                  |

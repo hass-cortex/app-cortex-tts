@@ -42,7 +42,7 @@ Supervisor provided:
 ```bash
 git clone https://github.com/hass-cortex/app-cortex-tts
 cd app-cortex-tts/cortex-tts
-uv sync --frozen --extra hojo-80m        # drop the extra to skip the 80M and torch
+uv sync --frozen --extra hojo-80m --extra omnivoice   # drop either to skip that model
 
 API_KEY=choose-a-long-random-string \
 DATA_DIR=/srv/cortex-tts STATIC_DIR="$PWD/web" HOST=0.0.0.0 PORT=8771 \

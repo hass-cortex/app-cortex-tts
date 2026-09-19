@@ -22,11 +22,11 @@ API_KEY= PORT=8799 \
 ```
 
 The environment carries only what must be settled before the process starts
-(`HOST`, `PORT`, `DATA_DIR`, `STATIC_DIR`, `API_KEY`, and `REFERENCES_DIR`,
-which defaults to `<DATA_DIR>/references`). Everything else is a
+(`HOST`, `PORT`, `DATA_DIR`, `STATIC_DIR`, `API_KEY`, `LOG_LEVEL`, and
+`REFERENCES_DIR`, which defaults to `<DATA_DIR>/references`). Everything else is a
 stored setting in `<DATA_DIR>/settings.json`, and one of them matters here:
-`preload` defaults to `true`, so a fresh data directory downloads the 241 MB
-40M bundle on first start. To work without weights, write
+`preload` defaults to `true`, so a fresh data directory downloads the 40M
+bundle on first start. To work without weights, write
 `{"preload": false}` into that file before starting (or turn it off in the
 UI once).
 

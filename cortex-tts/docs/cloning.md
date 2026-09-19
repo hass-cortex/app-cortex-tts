@@ -62,8 +62,9 @@ clip matters depends on the model:
   transcript matters more here than anywhere else, and length costs on every
   synthesis the way MOSS's does.
 
-Level matters more than length. The app levels every reference to −21 dBFS
-RMS on the way in: a reference around −16 dBFS made MOSS generate hard-clipped
+Level matters more than length. An upload is stored exactly as it arrived;
+MOSS and Qwen3-TTS level a reference to −21 dBFS RMS as they read it, and the
+80M and OmniVoice do not level at all: a reference around −16 dBFS made MOSS generate hard-clipped
 audio, and the clipping was baked into what the model produced, where no output
 stage could undo it. A clean, evenly loud recording is worth more than a long
 one.
@@ -87,7 +88,9 @@ afterwards costs nothing, because editing a transcript (`PATCH
 /api/references/{id}`, or the panel's **Save transcript**) does not re-upload
 the audio. The same request corrects the gender label (`female`, `male`,
 `unknown`), which the panel shows as a select beside the id; it is a label for
-the voice picker and nothing else reads it.
+the voice picker and nothing else reads it. It also corrects the language —
+which is not only a label, because changing it runs the stored transcript
+through the text pipeline again.
 
 What you type is the _raw transcript_; what the model is told is the same text
 after the [text pipeline](text-pipeline.md) has run over it, so it is in the

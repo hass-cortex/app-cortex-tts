@@ -42,7 +42,7 @@ rootfs.
   [`cortex-tts/docs/`](cortex-tts/docs/): [models](cortex-tts/docs/models.md),
   [the text pipeline](cortex-tts/docs/text-pipeline.md),
   [cloned voices](cortex-tts/docs/cloning.md),
-  [keeping up](cortex-tts/docs/streaming.md),
+  [delivering a reply](cortex-tts/docs/delivery.md),
   [running it elsewhere](cortex-tts/docs/standalone.md) and the
   [HTTP API](cortex-tts/docs/api.md). The integration's README points at the
   same pages rather than restating them: model facts live here, once.
@@ -112,7 +112,7 @@ src/cortex_tts/       ── THE HOME ASSISTANT APP ──
     ├── deps.py       AppState (holds one SpeechService) + the API-key dependency
     ├── schemas.py    request/response bodies
     ├── routes.py     every HTTP endpoint (see API Endpoints)
-    └── live.py       the WebSocket: a reply spoken while it is written, paced by
+    └── live.py       the WebSocket: a reply spoken while it is written, planned by
                       the library's planner; owns releasing audio and noticing
                       that the listener has gone
 
@@ -131,7 +131,7 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 │   ├── model.py      RenderModel: what a request costs here and how fast a voice
 │   │                 speaks, both fitted from the requests served
 │   ├── sentences.py  sentences out of text arriving in pieces
-│   └── planner.py    streaming / paced / buffered, the first request's floor
+│   └── planner.py    streaming / planned / buffered, the first request's floor
 │                     and ceiling, batches sized to the lead, the opening hold
 ├── engine/
 │   ├── base.py       the Engine and StreamingEngine protocols, Voice, errors,
@@ -220,9 +220,10 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   without it, 494 with. It cannot reach the frame that raised — that one is
   still executing — but that frame dies with its coroutine, and the frames it
   clears are the deep ones holding the sessions and the tensors.
-- **One synthesis per engine at a time.** The ONNX sessions drive a stateful
-  per-token loop, so the registry serialises calls; concurrency would corrupt
-  state, not just slow things down.
+- **One synthesis per engine at a time.** A session carries state across a
+  render — a stateful per-token loop on most engines, a fixed unmasking
+  schedule on OmniVoice — so the registry serialises calls; concurrency would
+  corrupt state, not just slow things down.
 - **A render whose listener left stops within one unit of work.** Every
   engine takes a `stop` check and asks it between the units it produces — a
   decode step (Hojo, through a marked deviation in the vendored loop), a
@@ -237,7 +238,7 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   which drains a stream without back-pressure; that is the boundary.
 - **The app paces a live reply; the integration forwards words.** Over
   `/api/speak/live` the planner in `cortex_speech/pacing` decides, per reply,
-  between streaming (batches sized to the listener's lead), paced (the whole
+  between streaming (batches sized to the listener's lead), planned (the whole
   reply known, so the first batch carries no figure: the transport banks the
   opening audio and releases it once it covers what the rest is predicted to
   lose, asked again as each chunk arrives) and buffered (an unmeasured model, or a
@@ -249,14 +250,119 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   one at 1.15× (MOSS on a CPU) lost a second per sentence at any batching;
   splitting a reply into six requests changed pitch wander by nothing
   measurable. The numbers that came out of that — a three-second floor on the
-  first request, a six-second ceiling, a four-second cap on the opening bank —
-  are in `planner.py` with the measurements beside them. How a paced reply is
-  cut is not among them: `Planner._best_batches` groups the sentences at every
+  first request and a six-second ceiling — are in `planner.py` with the
+  measurements beside them. How a planned reply is
+  cut is not among them: `Schedule.best_batches` groups the sentences at every
   limit that moves a boundary and takes the plan whose first word comes
-  soonest, a tie going to the fewest boundaries.
+  soonest, a tie going to the fewest boundaries. One length is not a
+  measurement and is not searched: `ModelSpec.batch_cap_s` is where that
+  model's fitted line stops describing it. Measured on OmniVoice against a
+  line fitted from requests under 8 s, a single request is on that line at
+  9.2 s and 19% over it by 10.7 s, 60% by 19 s and 100% by 23.6 s — so its cap
+  is nine, the longest length seen still on it, and `BATCH_CAP_S` is that
+  figure as the default for a model nobody has measured. What it buys is not
+  mainly a cheaper render (the same 20.9 s reply cost 27.9 s whole, 17.0 s in
+  halves, 16.5 s in thirds) but a hold computed from arithmetic that still
+  holds: at 10.7 s the line under-predicts the render by 1.33 s and `MARGIN_S`
+  is 0.5. **The cap belongs to the model and to the host, so it is
+  measured.** An autoregressive decode's quadratic term is attention over a
+  growing cache, and where it surfaces depends on whether the machine is short
+  of compute or of bandwidth — a figure carried from another host is a guess.
+  `RenderModel.fit` finds it: `holds_to_s` is the longest sampled request
+  whose real-time factor is still within `LINE_TOLERANCE` of the shortest
+  requests', and `_cap_from` prefers it to anything declared. Ten per cent
+  reproduces every break measured by hand on the GTX 1650 box — Hojo 40M 8%
+  over at 9.4 s, OmniVoice 1% over at 9.2 s and 19% by 10.7 s, MOSS 4% over at
+  15.0 s and 12% by 21.8 s, so nine, nine and fifteen — and the store's own
+  lines then landed on 9.18, 9.36 and 15.28. **A cap bounds the evidence that
+  would move it**, which is the difficulty: every sample was itself cut to the
+  cap, so a store left alone can confirm a break or find an earlier one and
+  never a later one. `PROBE` is the way out — where the line held to the top of
+  what was tried, the next reply may reach 1.25x past it, and the first request
+  that misses shortens `holds_to_s` again. What it does not survive is the
+  rolling window: the samples that proved a break age out after 24 requests and
+  the cap climbs until it finds it again, so it oscillates around the break
+  rather than settling on it. `ModelSpec.batch_cap_s` is what stands until this
+  host can say, and it is declared per model. MOSS
+  declares fifteen, measured the same way the default was: one request at a
+  time against the cost of the short ones, it is 4% over its line at 15.0 s
+  and 12% over by 21.8 s, then flat (+10%, +8%, +12% at 26.9, 32.3 and
+  43.7 s) — a step rather than OmniVoice's curve. The cost is not the render
+  time the default's own reasoning counted — 0.05 s a boundary there against
+  OmniVoice's 1.2 — but the cuts: a sentence over the cap is split at its
+  clause marks and every segment is terminated, so those land in the audio as
+  full stops. Measured on one 63 s reply, held to nine MOSS took ten requests
+  instead of three, 11% more render and two cuts inside sentences, for 0.09 s
+  of opening it does not gain — a chunk-streaming engine is audible from its
+  fixed cost whatever the cut, and that 0.09 s was a safety allowance
+  shrinking, not a listener hearing anything. `Schedule.speaks_at` therefore
+  compares plans on the arithmetic alone and leaves the margin and the spread
+  to `Schedule.hold_for`, which is what actually pays them; including a
+  render-scaled spread in the comparison made the search prefer thirteen
+  requests over one. A sentence longer than the cap is cut at
+  its own clause marks, since grouping can join sentences but never cut below
+  one — which is how a reply written as a single long enumeration reached the
+  renderer whole whatever limit was tried.
+- **Three deliveries, and a caller may name one.** `auto` is what anything
+  serving a listener sends, and the planner chooses; `buffered`, `planned` and
+  `streaming` insist. Insisting exists because the three cannot be compared
+  any other way — the admin UI's live panel puts all four on one reply, which
+  is how the panel answers "would another delivery have been better here". It
+  is honoured as far as the reply allows: forced streaming needs a cost line
+  before the first byte, so a host that has measured nothing still paces, and
+  a reply shorter than an opening is planned because there is no first batch
+  to send. The `done` frame rather than the request is what says how it went.
+
+  **An insisted-on delivery does not depend on when `end` arrived.** Whether
+  the words are all in at the first decision is a scheduling outcome, not a
+  property of the reply: the transport creates its reader task and then plans
+  before that task has run. So `Planner._first` hands a finished reply to
+  `_plan_whole_reply` only when streaming was not insisted on, and a caller
+  that sends the whole reply in one go gets the delivery it named. `auto` is
+  outside this by design — it decides on what is known when it is asked, and a
+  reply already written out gives it a better option than one still arriving,
+  so that caller may see either.
+
+- **Buffered is asked for, never concluded.** It is one render of the whole
+  reply, released when it is done, and it is what the integration or a caller
+  gets for setting `mode: buffered` — nothing else reaches it. The cap does
+  not apply and neither does the clause cut: both exist to buy an earlier
+  first word, and a held reply has none to buy, so the only thing a cut could
+  buy is a shorter total render (20.9 s of speech cost 27.9 s whole against
+  16.5 s in thirds) at the price of an unmeasured change in how the reply
+  sounds — every segment is terminated, so a clause mark cut at is spoken as a
+  full stop. Buffered is the one mode that makes no such trade on anyone's
+  behalf.
+- **A model this host has served nothing of is planned, not held.** Nothing
+  measured is not nothing to go on: the reply's own first request is a
+  measurement of this host, in this voice, a moment ago. So the reply is cut
+  to the cap from `spoken_seconds`, nothing is released until that first
+  request lands (`bank_needed` is infinite until then), and
+  `Planner._learn_from` reads it as the whole cost of a request that size —
+  the only reading of one point that invents no second number, and the cut
+  makes the requests that size. Simulated against the OmniVoice clone as
+  measured, the first word lands at 6.8 s against 16.5 s held, with 1.72 s of
+  lead at the tightest moment; the tolerance that represents is a host turning
+  30% dearer after the first request, where everything measurable sits at
+  0.9-7.8%. It cannot stream — sizing to the lead needs a line before the
+  first byte — and it is the first reply only: by the fourth there is a fit.
+- **An unmeasured voice borrows, it is not buffered.** Buffered is what a
+  caller asks for, not what the app concludes on its own while it still has
+  something to go on. A voice with no cost line of its own stands in
+  `RenderModel.dearest` of the model's other lines, so a reference uploaded a
+  minute ago is planned rather than held whole however long the model has been
+  in use. What makes that sound is that the slope belongs to the model and
+  only the intercept to the voice: measured on one host, MOSS ran 0.401
+  built-in against 0.360 cloned and OmniVoice 0.717 designed against 0.718 and
+  0.608 for two clones, while their intercepts ran 0.308 against 1.157 and
+  1.496 — so refusing a new clone every part of a sibling's line to protect
+  the small half left it with nothing at all. Every part is taken at its
+  dearest, and `samples` stays 0 so `StatsStore.get` and the card it feeds
+  never show a stand-in as measured. Only a model with no line of any voice on
+  this host is still buffered.
 - **At most `max_loaded_models` engines are resident**, least-recently-used
-  evicted. The 40M beside either 2 GB model costs about 2.8 GB; the 80M and
-  MOSS together about 4 GB. Those are host figures and a card's are larger:
+  evicted. What two of them cost together is in `cortex-tts/docs/models.md`.
+  Those are host figures and a card's are larger:
   measured on a 4 GB GTX 1650, MOSS alone takes 2.9 GB and its streaming path
   plateaus at 3.7 GB, which is the whole card. A model that fits in RAM is not
   therefore a model that fits on the GPU.
@@ -279,6 +385,54 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   recorder's 7.00 s limit ended between −7.1 and +7.5 dB against their own
   average and the one that finished ended at −25.3 dB, so the threshold is
   −15 dB over the last 100 ms.
+- **Streaming admission is whether the model gains lead, and nothing else.**
+  A model that does not gain lead per request would have to bank against a
+  reply whose length nobody yet knows, so it is planned once written. Nothing
+  tests the opening's own length: a gaining model opens on the margin and the
+  spread alone, which is 0.81-0.89 s across the five lines fitted on the two
+  production hosts, so a ceiling over it decides nothing and a ceiling under it
+  refuses every model. `_open` asks `gains_lead` and stops.
+- **A planned reply's hold is whatever never running dry takes.** The plan was
+  grouped for exactly that, so cutting the hold short leaves a plan chosen
+  never to stall, played in a way that does. `_plan_whole_reply` gives every
+  planned reply its deadline, chunk-streaming engines included, and
+  `Schedule.of` measures it from each engine's own first byte. The bank stays
+  as the early release for a host running ahead of its fit, and below about
+  1.2x it is what releases: the two agree to within the sampling across factors
+  0.4 to 1.2. Past that the bank stops being enough on its own — at 1.6x the
+  first request banks 13.0 s against the 17.0 s the rest is predicted to lose —
+  and the deadline is the only thing that speaks on the plan's own terms.
+
+  **unheld** is the answer for a reply too slow to wait out, and it is asked
+  for rather than concluded. Switching per reply — from a length nobody can
+  see — would give one model and one setting two behaviours, and leave anyone
+  who heard the difference no way to tell which they got or to reproduce it.
+  `Planner._plan_whole_reply` groups for whichever was named and nothing
+  else.
+
+- **A sentence end carries its own pause, and only a sentence end.** Playback
+  that catches the renderer at a sentence end is heard as a longer gap between
+  sentences, so `Schedule.of` credits `SENTENCE_PAUSE_S` against the bank
+  for every boundary already crossed and the hold covers only the remainder.
+  Measured on one 313-character reply, OmniVoice with a clone: holding until
+  nothing could ever run dry put the first word at 6.29 s, and the allowance
+  put it at 4.87 s with one 0.55 s gap, after the first sentence — so
+  `sensor.<model>_playback_margin` goes negative by whatever the allowance was
+  spent, and a reply that spends it is doing what it was asked to. The credit
+  is refused to a batch `Schedule.cut_to_cap` produced at a clause mark, because that
+  silence falls inside a sentence, and to a chunk-streaming engine, whose audio
+  arrives continuously so a dry moment lands wherever it ran out.
+  `Settings.max_sentence_pause` is the stored default, read per reply.
+- **A planned reply releases on a deadline; the bank is only the early way out.**
+  `_schedule` gives the moment playback may start, and `_apply_hold`
+  sends it as `hold_wall_s` for a timer armed on the first audio byte.
+  `bank_needed` is still asked as each request lands, so a host running ahead
+  of its fit speaks sooner — but on its own it can only ever release where a
+  request happens to land, and a whole-render engine lands one batch at a time.
+  Measured on OmniVoice with a clone, that put the first word at 8.73 s where
+  the same plan's own arithmetic allowed 5.62 s, and it hid the sentence
+  allowance completely: 8.10 s against 8.28 s with and without it, because both
+  figures were the second batch landing rather than either plan's deadline.
 - **An addon option is what a restart is the only way to change.** `config.yaml`
   carries the log level and the discovery key, and nothing else; everything a
   user tunes is a stored setting in `preferences.py`, changed in the admin UI
@@ -320,14 +474,74 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   request by every transport, with the model made resident before the clock
   starts — a load is not what a request costs, and folding one in taught the
   fit a figure no later request would reproduce. The card's figure and the planner's model are
-  both `RenderModel.fit` of those, so `per_audio` is the factor with the
-  per-request fixed cost held beside it rather than averaged into it. That
-  matters because a paced reply is many short requests of one length: an
+  both `RenderModel.fit` of those, so the per-request fixed cost is held beside
+  the slope rather than averaged into it. That
+  matters because a planned reply is many short requests of one length: an
   average of their ratios charges each the whole fixed cost and reads high,
   while the same points fitted are just the short end of a line the long
-  requests already define. It also leaves no cadence for a transport to get
+  requests already define.
+
+  **`per_audio` is the slope, not the real-time factor.** The factor is what
+  the docs say it is — render seconds over audio seconds — and with a fixed
+  cost a request also pays `fixed_s / audio`, so it falls as the request
+  grows and the two agree only where the line has no fixed cost.
+  `RenderModel.real_time_factor` is the one to show a person, quoted at
+  `audio_ref_s`, the mean request this host served; quoting a factor without
+  its length says nothing. Printing the slope under that heading read 0.29 for
+  a line whose own requests cost 1.54 times their audio. It also leaves no cadence for a transport to get
   wrong — there is no per-reply call to remember, because a request is the
-  only thing anyone records.
+  only thing anyone records. Two things a benchmark does to that store and a
+  reply does not: a run of one length leaves the fit no slope to find, so the
+  per-request cost folds into the factor and the line is right at that length
+  and wrong at every other; and back-to-back requests on an idle host
+  under-report `spread_s` by an order of magnitude — 0.017 s against the 0.156
+  and 0.305 the same model's lines carry from real traffic — which matters
+  because every hold is widened by it. Measured again on the standalone host
+  after a session of benchmark-shaped traffic: 1.652 s for one voice, 0.198 s
+  once the window had refilled with ordinary replies, and that 1.45 s was most
+  of a 5.07 s wait before a 7.6 s reply's first word.
+
+- **Scatter is not drift, and a hold has to survive the second.** `spread_s`
+  is how far the requests sit from their line; `RenderModel.drift` is how far
+  the line itself is from the requests that come after it, fitted on the older
+  half of the window and tested against the newer. They are different sizes
+  and different shapes: across eight lines on one host the scatter ran
+  2.0-9.1% of a render while the older half missed the newer half's total by
+  up to 7.9% on lines whose scatter was 2.6%.
+
+  A hold is where the difference bites, because it is the one figure that sums
+  the line's predictions over a whole reply. Scatter cancels over a sum, a
+  systematic offset does not, and the opening ends up short by that fraction
+  of the entire render — measured on a 199 s render fitted 4.2% cheap, seven
+  seconds short and three gaps in a delivery whose promise is that it never
+  stalls. So `Schedule.hold_for` costs the plan on `model.scaled(1 + drift)`.
+  Only under-prediction counts: a line that over-predicts has already bought
+  the silence. `MAX_DRIFT` bounds it, because a hold widened in proportion to
+  one bad window is minutes of it.
+
+  `bank_needed` keeps the undrifted line. It is re-asked as the reply runs and
+  has the reply's own pace to go on, which is better evidence than a window
+  measured before it started.
+
+- **The spread is charged by the render it insures, not flat.** `spread_s` is
+  one figure over a sample of requests, and charged flat a two-second render
+  pays what a ten-second one is worth. Measured on that host's own stored
+  samples the residual is closer to proportional: it grew with the render on
+  three of four cost lines (MOSS r=+0.67, the OmniVoice clone r=+0.38), and on
+  the fourth the _relative_ error was flat instead — 21.9% of the render over
+  the short half of its samples against 20.7% over the long. So `fit` records
+  `spread_ref_s`, the mean render the spread was measured over, and
+  `RenderModel.spread_for` scales between them, capped at twice the measured
+  figure because past the lengths sampled proportion is an extrapolation and a
+  hold has to end. `Schedule.of` returns the render of the batch that
+  set the deepest point, which is the one whose over-running the hold exists
+  to survive. What this does not buy is a shorter wait on a short reply: the
+  binding render there is usually the _next_ batch, not the first, so the
+  measured case moved 7.27 s to 7.24 s. It is a guard against a noisy host
+  overcharging a small request, not an optimisation. `scripts/bench_rtf.py` goes through
+  `/v1/audio/speech`, so it records like any other request and does both of those
+  things to the model it benchmarks — `DELETE /api/models/{id}/stats`
+  afterwards, on any host whose figures are in use.
 - **A model declares capabilities, not a category.** `builtin_voices`,
   `designed_voices`, `cloning`, `chunk_streaming`, `temperature`,
   `language_choice` and `style_instruction` are independent, so a model can
@@ -359,18 +573,38 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
   way out; the bytes are a stream and the receiver concatenates them, so a
   slice may fall anywhere. Fixed here so no client has to be configured for
   this server.
+- **The delivery is legible from outside, or it is not reviewable.** Over
+  `/api/speak/live` a `batch` frame says what a request carries and whether a
+  gap after it would be heard as a pause, and a `rendered` frame says what it
+  cost. Neither is recoverable from the audio, and while the opening is held
+  back there is no audio to recover anything from — which is exactly the
+  window every pacing question has been about. The admin UI's live panel draws
+  its timeline from those two and from what the audio clock did, and it plays
+  the reply while it arrives — it asks for WAV and schedules the raw PCM on a
+  `Web Audio` clock rather than feeding an `<audio>` element, because an
+  element decides the timing for itself (it buffers, it stalls, it catches up)
+  and the timing is the whole subject. A buffer that arrives after its slot is
+  a gap the listener hears and the panel measures, which is what makes the
+  chart evidence rather than a second drawing of the planner's own arithmetic.
+  A host with no audio device reports a running context whose clock never
+  advances — measured in headless Chrome — so the panel withdraws every
+  playback figure rather than count a playback that is not happening. A
+  browser reaches the socket through the handshake's subprotocol list
+  (`["cortex-tts", key]`), because a `WebSocket` constructor sets no headers;
+  behind ingress it sends none.
 - **Everything that can fail must fail before the first byte.** Once audio has
   started an error can only truncate it, so `/api/speak/live` resolves the
   model, the voice and the encoder before it sends `ready`.
 - **Chunked audio is the WebSocket's alone.** `/api/speak/live` is the only
-  route that sends audio as it is produced; `/api/speak` answers a finished
-  file, which is what Home Assistant asks for whenever it wants one — a media
-  player that does not stream, `tts_get_url`, the media browser — and what the
-  admin UI auditions a voice with. Two routes because those are two different
+  route that sends audio as it is produced, and every reply the integration
+  speaks goes through it — including a buffered one, which the app holds to
+  the end and levels like a file before releasing. `/v1/audio/speech` answers
+  a finished file for callers that are not Home Assistant. Two routes because
+  those are two different
   questions, not because one is a remnant.
 - **Streaming is a second protocol, not an optional method.** `StreamingEngine`
-  is what MOSS satisfies and the other two do not; the registry asks with
-  `isinstance` rather than making every engine decline a method it has no
+  is what MOSS and Qwen3-TTS satisfy and the rest do not; the registry asks
+  with `isinstance` rather than making every engine decline a method it has no
   answer for. The capability is therefore written down twice — `ModelSpec.chunk_streaming`
   for a caller who has loaded nothing, the method for the registry — so a test
   pins them to each other. Disagreeing is silent in the direction that matters:
@@ -409,17 +643,55 @@ src/cortex_speech/    ── THE SPEECH LIBRARY ──
 The measurements are in [`docs/models.md`](cortex-tts/docs/models.md); what
 matters to the code is:
 
-- **The model stops only when it samples an end-of-speech token.** Stopping is
-  probabilistic, so `text/pipeline.py` terminates every segment (without a stop
-  the model invented a syllable, measured) and `engine/overrun.py` judges and
-  trims what came back. A high temperature makes over-runs likelier; `0` is
-  greedy and reproducible, which is why `/api/speak` takes a per-request
-  `temperature`.
-- **The model pronounces no Arabic numeral and no symbol at all** — an
-  unexpanded digit is silent or replaced by an unrelated word. Normalisation
-  therefore belongs on for every language, and the integration must not gate
-  it on the language tag. Reported upstream as
-  [Hojo-TTS-Light#7](https://github.com/HojoAI/Hojo-TTS-Light/issues/7).
+- **What one call may produce is the model's; what it should cost is the
+  host's.** `ModelSpec.max_audio_s` is the generator's ceiling, counted in
+  audio, and it truncates rather than slowing: past it the call returns what it
+  had and the rest of the text is never spoken. Hojo declares 41 s (2048 new
+  tokens at a 50 Hz codec), MOSS 30 s (its manifest's `max_new_frames` of 375
+  at 12.5 Hz, and measured here — seven inputs from 155 to 284 Chinese
+  characters each came back as exactly 30.0 s), Qwen3-TTS 164 s (the talker's
+  2048 frames at 12.5 Hz). A model's runtime splitting the _text_ by a token
+  budget does not save it, because the budget is spent on audio.
+
+  **A model that establishes no ceiling is given no number on its behalf.**
+  OmniVoice declares neither bound, so nothing splits it by length — a figure
+  that is neither the model's nor this host's is one that will be wrong on some
+  machine, and there is already a figure that knows about the machine:
+  `batch_cap_s`, which `RenderModel.fit` replaces with this host's own as soon
+  as its samples can say anything. `max_chars_per_segment` therefore has no
+  default and is declared only where a model's tokenizer, rather than a guess,
+  says one.
+
+  The ceiling is in seconds and the splitter counts characters, so
+  `ModelSpec.segment_limit` converts with the slow-side priors in
+  `pacing.model` — priors rather than a fitted line, because a segment must not
+  depend on which voice says it. Every caller asks the spec rather than reading
+  a field: `prepare` takes the method, so the limit is read off the _prepared_
+  text, which is what the engine gets and what normalisation may have changed
+  the script of. Splitting a reply the model could have taken whole is not free
+  — every segment is terminated, so a cut lands as a full stop — and it is what
+  **buffered** exists not to do. The figures are in
+  [`docs/models.md`](cortex-tts/docs/models.md#how-much-text-one-synthesis-takes).
+
+- **An autoregressive model stops only when it samples an end-of-speech
+  token.** Stopping is therefore probabilistic, so `text/pipeline.py`
+  terminates every segment (without a stop the 40M invented a syllable,
+  measured) and `engine/overrun.py` judges and trims what came back. This is
+  the Hojo pair and Qwen3-TTS: `render_with_retries` is imported by
+  `preset.py`, `clone.py` and `qwen3.py` and nowhere else. OmniVoice decodes a
+  fixed number of steps and MOSS folds sampling into its runtime, which is why
+  neither declares `temperature`. A high temperature makes over-runs likelier
+  on the three that have one — but `0` is not the cure everywhere, because
+  Qwen3-TTS run greedy reliably fails to emit end-of-speech at all (below).
+  That is what a per-request `temperature` on a reply is for.
+- **Whether a bare digit survives is the model's; a symbol is nobody's.**
+  The two Hojo models declare `needs_number_words` — an unexpanded digit is
+  silent or replaced by an unrelated word, reported upstream as
+  [Hojo-TTS-Light#7](https://github.com/HojoAI/Hojo-TTS-Light/issues/7) — so
+  bare numbers are expanded for them by default and left alone elsewhere. Unit
+  symbols, times and dates are a separate question and a settled one: no model
+  here declares `reads_numerals`, so normalisation belongs on for every
+  language and the integration must not gate it on the language tag.
 - **The 80M's cloning fidelity is capped by its speaker representation.**
   `SPEAKER_EMB_SECONDS = 6.0`: `_encode_speaker` reads the first six seconds
   into one 2048-value vector, while `_encode_ref_codes` encodes the whole
@@ -433,7 +705,7 @@ matters to the code is:
   picking the language; those declare `language_choice = False` and the API
   refuses a `language` rather than accepting one it would ignore. Qwen3-TTS
   and OmniVoice do take one, so a request may name it and the engine narrows
-  the whole tag against that model's own list (`_narrowing` in
+  the whole tag against that model's own list (`narrowing` in
   `engine/base.py`). Unset, the engine still supplies one: Qwen3-TTS from the
   speaker's own language (upstream's recommendation) or the reference's, and
   OmniVoice from the script the text reads as.
@@ -492,9 +764,10 @@ than averaged, and that a reply split into many short requests cannot skew it.
 character at a time included; `tests/test_live.py` runs the WebSocket over a
 fake engine; `tests/test_abandon.py` pins that a lost listener stops a render
 and is never relabelled as a failure.
-Synthesis itself is exercised by hand against real bundles, and the planner's
-behaviour across render speeds by `scripts/sim_rtf.py` in the workspace's
-`tasks/streaming-segmentation-eval-2026-09-15/`.
+Synthesis itself is exercised by hand against real bundles. The planner's
+behaviour across render speeds was covered by a one-off simulation — its
+figures are in `cortex-tts/docs/delivery.md`, but the script itself was not
+kept.
 
 ## API Endpoints
 
@@ -509,12 +782,25 @@ serves the OpenAPI. Two things the code guarantees and the reference relies on:
   `ready` carries what the reply starts as, before any decision has been
   taken; `batch` carries the plan in force and goes out before each request;
   `done` replaces it with what happened, forced to `whole` whenever the reply
-  fitted one request. The integration writes its mode sensor from the last two,
+  fitted one request — `whole` is about where the reply was cut, and one
+  request has nowhere to cut. **Buffered is the exception**, because it is not
+  a statement about cutting but about releasing, and it is true of a
+  one-request reply as much as of any other. Measured on MOSS, which emits
+  audio while it renders: the same reply in one request was heard at 4.53 s
+  when that audio went out as it came and at 26.96 s when it was held to the
+  end, and reporting `whole` for both had the sensor say one word about two
+  experiences twenty-two seconds apart. The integration writes its mode sensor
+  from the last two,
   so every value either can carry has to be in that sensor's options — an enum
   handed a state outside them raises, and the reply never plays at all.
 - **`/health` carries `api_version`**, bumped when a route, field or header the
   integration reads changes shape; the release version says nothing about the
-  wire. The integration refuses to set up on a mismatch. It is 3.
+  wire. The integration refuses to set up on a mismatch. It is 4 — three
+  when the third delivery was called `paced`. Renaming it was a wire change
+  and not only a word: the integration reads that string into an enum sensor,
+  and a value outside its options raises rather than degrades, so the reply
+  would never have played at all. `planned` says what actually separates it
+  from `streaming` — when the plan is made, not how the audio goes out.
 
 ## Home Assistant Discovery
 

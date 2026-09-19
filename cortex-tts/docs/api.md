@@ -16,12 +16,20 @@ publish port 8771 under the app's **Network** settings; the address is then
 
 Everything under `/api` and `/v1` takes the key from the app's
 `discovery_api_key` option, as `Authorization: Bearer <key>` or an `X-API-Key`
-header. Requests arriving through ingress are already authenticated by Home
+header. The three FastAPI-generated pages — `/api/docs`, `/api/openapi.json`
+and `/redoc` — are registered on the app rather than on the router, so they
+answer without one. Requests arriving through ingress are already authenticated by Home
 Assistant and skip the check; ingress is recognised by the Supervisor's
 `X-Ingress-Path` header **from the Supervisor's own address**, so the header
 alone, from anywhere else, proves nothing. `/health` never needs a key. An
 empty configured key disables the check, which is only sane while the port
 stays unpublished.
+
+`/api/speak/live` takes one more form, for browsers only: a `WebSocket`
+constructor cannot set a header, so the key may be offered as the second
+entry of the handshake's subprotocol list, after `cortex-tts` —
+`new WebSocket(url, ["cortex-tts", key])`. It travels in the same handshake
+the header would have. Anything that can set headers still does.
 
 ## Endpoints
 
@@ -38,9 +46,8 @@ stays unpublished.
 | POST   | `/api/models/{id}/unload`    | evict it                                                                    |
 | GET    | `/api/voices`                | voices across downloaded models, or one model's (`?model=`)                 |
 | POST   | `/api/preview`               | run the text path only; no model is loaded                                  |
-| POST   | `/api/speak`                 | synthesise; the requested format (wav/flac/ogg/mp3) + `X-Cortex-*`          |
 | WS     | `/api/speak/live`            | a reply spoken while it is still being written; the server paces it         |
-| POST   | `/v1/audio/speech`           | the same, OpenAI-shaped                                                     |
+| POST   | `/v1/audio/speech`           | synthesise to a finished file, OpenAI-shaped                                |
 | GET    | `/api/references`            | cloned-voice reference recordings                                           |
 | POST   | `/api/references`            | add one (multipart: audio + transcript + metadata)                          |
 | PATCH  | `/api/references/{id}`       | correct a transcript, the gender label and/or the language                  |
@@ -54,7 +61,7 @@ stays unpublished.
 `GET /api/models` carries an `rtf` list per model, one entry per cost line:
 one covering the model's own voices, whose cost differs by 4%, and one per
 cloned voice, whose recording rejoins the prompt on every synthesis and so
-costs in proportion to its own length ([Keeping up](streaming.md) measures
+costs in proportion to its own length ([Delivering a reply](delivery.md) measures
 it). Each entry names its `kind`
 (`builtin`, `designed` or `reference`) and, on a clone, the `voice` it was
 measured with. The rest is the render model fitted to the requests this host
@@ -65,7 +72,7 @@ a card shows), `fixed_s` (what a request costs before any audio), `spread_s`,
 The list is empty until three requests have gone into that cost line, because
 two points are not a line — three renders across any of a model's own voices,
 or three of one clone. `per_audio` rather than an average of what each
-request cost: a reply the server paced into ten short requests would otherwise
+request cost: a reply the server planned into ten short requests would otherwise
 read as ten slow ones, each charged the whole fixed cost.
 
 `DELETE /api/models/{id}/stats` forgets one model's and `DELETE /api/stats`
@@ -74,27 +81,29 @@ describe a machine that is gone.
 
 ## Speaking
 
-`POST /api/speak` takes JSON:
+Every reply is spoken over `/api/speak/live`, whose opening frame settles
+what follows. These are its fields, and `/api/preview` takes the text ones so
+a caller can see what the model would be asked to say without loading it.
 
 | Field             | Default              | Meaning                                                                                                                                                                      |
 | ----------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `text`            | required             | Up to 4000 characters, in whatever script you write                                                                                                                          |
 | `model`           | the default          | A model id from `/api/models`                                                                                                                                                |
 | `voice`           | the default          | A voice id the model offers; the first available when it does not                                                                                                            |
-| `format`          | `wav`                | `wav`, `flac`, `ogg` or `mp3`                                                                                                                                                |
+| `format`          | `mp3`                | `mp3`, or `wav` for raw PCM. A stream cannot declare a length, so the file containers are `/v1/audio/speech`'s                                                               |
 | `normalize_text`  | `true`               | Expand numbers, units, dates and clock literals ([why](text-pipeline.md))                                                                                                    |
 | `expand_numbers`  | model decides        | Also read a bare number — no unit, clock or date around it — as a quantity. Left out: on for a model that cannot say a digit (Hojo), off otherwise ([why](text-pipeline.md)) |
 | `convert_script`  | the language decides | Chinese only: Traditional → Simplified glyph conversion                                                                                                                      |
 | `taiwan_readings` | the language decides | Chinese only: respell words Taiwan reads differently ([why](text-pipeline.md))                                                                                               |
-| `normalize_level` | `true`               | Peak-normalise the finished waveform                                                                                                                                         |
 | `temperature`     | the setting          | Sampling temperature 0–1, for models that have one                                                                                                                           |
 | `language`        | the voice's          | The language of the text, as a whole tag: picks how it is prepared on every model, and which language the model reads it in on those that take one                           |
 | `instruct`        | none                 | A plain-language instruction beside the voice, for the one model that does                                                                                                   |
 
-The response is the audio, with the measurements in headers:
-`X-Cortex-Model`, `X-Cortex-Voice`, `X-Cortex-Inference-Ms`,
-`X-Cortex-Audio-Seconds`, `X-Cortex-Rtf`, `X-Cortex-Segments`. These are what
-the integration's diagnostic sensors report for a buffered reply.
+A live reply reports its measurements in frames rather than headers — see
+`rendered` and `done` below. `/v1/audio/speech`, which answers a finished
+file, carries them as `X-Cortex-Model`, `X-Cortex-Voice`,
+`X-Cortex-Inference-Ms`, `X-Cortex-Audio-Seconds`, `X-Cortex-Rtf` and
+`X-Cortex-Segments`.
 
 ### Speaking live
 
@@ -103,29 +112,33 @@ written — a conversation agent's answer arriving a few words at a time. The
 client sends the words as they come; the server decides when to render what,
 how much to hold back before the first sound, and whether to stream at all,
 from what it has measured about the model on this host
-([how](streaming.md)). Authenticate the handshake the same way as any request.
+([how](delivery.md)). Authenticate the handshake the same way as any request.
 
 Client → server, JSON text frames:
 
-| Frame    | Fields                                                                                                                                                                              |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start`  | first, once: `model`, `voice`, `format` (`mp3` default, `wav`), `mode` (`auto` default, `buffered`), and the text switches, `temperature`, `language`, `instruct` from `/api/speak` |
-| `text`   | `text`: the next piece of the reply, as written, up to 4000 characters a frame; any number of these                                                                                 |
-| `end`    | the reply is complete                                                                                                                                                               |
-| `cancel` | stop: the listener is gone. Rendering stops at the engine's next checkpoint                                                                                                         |
+| Frame    | Fields                                                                                                                                                                                                                                                                                                                                                                |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start`  | first, once: `model`, `voice`, `format` (`mp3` default, `wav`), `mode` (`auto` default; `buffered`, `planned`, `unheld` and `streaming` insist on one delivery rather than letting the server choose, honoured as far as the reply allows — `done` says what actually happened), and the text switches, `temperature`, `language` and `instruct` from the table above |
+| `text`   | `text`: the next piece of the reply, as written, up to 4000 characters a frame; any number of these                                                                                                                                                                                                                                                                   |
+| `end`    | the reply is complete                                                                                                                                                                                                                                                                                                                                                 |
+| `cancel` | stop: the listener is gone. Rendering stops at the engine's next checkpoint                                                                                                                                                                                                                                                                                           |
 
 Server → client:
 
-| Frame   | Fields                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ready` | once the model and voice are settled and the engine is resident: `model`, `voice`, `bitrate`, `sample_rate`, `chunk_streaming`, and `mode` — `buffered` when the caller asked for it or this host has not measured this model, `streaming` otherwise; which pacing it settles on is the first `batch` frame's to say                                                                                                                                                                                                                                  |
-| `batch` | before each request is rendered: `index` (from 1) and `mode` (the plan in force: `streaming`, `paced` or `buffered`), so a listener can show how the reply is being delivered before its first audio                                                                                                                                                                                                                                                                                                                                                  |
-| binary  | audio, in the requested container, in playback order; nothing else needs decoding. One frame carries at most 512 KB and a slice may fall anywhere, so concatenate the frames and decode the stream rather than the frame                                                                                                                                                                                                                                                                                                                              |
-| `done`  | last: `mode` as it was actually spoken: `whole` (one request, however it was planned), `streaming`, `paced` or `buffered`, `batches` (how many requests the reply was rendered in), `audio_seconds`, `first_audio_ms`, `min_lead_s` (the least audio the listener held; negative means it ran dry), `render_ms` and `rtf` (what the model was busy for, and that over the audio — not what the listener waited), `load_ms` (making the model resident, paid before `ready`), `writer_ms` (from `ready` to `end`: how long the writer took), `wall_ms` |
-| `error` | `code` and `message`, then the socket closes: 1008 for a refusal before `ready`, 1011 for a failure after it. A refusal a route would also raise carries that route's code                                                                                                                                                                                                                                                                                                                                                                            |
+| Frame      | Fields                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ready`    | once the model and voice are settled and the engine is resident: `model`, `voice`, `bitrate`, `sample_rate`, `chunk_streaming`, and `mode` — `buffered` only when the caller asked for it, `streaming` otherwise; which planning it settles on is the first `batch` frame's to say                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `batch`    | before each request is rendered: `index` (from 1), `mode` (the plan in force: `streaming`, `planned`, `unheld` or `buffered`), `text` (what this request carries, as the writer wrote it) and `ends_sentence` (whether a gap after it would be heard as a pause between sentences rather than as broken), so a listener can show how the reply is being cut and delivered before its first audio                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| binary     | audio, in the requested container, in playback order; nothing else needs decoding. One frame carries at most 512 KB and a slice may fall anywhere, so concatenate the frames and decode the stream rather than the frame                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `rendered` | after each request: `index`, `audio_s` and `render_ms` — what that request actually cost. `batch` can only carry the plan, and while audio is held back there are no bytes to read a cost from                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `done`     | last: `mode` as it was actually spoken: `whole` (one request, however it was planned — `whole` is about where the reply was cut, and one request has nowhere to cut), `streaming`, `planned`, or `buffered`, which survives the count because it is about releasing rather than cutting: one request heard as it rendered and the same one held to the end are twenty-two seconds apart, `batches` (how many requests the reply was rendered in), `audio_seconds`, `first_audio_ms`, `min_lead_s` (the least audio the listener held; negative means it ran dry), `render_ms` and `rtf` (what the model was busy for, and that over the audio — not what the listener waited), `load_ms` (making the model resident, paid before `ready`), `writer_ms` (from `ready` to `end`: how long the writer took), `wall_ms` |
+| `error`    | `code` and `message`, then the socket closes: 1008 for a refusal before `ready`, 1011 for a failure after it. A refusal a route would also raise carries that route's code                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Closing the socket, sending `cancel`, or not reading for fifteen seconds all
-stop the render. Nothing an abandoned reply cost is recorded against the model.
+stop the render. The request being rendered when that happens teaches the
+model nothing; requests the same reply already finished were recorded as each
+one landed. `POST /v1/audio/speech` is the other way round — it is one
+request, so an abandoned one records nothing.
 
 `POST /v1/audio/speech` is the OpenAI shape — `input`, `model`, `voice`,
 `response_format` — so existing clients work unchanged. `response_format`
@@ -224,7 +237,7 @@ whole list, reported under `ignored`.
 `GET /health` reports `api_version`, bumped when a route, field or header a
 client reads changes shape; the app's release `version`, reported beside it,
 says nothing about the wire. A client compares the number before trusting
-anything else it reads. `api_version` is 3.
+anything else it reads. `api_version` is 4.
 
 A field a client did not know about is not a change of shape, so adding one
 does not bump it — the integration refuses to set up on a mismatch, and

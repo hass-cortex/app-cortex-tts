@@ -47,8 +47,9 @@ it is audible.
 _Avoid_: "output" (the output is audio), "result"
 
 **Segment**:
-One synthesis-sized piece of Prepared text — at most `MAX_CHARS_PER_SEGMENT`
-characters, one model call, and always ending in sentence-final punctuation
+One synthesis-sized piece of Prepared text — at most what
+`ModelSpec.segment_limit` allows for that text, which is the chosen model's own
+ceiling and not one figure for all of them, one model call, and always ending in sentence-final punctuation
 because without it the model invents a syllable. A segment may hold several
 sentences, and one long sentence may be split across several segments.
 _Avoid_: "sentence" (a **Sentence** is what the splitter sees on the way in; a
@@ -113,25 +114,29 @@ _Avoid_: "built-in model" (nothing is built in)
 **Engine**:
 A loaded model behind the `Engine` protocol (`PresetEngine` for the 40M,
 `CloneEngine` for the 80M, `MossEngine` for MOSS-TTS-Nano and `Qwen3TtsEngine`
-for both Qwen3-TTS entries, which also satisfy `StreamingEngine`, and
-`OmniVoiceEngine` for OmniVoice). One engine serves one synthesis at a time:
-the ONNX sessions drive a stateful per-token loop.
+for both Qwen3-TTS entries; `MossEngine` and `Qwen3TtsEngine` are the two that
+also satisfy `StreamingEngine`). One engine serves one synthesis at a time,
+because a session carries state across a render — a per-token loop on most
+engines, a fixed unmasking schedule on OmniVoice.
 _Avoid_: "model" for the loaded thing — a _model_ is files on disk, an _engine_
-is the runtime holding ~780 MB or ~2 GB of it
+is the runtime holding its share of memory, which is per model in
+`docs/models.md`
 
 **Resident**:
 Loaded into memory. The registry keeps at most `max_loaded_models` engines and
-evicts the least recently used: the 40M beside either 2 GB model costs about
-2.8 GB, the 80M and MOSS together about 4 GB.
+evicts the least recently used; what two resident engines cost together is in
+`docs/models.md`.
 _Avoid_: "cached" (eviction is about memory, not staleness)
 
 **Voice**:
 A selectable speaker, always belonging to exactly one model. On the 40M a
 built-in slot (`hojo_zh_f_01`); on the 80M a **Reference recording**; on MOSS
-and Qwen3-TTS either (`Yuewen`, `vivian`, or a reference); on OmniVoice a
-**Designed voice** or a reference. The voice is also the only place a language
-is declared — the model takes no language parameter, so picking the voice is
-picking the language.
+either (`Yuewen` or a reference); on Qwen3-TTS one or the other, since its
+built-in and cloning entries are separate catalog ids (`vivian`, or a
+reference); on OmniVoice a **Designed voice** or a reference. On a model
+without `language_choice` the voice is also the only place a language is
+declared, so picking the voice is picking the language; Qwen3-TTS and
+OmniVoice take one per request instead.
 _Avoid_: "speaker" (that is the embedding slot inside the model)
 
 **Designed voice**:
@@ -193,7 +198,8 @@ standard deviation of what that line failed to explain held beside it
 The cost pools across a model's own voices and is kept apart for each clone;
 the speech rate never pools. Fitted from the requests the host actually
 served, never carried from another machine; `None` until three of them exist,
-and a reply to an unmeasured model is **buffered**.
+and a reply to an unmeasured model is **planned** from its own first
+request.
 _Avoid_: "RTF" for the whole thing (the factor is one of its five numbers,
 and the spread beside it is what every opening hold is widened by)
 
@@ -211,25 +217,30 @@ audio seconds for a chunk-streaming engine, a wall-clock delay after the first
 audio for one that hands requests over whole, or everything until the end.
 _Avoid_: "head start" (the integration's old user-facing number)
 
-**Streaming / paced / buffered**:
+**Streaming / planned / buffered**:
 The three plans for a live reply, chosen per reply and named in the `batch`
 frame that precedes each request. The `ready` frame carries only what the
 reply starts as, before any decision has been taken. _Streaming_: the model
-gains lead on every request, so batches go out as the lead allows. _Paced_:
+gains lead on every request, so batches go out as the lead allows. _Planned_:
 the whole reply was known before anything had to be sent, or the model cannot
 gain lead, so every batch is known — and the wait is not a figure but a bank,
 released once it covers what the requests still to come are predicted to
-lose. _Buffered_: nothing until it is all rendered — an unmeasured model, or
-a caller that asked.
+lose. _Buffered_: nothing until it is all rendered, in one request — only a caller
+that asked for it, never a conclusion the app draws. A model this host has
+measured nothing of is planned from its own first request instead.
 
 **Whole**:
 What the `done` frame reports, in place of the plan, when the reply fit one
-request: nothing was streamed or paced, whichever plan was in force. The
-`done` outcomes are therefore _whole_, _streaming_ and _paced_. The
-integration's mode sensor carries a fourth, _buffered_, because it is written
-from the `batch` frame first and corrected by `done` afterwards — and an enum
-sensor handed a state outside its options raises, so the reply never plays at
-all. Its setting stays automatic or buffered.
+request: nothing was streamed or planned, whichever plan was in force.
+_Buffered_ is the exception, because it is a statement about releasing rather
+than cutting: it survives the count, and one request heard as it rendered and
+the same one held to the end are twenty-two seconds apart. The `done` outcomes
+are therefore _whole_, _streaming_, _planned_, _unheld_ and _buffered_ — the
+five the integration's mode sensor carries, and an enum sensor handed a state
+outside its options raises, so the reply never plays at all. Its **setting**
+offers four of those words: _auto_, and the three outcomes a person can ask
+for outright. _streaming_ and _whole_ are outcomes only — one is where `auto`
+arrives, the other is any plan that turned out to fit a single request.
 
 **Abandoned**:
 A render whose listener left. Every engine takes a `stop` check and asks it
@@ -292,8 +303,17 @@ waits for a restart.
 - A **Voice** belongs to exactly one model. Where it comes from is the model's
   `builtin_voices` and `cloning` capabilities, which are independent: the 40M
   has only bundled voices, the 80M only reference recordings, and MOSS has
-  both, so its voice list is the two concatenated. `chunk_streaming` and
-  `temperature` are the other two capabilities, equally independent.
+  both, so its voice list is the two concatenated. `ModelSpec` carries nine
+  such booleans in all — beside these two, `designed_voices`,
+  `chunk_streaming`, `temperature`, `language_choice`, `style_instruction`,
+  `reads_numerals` and `needs_number_words` — every one independent. Two
+  further capabilities are figures rather than flags: `batch_cap_s`, the most
+  speech one request should carry on this host, and `max_audio_s`, the most
+  audio one call can produce before the rest of the text goes unspoken. Only a
+  model that establishes a ceiling declares one — `max_chars_per_segment` has
+  no default either, and `ModelSpec.segment_limit` turns whichever bounds exist
+  into a length of text for the script at hand; `docs/models.md` is where each
+  is measured.
 - The **Text path** runs before any engine is touched, so `/api/preview`
   answers without loading a model at all — which is what makes the admin UI's
   right-hand column free.
@@ -328,10 +348,11 @@ waits for a restart.
   bare verb.
 - **"streaming" is four things.** Home Assistant's _streaming input_ (the
   conversation agent feeding text in as it is written), a **Live reply**
-  (text in, audio out over one socket, paced by the app), **Chunk streaming**
+  (text in, audio out over one socket, planned by the app), **Chunk streaming**
   (an engine emitting audio mid-segment, which MOSS and Qwen3-TTS can do), and
-  _streaming_ the plan — one of the three ways a live reply is spoken, beside
-  _paced_ and _buffered_. Name which one, every time: a sensor whose name
+  _streaming_ the plan — one of the four ways a live reply is spoken, beside
+  _planned_, _unheld_ and _buffered_. Name which one, every time: a sensor
+  whose name
   promised the first and whose clock measured another was unreadable.
 - **"voice" without a model is meaningless.** `hojo_zh_f_01` exists on the 40M
   and nowhere else, `Yuewen` only on MOSS, and the 80M's voices are whatever

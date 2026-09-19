@@ -4,31 +4,43 @@ On-device text-to-speech for Home Assistant. A catalog of models running
 locally — on the CPU, or on a GPU where one answers — no cloud, no API bill,
 with the Chinese text front-end none of them ship.
 
-| Model               | Voices                            | Languages  | Relative cost | Memory  | Disk   |
-| ------------------- | --------------------------------- | ---------- | ------------- | ------- | ------ |
-| **Hojo 40M**        | 15 built in (2 zh, 13 en)         | zh, en     | **0.55**      | ~780 MB | 241 MB |
-| **MOSS Nano**       | 18 built in (6 zh) **and** clones | zh, en, ja | 1.07          | ~2 GB   | 729 MB |
-| **Hojo 80M**        | clones only                       | zh, en     | 1.51          | ~2 GB   | 437 MB |
-| **OmniVoice**       | 9 designed **and** clones         | 800+       | 3.83          | ~1.1 GB | 1.4 GB |
-| **Qwen3-TTS**       | 9 built in (5 zh)                 | 10         | 6.72          | ~1.6 GB | 1.0 GB |
-| **Qwen3-TTS clone** | clones only                       | 10         | 6.87          | ~2.1 GB | 1.3 GB |
+Cheapest first:
 
-**That column is not a prediction about your machine.** It is render time over
-audio time with every model measured on one host — the reference host in
-[Models][models], which is where the figures are measured and edited; this
-table quotes them. It ranks the models against each other and nothing else;
-below 1 means the model outran playback _there_. Once the app is running, each model's card shows what **your** host
-measured, or says it has none yet: one figure covering the model's own
-voices, which cost the same, and one for each cloned voice, whose recording
-rejoins the prompt on every synthesis and so costs by its own length. The card fits the per-second part apart
-from the fixed cost every request pays, so it reads a little under this column
-even on the same machine — level with it where a model's requests are all about one length, because there is no slope to fit and the plain ratio is taken instead. Each figure needs three requests before it says anything, and a reply spoken as it is written is rendered in several of them. Start at the top of the table; the lower
-entries want a faster machine or a GPU. Which model suits what, how each one
-clones, and what a faster CPU or a GPU changes is in [Models][models].
+| Model               | Voices                            | Languages  |
+| ------------------- | --------------------------------- | ---------- |
+| **Hojo 40M**        | 15 built in (2 zh, 13 en)         | zh, en     |
+| **MOSS Nano**       | 18 built in (6 zh) **and** clones | zh, en, ja |
+| **Hojo 80M**        | clones only                       | zh, en     |
+| **OmniVoice**       | 9 designed **and** clones         | 800+       |
+| **Qwen3-TTS**       | 9 built in (5 zh)                 | 10         |
+| **Qwen3-TTS clone** | clones only                       | 10         |
 
-None of these models can pronounce Traditional Chinese glyphs or an Arabic
-numeral, so the app rewrites both before synthesis — 32% character error rate
-against 4% once converted. [The text pipeline][text] shows exactly what the
+**What each one costs is in [Models][models]** — real-time factor, memory and
+disk, every model measured on one reference host so the figures rank against
+each other. They are measured and edited there and nowhere else, so this page
+does not repeat them. **They are not a prediction about your machine** either;
+they say only which model outran playback _there_.
+
+Once the app is running, each model's card shows what **your** host measured,
+or says it has none yet: one figure covering the model's own voices, which
+cost the same, and one for each cloned voice, whose recording rejoins the
+prompt on every synthesis and so costs by its own length. The card fits the
+per-second part apart from the fixed cost every request pays, so it reads a
+little under the reference figure even on the same machine — level with it
+where a model's requests are all about one length, because there is no slope
+to fit and the plain ratio is taken instead. Each figure needs three requests
+before it says anything, and a reply spoken as it is written is rendered in
+several of them.
+
+Start at the top of the table; the lower entries want a faster machine or a
+GPU. Which model suits what, how each one clones, and what a faster CPU or a
+GPU changes is in [Models][models].
+
+None of these models reads a unit symbol, a time or a date, and Traditional
+Chinese glyphs come out as the wrong words, so the app rewrites all of it
+before synthesis — 32% character error rate against 4% once converted,
+measured on the 40M. A bare digit is the one part that depends on the model:
+only the two Hojo models cannot say one. [The text pipeline][text] shows exactly what the
 model is asked to say, and the app's own UI shows it beside the composer.
 
 ## Installation
@@ -44,8 +56,10 @@ model is asked to say, and the app's own UI shows it beside the composer.
 ### 1. Download a model
 
 Nothing is baked into the image, so the first download takes a minute or two.
-Open the panel → **Models** → **Download** on the **40M**. Start there; the
-table above says why.
+With **Preload** on — it is on by default — the app fetches the default model,
+the **40M**, by itself on first start and there is nothing to do but wait. To
+take a different one, or if you turned Preload off, open the panel →
+**Models** → **Download**. Start with the 40M; the table above says why.
 
 ### 2. Install the companion integration
 
@@ -110,8 +124,9 @@ your network; every request then needs the key above.
 
 ## Settings
 
-Open the app and scroll to **Settings**, in two groups: the defaults a request
-falls back to when it names none, and what this host spends on answering it.
+Open the app and scroll to **Settings**, in three groups: the defaults a
+request falls back to when it names none, what the text switches default to
+per model and language, and what this host spends on answering it.
 Two of these — threads and execution provider — are bound when ONNX Runtime
 creates a session, so changing one drops whatever is resident and the next
 reply loads it again; a smaller **Models kept in memory** evicts down to the
@@ -126,7 +141,7 @@ empty always takes the first.
 ### Preload
 
 Load the default model when the app starts rather than on the first request.
-It takes that model's memory from the moment the app comes up whether or not
+On by default. It takes that model's memory from the moment the app comes up whether or not
 anything asks it to speak, and in exchange the first reply does not pay the
 load — several seconds on the larger models.
 
@@ -169,8 +184,9 @@ the full effect waits for a restart of the app.
 
 ### Execution provider
 
-`auto` takes a GPU when one answers and the CPU when none does. `cuda` refuses
-to fall back, which is what you want on a host that has a card: a GPU build
+`auto` takes a GPU when one answers and the CPU when none does. `cpu` never
+looks for one, which is what you want where a card is present but spoken for.
+`cuda` refuses to fall back, which is what you want on a host that has a card: a GPU build
 quietly running on the CPU is the failure nobody notices. What each loaded
 model actually got is printed on its card, beside **loaded**.
 
@@ -181,11 +197,10 @@ Home Assistant OS ships no NVIDIA driver.
 
 ### Models kept in memory
 
-How many models may stay in memory at once. The 40M needs about 780 MB and
-every other entry between 1.1 and 2.1 GB — the table above has each — so the
-default of `1` swaps between them on demand. Raise it to `2` only if the host
-can hold both at once: about 2.8 GB for the 40M beside a larger one, about
-4 GB for two larger ones.
+How many models may stay in memory at once. What each one holds, and what two
+of them hold together, is in [Models][models]; the default of `1` swaps
+between them on demand. Raise it to `2` only if the host can hold both at
+once.
 
 ### Unload when idle
 
@@ -194,6 +209,15 @@ default, keeps it until something evicts it. The next reply then pays the load
 again — about a second for the 40M, about 4 s for MOSS on a GPU. Worth setting
 on a card another workload shares: MOSS holds about 2.5 GB of a GPU for as
 long as it is resident, whether or not anyone is speaking.
+
+### Silence a sentence end may carry
+
+Seconds, `1.5` by default, 0–10. Playback that catches the renderer at a
+sentence end is heard as a longer pause between sentences, which is where a
+pause belongs — so the opening need not be held against it, and the first word
+comes sooner. A cut inside a sentence never earns this, and neither does a
+model that streams audio while it renders. `0` holds until nothing can ever run
+dry.
 
 ### Text switches, per model and language
 
@@ -224,8 +248,10 @@ playback on this host, and the app's estimate of it was too optimistic. Read
 The app learns from every request and paces the next reply from what it
 measured, and it watches the reply in hand too: once one has produced a second
 of audio its own pace is believed over the fit's, so a reply that meets a busy
-moment widens its own hold. One stutter usually corrects itself; a model that keeps losing
-can be set to buffered in the integration ([Keeping up][streaming]).
+moment widens its own hold. One stutter usually corrects itself; a model that keeps losing is one to name
+a **Speaking mode** for in the integration rather than leave on automatic —
+_speak as it renders_ for the first word as soon as one exists, _wait for the whole reply_
+for no stutter at all ([Keeping up][streaming]).
 
 **Chinese sounds like the wrong words.** Check that `convert_script` was not
 turned off for that call. The integration turns it on whenever the pipeline
@@ -250,10 +276,13 @@ knows its numbers are counts sets `expand_numbers: true` under `options:`,
 and a template that formats a sensor should write the unit. An unusual unit
 passes through unexpanded; the unit table is fixed, so it needs a code change.
 
-**The voice adds a syllable that is not in the text.** The model stops only
-when it samples an end-of-speech token, so stopping is probabilistic. Set
-**Sampling temperature** to 0 for output that is identical every time and
-never over-runs.
+**The voice adds a syllable that is not in the text.** A model that samples
+its own end-of-speech token stops probabilistically. On the **Hojo** models,
+setting **Sampling temperature** to 0 gives output that is identical every
+time and never over-runs, at the cost of flatter delivery. Do **not** do it on
+**Qwen3-TTS** — run greedy it reliably fails to stop at all, and a short line
+can run to minutes of invented audio. **MOSS** and **OmniVoice** have no
+temperature setting to change.
 
 **First request is slow, later ones are fast.** That is the model load. Turn on
 **Preload**, or raise **Models kept in memory** if
@@ -290,7 +319,7 @@ you switch between models often.
 [models]: https://github.com/hass-cortex/app-cortex-tts/blob/main/cortex-tts/docs/models.md
 [text]: https://github.com/hass-cortex/app-cortex-tts/blob/main/cortex-tts/docs/text-pipeline.md
 [cloning]: https://github.com/hass-cortex/app-cortex-tts/blob/main/cortex-tts/docs/cloning.md
-[streaming]: https://github.com/hass-cortex/app-cortex-tts/blob/main/cortex-tts/docs/streaming.md
+[streaming]: https://github.com/hass-cortex/app-cortex-tts/blob/main/cortex-tts/docs/delivery.md
 [api]: https://github.com/hass-cortex/app-cortex-tts/blob/main/cortex-tts/docs/api.md
 [standalone]: https://github.com/hass-cortex/app-cortex-tts/blob/main/cortex-tts/docs/standalone.md
 [integration]: https://github.com/hass-cortex/cortex-tts#readme
