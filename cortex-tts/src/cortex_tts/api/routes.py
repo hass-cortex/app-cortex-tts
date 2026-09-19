@@ -219,6 +219,7 @@ def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
         builtin_voices=spec.builtin_voices,
         designed_voices=spec.designed_voices,
         cloning=spec.cloning,
+        reads_reference_transcript=spec.reads_reference_transcript,
         chunk_streaming=spec.chunk_streaming,
         temperature=spec.temperature,
         language_choice=spec.language_choice,
@@ -779,7 +780,12 @@ async def add_reference(
     audio: UploadFile = File(...),
     state: AppState = Depends(get_state),
 ) -> ReferenceOut:
-    """Store a reference recording and make it available as a cloned voice."""
+    """Store a reference recording and make it available as a cloned voice.
+
+    The transcript is stored as sent — the same rule the PATCH applies. It
+    is what tells the model which sounds map to which text, so rewriting it
+    would be claiming the recording says something it does not.
+    """
     if audio.size is not None and audio.size > MAX_REFERENCE_UPLOAD_BYTES:
         raise http_error(
             http_status.HTTP_413_CONTENT_TOO_LARGE,
@@ -821,15 +827,20 @@ async def update_reference(
     body: ReferenceUpdate,
     state: AppState = Depends(get_state),
 ) -> ReferenceOut:
-    """Correct a reference's transcript, gender label or language.
+    """Correct a reference's name, transcript, gender label or language.
 
     A transcript that does not match the recording degrades the clone without
     any error, so this is the fix for a mistyped or mis-transcribed upload —
     without asking for the audio again.
+
+    The id is not among them and never will be: it is what a synthesis
+    request names, so a stored pipeline or automation holds it. The name is
+    free precisely because nothing keys on it.
     """
     try:
         reference = state.references.update(
             reference_id,
+            name=body.name,
             transcript=body.transcript,
             gender=body.gender,
             language=body.language,
@@ -840,8 +851,9 @@ async def update_reference(
         raise http_error(
             http_status.HTTP_400_BAD_REQUEST, "BAD_REFERENCE", str(err)
         ) from err
-    if body.gender is not None or body.language is not None:
-        # Both are part of what the voice picker shows.
+    if body.name is not None or body.gender is not None or body.language is not None:
+        # All three are part of what the voice picker shows; a corrected
+        # transcript changes nothing anyone can see there.
         await fire_models_changed(f"reference-updated:{reference_id}")
     return _reference_out(reference)
 

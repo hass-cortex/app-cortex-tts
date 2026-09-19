@@ -75,6 +75,7 @@ rootfs.
     ├── Dockerfile             uv-installed venv baked in; source copied on top
     ├── DOCS.md                HA App Store documentation page
     ├── docs/                  reference pages DOCS.md and the integration link to
+    ├── samples/               one reference recording, to try cloning with; see its README
     ├── scripts/bench_rtf.py   where docs/models.md's figures come from (one host, one text set)
     ├── README.md              Supervisor reads this as `long_description`
     ├── CONTEXT.md             domain vocabulary

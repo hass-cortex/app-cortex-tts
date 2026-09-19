@@ -16,7 +16,7 @@ import pytest
 
 from cortex_speech import BY_ID
 from cortex_speech.catalog import model_dir
-from cortex_speech.engine.base import Voice
+from cortex_speech.engine.base import Voice, reference_voices
 from cortex_speech.engine.registry import EngineRegistry, ModelNotReadyError
 from cortex_speech.references import ReferenceStore
 
@@ -98,3 +98,41 @@ class TestCloningVoices:
 
         voices = await registry.voices("moss-nano")
         assert [v.source for v in voices] == ["builtin"]
+
+
+class TestRenamedReferences:
+    """A reference's name is display only, which is what makes it editable."""
+
+    def test_a_rename_reaches_the_voice_and_leaves_the_id_alone(
+        self, tmp_path: Path, reference_wav: bytes
+    ) -> None:
+        """The id is what a synthesis request names; only the label moves."""
+        store = ReferenceStore(tmp_path / "references")
+        added = store.add(name="Anna Su", transcript="你好。", audio=reference_wav)
+        assert added.id == "anna-su"
+
+        store.update(added.id, name="蘇小姐")
+
+        assert reference_voices(store) == [
+            Voice(
+                id="anna-su",
+                name="蘇小姐",
+                language="zh",
+                gender="unknown",
+                source="reference",
+            )
+        ]
+
+    def test_a_rename_survives_a_reopen(
+        self, tmp_path: Path, reference_wav: bytes
+    ) -> None:
+        """The index is what a restart reads back, so the rename is in it."""
+        root = tmp_path / "references"
+        added = ReferenceStore(root).add(
+            name="Anna Su", transcript="你好。", audio=reference_wav
+        )
+        ReferenceStore(root).update(added.id, name="蘇小姐")
+
+        reopened = ReferenceStore(root).get(added.id)
+        assert reopened is not None
+        assert (reopened.id, reopened.name) == ("anna-su", "蘇小姐")

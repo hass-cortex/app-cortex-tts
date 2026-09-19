@@ -18,6 +18,10 @@ Neither alone defines a voice.
 Over the API this is `POST /api/references` (multipart: `audio`, `transcript`,
 `name`, `language`, `gender`); see [the API](api.md).
 
+To hear what a clone sounds like before recording your own, the repository
+ships one: [`samples/`](../samples/) has a 6-second Taiwanese Mandarin clip
+and the exact fields to upload it with.
+
 ### Why the end matters, and why a cut one is refused
 
 A clip cut by a clock rather than by the speaker is refused on upload: "the
@@ -82,29 +86,64 @@ these files are disposable and are recreated on demand.
 ## The transcript
 
 The transcript is not a label. A wrong one degrades the clone **with no error
-at all** — it still produces confident audio, just less like the person. If
+at all** — it still produces confident audio, just less like the person.
+
+Not every cloning model is told what the recording says — which one is not,
+and what that changes, is in [Models](models.md#moss-tts-nano). It makes no
+difference to how you fill the field: one recording is a voice on all of
+them at once, so the strict case is the one to type for. If
 you do not have the text, any decent speech-to-text will do; correcting it
 afterwards costs nothing, because editing a transcript (`PATCH
 /api/references/{id}`, or the panel's **Save transcript**) does not re-upload
-the audio. The same request corrects the gender label (`female`, `male`,
-`unknown`), which the panel shows as a select beside the id; it is a label for
-the voice picker and nothing else reads it. It also corrects the language —
-which is not only a label, because changing it runs the stored transcript
-through the text pipeline again.
+the audio. The same request corrects the display name and the gender label
+(`female`, `male`, `unknown`), which the panel shows as a select beside the
+id; it is a label for the voice picker and nothing else reads it. It also
+corrects the language — which is not only a label, because changing it runs
+the stored transcript through the text pipeline again.
 
-What you type is the _raw transcript_; what the model is told is the same text
-after the [text pipeline](text-pipeline.md) has run over it, so it is in the
-same script and normalisation as the text it will be asked to say. The panel
-shows the raw one for editing and reports the other on save. A transcript with
-nothing pronounceable in it — punctuation only — is refused before the
-recording is written.
+**The transcript is stored exactly as you type it** — on upload and on edit
+alike, because a transcript means the same thing whichever way it was written.
+The panel asks for what the recording says, and a pass that rewrites the
+answer is deciding the recording said something else, which is the one error a
+reference cannot survive. Changing the **language** leaves it alone for the
+same reason: the tag says what was spoken, it is not an instruction to
+re-transcribe the recording. A transcript with nothing pronounceable in it —
+punctuation only — is still refused before the recording is written.
 
-## The name
+**Write Chinese in Simplified.** Nothing converts it for you any more, and
+no model here fails on Traditional glyphs — they read them as the wrong
+sounds, which is worse, because a transcript the model mis-reads teaches the
+clone the wrong mapping from the audio. Measured over 14 sentences, Traditional
+text scored 32% character error against 4% converted; the figures and the
+reasoning are in [the text pipeline](text-pipeline.md#traditional-chinese).
 
-The name you give it becomes the voice id, slugified, and it does not change
-afterwards. A name in Latin letters gives a readable id; one in Chinese alone
+This gives something up, and it is worth knowing which way. A reference whose
+speaker says the Taiwan _xì yáng_ for 夕陽 is read by a mainland-trained model
+as _xī yáng_, and writing the transcript 系阳 would have made its reading match
+the recording. The [text pipeline](text-pipeline.md) can do that substitution
+automatically — but it is a guess, and a measured-unreliable one: it carries
+`在为` and matches characters rather than words, so a reference reading
+正在為你查詢 came back as `正在维你查询`, claiming a _wéi_ the recording does
+not contain. A wrong rewrite and a missing one are the same failure — the
+transcript stops matching the audio — so the one that is not a guess wins. If
+you want the stand-in, type it: 系阳 in the box is stored as 系阳.
+
+## The name and the id
+
+The name you give it seeds the voice **id**, slugified — and the id does not
+change afterwards, ever. The id is what a synthesis request names, so a
+pipeline or an automation that speaks in this voice holds it; re-deriving it
+from a new name would break every one of them without an error anywhere. A
+name in Latin letters therefore gives a readable id; one in Chinese alone
 folds to something like `voice-a0a77df0`, which still works but is not what you
-want to read in an automation.
+want to read in an automation. Pick the name with that in mind at upload,
+because it is the only moment it decides anything.
+
+The **name** itself is free, and editable: type over it in the panel (it saves
+when you leave the box) or send `PATCH /api/references/{id}` with a `name`.
+Nothing keys on it — it is what the voice picker shows and no more — so the
+two part company at the first rename, which is intended. Renaming to nothing
+leaves the voice known by its id.
 
 ## What to expect
 

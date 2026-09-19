@@ -422,13 +422,12 @@ class TestTranscriptEditing:
     error, so editing it has to be possible without re-uploading the audio.
     """
 
-    def _store(self, tmp_path):
+    def _wav(self) -> bytes:
+        import io
+
         import numpy as np
         import soundfile as sf
 
-        from cortex_speech.references import ReferenceStore
-
-        store = ReferenceStore(tmp_path)
         # Ends in silence: the validator refuses a recording cut mid-word.
         tone = np.concatenate(
             [
@@ -436,20 +435,89 @@ class TestTranscriptEditing:
                 np.zeros(24000 // 2),
             ]
         ).astype("float32")
-        buffer = __import__("io").BytesIO()
+        buffer = io.BytesIO()
         sf.write(buffer, tone, 24000, format="WAV", subtype="PCM_16")
+        return buffer.getvalue()
+
+    def _store(self, tmp_path):
+        from cortex_speech.references import ReferenceStore
+
+        store = ReferenceStore(tmp_path)
         reference = store.add(
-            name="Test Voice", transcript="客廳的燈打開了。", audio=buffer.getvalue()
+            name="Test Voice", transcript="客廳的燈打開了。", audio=self._wav()
         )
         return store, reference
 
-    def test_edit_replaces_the_prepared_and_raw_forms(self, tmp_path) -> None:
+    def test_an_edit_is_stored_as_typed(self, tmp_path) -> None:
+        """What the panel asks for is what the model is told, unrewritten."""
         store, reference = self._store(tmp_path)
 
         updated = store.update(reference.id, transcript="溫度是 26.5°C。")
 
         assert updated.raw_transcript == "溫度是 26.5°C。"
-        assert updated.transcript == "温度是摄氏二十六点五度。"
+        assert updated.transcript == "溫度是 26.5°C。"
+
+    def test_an_edit_is_not_rewritten_by_the_readings_table(self, tmp_path) -> None:
+        """The failure this rule exists for.
+
+        `在为` is in the Taiwan readings table, and the substituter scans
+        characters rather than words — so it matched across the `正在 | 为你`
+        boundary and stored a transcript claiming the recording said wéi
+        where it says wèi. A transcript that does not match the audio
+        degrades the clone and reports nothing.
+        """
+        store, reference = self._store(tmp_path)
+
+        updated = store.update(
+            reference.id, transcript="正在為你查詢。", language="zh-TW"
+        )
+
+        assert updated.transcript == "正在為你查詢。"
+        assert "维" not in updated.transcript
+
+    def test_changing_the_language_leaves_the_transcript_alone(self, tmp_path) -> None:
+        """The tag says what was spoken; it is not a re-transcribe request."""
+        store, reference = self._store(tmp_path)
+        before = store.update(reference.id, transcript="正在為你查詢。")
+
+        updated = store.update(reference.id, language="zh-TW")
+
+        assert updated.language == "zh-TW"
+        assert updated.transcript == before.transcript
+        assert updated.raw_transcript == before.raw_transcript
+
+    def test_an_upload_is_stored_as_typed(self, tmp_path) -> None:
+        """The upload path follows the same rule the edit path does."""
+        store, _ = self._store(tmp_path)
+        buffer = self._wav()
+
+        added = store.add(
+            name="Uploaded",
+            transcript="正在為你查詢。",
+            audio=buffer,
+            language="zh-TW",
+        )
+
+        assert added.transcript == "正在為你查詢。"
+        assert added.raw_transcript == "正在為你查詢。"
+
+    def test_upload_and_edit_agree(self, tmp_path) -> None:
+        """One field, one rule.
+
+        The stored transcript must not depend on which call wrote it: the
+        same text uploaded and typed into the panel is the same recording
+        described the same way, and a reader comparing two cards cannot see
+        which button was pressed.
+        """
+        store, existing = self._store(tmp_path)
+        text = "正在為你查詢。"
+
+        uploaded = store.add(
+            name="Uploaded", transcript=text, audio=self._wav(), language="zh-TW"
+        )
+        edited = store.update(existing.id, transcript=text, language="zh-TW")
+
+        assert uploaded.transcript == edited.transcript == text
 
     def test_edit_keeps_the_audio_fingerprint(self, tmp_path) -> None:
         # Cached encodings derive from the recording alone; changing the text

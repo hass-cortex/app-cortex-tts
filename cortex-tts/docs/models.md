@@ -435,6 +435,13 @@ downloaded together.
 - **How it clones**: there is no speaker encoder. The whole recording (2–20 s),
   as codec tokens, is the voice, so its length and content do shape the clone.
   Every second is paid for once per reference, then cached.
+- **The only cloning model that never reads the transcript**
+  (`reads_reference_transcript` is false for it alone). It conditions on the
+  codec frames and its synthesis call takes no prompt text, so what you type
+  reaches it nowhere — where the other three are told what the recording
+  says and a careless transcript shows. Type it properly anyway: one
+  recording is a voice on every cloning model at once, so the transcript
+  MOSS ignores is the one Qwen3-TTS learns from.
 - **Chunk streaming**: audio leaves before the sentence is finished —
   measured over a chunked stream, the first audio arrives 143–178 ms after the
   request against 1.8 s for the whole utterance. Qwen3-TTS streams too, but

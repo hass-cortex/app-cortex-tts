@@ -182,6 +182,24 @@ function renderCards() {
   const pill = document.getElementById("clonesModels");
   if (pill) pill.textContent = cloners.length ? cloners.join(" · ") : "none";
 
+  // And which of them never see the transcript, read off the capability
+  // rather than written into the guide: a line naming a model by hand is
+  // wrong the first time the line-up changes, and this one would be wrong
+  // in the direction that tells someone their typing matters when it does
+  // not reach the model at all.
+  const deaf = models
+    .filter((m) => m.cloning && !m.reads_reference_transcript)
+    .map((m) => m.name);
+  const note = document.getElementById("clonesTranscriptNote");
+  if (note) {
+    note.textContent = deaf.length
+      ? `${deaf.join(", ")} ${deaf.length > 1 ? "are" : "is"} the exception: `
+        + "conditioned on the recording alone, never told what it says. Type "
+        + "it properly anyway — one recording is a voice on every cloning "
+        + "model at once."
+      : "";
+  }
+
   const loaded = models.filter((m) => m.loaded);
   $("status").innerHTML = loaded.length
     ? loaded.map((m) => `<span class="pill ok">${esc(shortName(m))} loaded</span>`).join("")

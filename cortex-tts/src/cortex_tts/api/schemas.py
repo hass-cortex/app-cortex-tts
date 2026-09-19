@@ -100,6 +100,10 @@ class ModelOut(BaseModel):
     builtin_voices: bool
     designed_voices: bool
     cloning: bool
+    reads_reference_transcript: bool
+    """Whether a clone's transcript reaches this model. Only meaningful with
+    `cloning`: every cloning engine takes the recording, not every one is
+    also told what it says."""
     chunk_streaming: bool
     temperature: bool
     language_choice: bool
@@ -245,6 +249,9 @@ class ReferenceOut(BaseModel):
     id: str
     name: str
     transcript: str
+    """What the model is told the recording says, stored as it was typed.
+    References written before that rule may carry a pipeline-prepared form
+    here that differs from `raw_transcript`."""
     raw_transcript: str
     language: str
     gender: str
@@ -256,13 +263,22 @@ Gender = Literal["female", "male", "unknown"]
 
 
 class ReferenceUpdate(BaseModel):
-    """Correct the transcript, gender label or language of a stored reference.
+    """Correct the name, transcript, gender label or language of a reference.
 
-    The audio is not resent — only the text the model is told it contains,
-    how the voice is labelled in the picker, or which language it speaks.
+    The audio is not resent — only what the voice is called, the text the
+    model is told it contains, how the voice is labelled in the picker, or
+    which language it speaks.
     """
 
+    name: str | None = Field(None, max_length=200)
+    """What the voice is called in the picker. The id is not re-derived from
+    it: that is what a synthesis request names, so renaming must not move it.
+    Sent empty, the reference falls back to being known by its id."""
     transcript: str | None = Field(None, min_length=1, max_length=2000)
+    """Exactly what the recording says. Stored as sent: the text pipeline
+    runs only to refuse a transcript with nothing pronounceable in it, never
+    to rewrite one. A transcript that does not match the audio degrades the
+    clone and reports nothing, so the caller's wording wins."""
     gender: Gender | None = None
     language: str | None = Field(None, min_length=1, max_length=32)
     """A whole tag: `zh-TW` makes the voice Taiwanese, so text read in it
@@ -270,8 +286,15 @@ class ReferenceUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _something_to_change(self) -> ReferenceUpdate:
-        if self.transcript is None and self.gender is None and self.language is None:
-            raise ValueError("send a transcript, a gender, a language, or several")
+        if (
+            self.name is None
+            and self.transcript is None
+            and self.gender is None
+            and self.language is None
+        ):
+            raise ValueError(
+                "send a name, a transcript, a gender, a language, or several"
+            )
         return self
 
 

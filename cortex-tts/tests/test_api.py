@@ -644,9 +644,13 @@ class TestReferences:
     def test_a_reference_s_language_is_a_whole_tag_and_editable(
         self, client: TestClient, reference_wav: bytes
     ) -> None:
-        # Every glyph here is the same in both scripts, so zh says only
-        # Chinese and the transcript keeps the mainland reading; zh-TW is a
-        # Taiwanese voice, and re-preparing it respells 垃圾.
+        """The tag is stored whole, and moving it rewrites nothing.
+
+        A reference's language says what the recording was spoken in. It
+        picks the text pipeline for whatever the voice is later asked to
+        say — but the transcript is a record of the audio, so re-tagging it
+        must not re-transcribe it.
+        """
         added = client.post(
             "/api/references",
             headers=AUTH,
@@ -660,9 +664,48 @@ class TestReferences:
         )
         assert moved.status_code == 200
         assert moved.json()["language"] == "zh-TW"
-        assert moved.json()["transcript"] == "今天要到乐色。"
+        assert moved.json()["transcript"] == added["transcript"]
         listed = client.get("/api/references", headers=AUTH).json()
         assert next(r for r in listed if r["id"] == added["id"])["language"] == "zh-TW"
+
+    def test_renaming_a_reference_does_not_move_its_id(
+        self, client: TestClient, reference_wav: bytes
+    ) -> None:
+        """The id is what a stored pipeline holds, so a rename must not touch it."""
+        added = client.post(
+            "/api/references",
+            headers=AUTH,
+            data={"name": "Anna Su", "transcript": "你好。"},
+            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
+        ).json()
+        assert added["id"] == "anna-su"
+
+        renamed = client.patch(
+            f"/api/references/{added['id']}", headers=AUTH, json={"name": "蘇小姐"}
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "蘇小姐"
+        assert renamed.json()["id"] == "anna-su"
+        # And nothing else moved with it.
+        assert renamed.json()["raw_transcript"] == "你好。"
+        listed = client.get("/api/references", headers=AUTH).json()
+        assert [(r["id"], r["name"]) for r in listed] == [("anna-su", "蘇小姐")]
+
+    def test_a_name_erased_falls_back_to_the_id(
+        self, client: TestClient, reference_wav: bytes
+    ) -> None:
+        """The same rule the upload has: no name of its own means the id."""
+        added = client.post(
+            "/api/references",
+            headers=AUTH,
+            data={"name": "Anna Su", "transcript": "你好。"},
+            files={"audio": ("ref.wav", reference_wav, "audio/wav")},
+        ).json()
+        renamed = client.patch(
+            f"/api/references/{added['id']}", headers=AUTH, json={"name": "   "}
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "anna-su"
 
 
 class TestTemperatureOption:

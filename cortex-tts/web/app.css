@@ -186,7 +186,11 @@ audio{width:100%}
 .ref{background:var(--surface-2);border-radius:6px;padding:12px 14px;
   display:flex;flex-direction:column;gap:9px}
 .ref-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
-.ref-name{font-weight:600}
+/* The card's heading and also the one thing on it a person renames, so it
+   stays heading-sized and wears the same quiet frame as the labels beside
+   it rather than a full-width form field. */
+.ref-name{font-weight:600;width:auto;max-width:22ch;padding:1px 6px;
+  background:transparent}
 .ref-meta{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);
   margin-left:auto;white-space:nowrap}
 .ref-id{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}

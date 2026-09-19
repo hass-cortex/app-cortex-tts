@@ -54,6 +54,45 @@ class TestCapabilities:
         assert not spec.cloning
         assert not spec.chunk_streaming
 
+    # Which engine module implements each cloning backend. A flag that says
+    # what the model is told has to be checked against the code that tells
+    # it, or the two drift and the disagreement is silent: the UI promises
+    # the transcript matters, the model never sees it.
+    CLONING_BACKENDS = {
+        "hojo-clone": "clone.py",
+        "moss": "moss.py",
+        "qwen3-tts": "qwen3.py",
+        "omnivoice": "omni.py",
+    }
+
+    def test_the_transcript_flag_matches_what_the_engine_passes(self) -> None:
+        """`reads_reference_transcript` against the code that would read it.
+
+        MOSS conditions on codec frames and its synthesis call takes no
+        prompt text, so the transcript reaches it nowhere; the other three
+        hand it to the model. Declared wrong in the permissive direction,
+        the panel tells someone their transcript matters when nothing will
+        ever read it.
+        """
+        source_dir = Path(__file__).resolve().parent.parent / "src/cortex_speech/engine"
+        for spec in CATALOG:
+            if not spec.cloning:
+                continue
+            module = self.CLONING_BACKENDS[spec.backend]
+            source = (source_dir / module).read_text(encoding="utf-8")
+            passes_it = ".transcript" in source
+            assert passes_it == spec.reads_reference_transcript, (
+                f"{spec.id}: declares reads_reference_transcript="
+                f"{spec.reads_reference_transcript} but {module} "
+                f"{'does' if passes_it else 'does not'} reference it"
+            )
+
+    def test_only_a_cloning_model_claims_to_read_a_transcript(self) -> None:
+        """The flag is meaningless without a reference to have one."""
+        for spec in CATALOG:
+            if spec.reads_reference_transcript:
+                assert spec.cloning, f"{spec.id} reads a transcript it can never get"
+
     def test_shipped_models_declare_what_they_actually_do(self) -> None:
         """The 40M has voices, the 80M clones; neither streams sub-sentence."""
         preset = BY_ID["hojo-40m"]

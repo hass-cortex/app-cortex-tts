@@ -2,7 +2,7 @@
 // transcripts that tell it which sounds map to which text.
 
 import { call, json } from "./api.js";
-import { $, confirmStep, esc, languageName, languageOptions, msg } from "./dom.js";
+import { $, confirmStep, esc, fillPicker, languageName, languageOptions, msg } from "./dom.js";
 import { cloningLanguages, refreshVoices, selectedLanguage } from "./models.js";
 
 // A transcript must be readable in full without an inner scrollbar, so the
@@ -24,30 +24,42 @@ const deleteLabel = (id) => (armed.has(id) ? "Confirm delete" : "Delete");
 
 // The tags the cloning models read, plus the stored one if it is not among
 // them: a tag typed over the API must not be silently relabelled by opening
-// the page.
-function languageChoices(current) {
+// the page. `data-language` carries that stored tag, because the options are
+// filled after the card is drawn rather than with it.
+function fillLanguage(select) {
+  const stored = select.dataset.language;
   const codes = cloningLanguages();
-  if (current && !codes.includes(current)) codes.unshift(current);
-  return codes
-    .map((c) => `<option value="${esc(c)}"${c === current ? " selected" : ""}>${esc(languageName(c))}</option>`)
-    .join("");
+  if (stored && !codes.includes(stored)) codes.unshift(stored);
+  fillPicker(select, languageOptions(codes), (c) => codes.includes(c), stored);
+}
+
+// Every card's language select, refilled from the current vocabulary.
+//
+// A card is drawn from `/references`, which answers on its own fetch and
+// normally before `/models` — so at the moment the markup is built there is
+// no line-up to read the languages off, and a select filled there and never
+// again would offer the one tag it already has and could not be changed.
+function fillRowLanguages() {
+  for (const select of $("refs").querySelectorAll("select[data-ref-language]")) {
+    fillLanguage(select);
+  }
 }
 
 const row = (r) => `
   <div class="ref">
     <div class="ref-head">
-      <span class="ref-name">${esc(r.name)}</span>
-      <span class="ref-id">${esc(r.id)}</span>
-      <select class="ref-gender" data-ref-gender="${esc(r.id)}" aria-label="Gender label of ${esc(r.name)}">
+      <input class="ref-name" data-ref-name="${esc(r.id)}" value="${esc(r.name)}"
+        aria-label="Name of ${esc(r.id)}" spellcheck="false">
+      <span class="ref-id" title="The id a synthesis request names. It is fixed: renaming the voice does not move it.">${esc(r.id)}</span>
+      <select class="ref-gender" data-ref-gender="${esc(r.id)}" aria-label="Gender label of ${esc(r.id)}">
         ${GENDERS.map((g) => `<option value="${g}"${g === r.gender ? " selected" : ""}>${g}</option>`).join("")}
       </select>
-      <select class="ref-gender" data-ref-language="${esc(r.id)}" aria-label="Language of ${esc(r.name)}">
-        ${languageChoices(r.language)}
-      </select>
+      <select class="ref-gender" data-ref-language="${esc(r.id)}" data-language="${esc(r.language)}"
+        aria-label="Language of ${esc(r.id)}"></select>
       <span class="ref-meta">${Number(r.seconds).toFixed(1)}s</span>
     </div>
     <textarea class="tr-edit" data-ref-tr="${esc(r.id)}" rows="1"
-      aria-label="Transcript of ${esc(r.name)}" spellcheck="false">${esc(r.raw_transcript)}</textarea>
+      aria-label="Transcript of ${esc(r.id)}" spellcheck="false">${esc(r.raw_transcript)}</textarea>
     <div class="tr-hint" data-base="tr-hint" data-ref-hint="${esc(r.id)}" aria-live="polite"></div>
     <audio class="ref-audio" data-ref-audio="${esc(r.id)}" controls hidden></audio>
     <div class="actions">
@@ -63,13 +75,16 @@ const row = (r) => `
 let refLangChosen = false;
 
 /**
- * Offer the languages the cloning models actually read, and follow the
- * Language control above until the reader overrides it here.
+ * Point every language control in this panel at the cloning line-up.
  *
- * Two links to that control. The vocabulary is the same one — which languages
- * can be cloned into changes when the line-up does, so it is read off the
- * models rather than hard-coded. And the value follows it, because someone
- * who has just filtered the voices to Japanese is usually about to upload a
+ * Which languages can be cloned into changes when the line-up does, so the
+ * vocabulary is read off the models rather than hard-coded — and the models
+ * arrive on a fetch of their own, after the cards are drawn. Whoever tells us
+ * the line-up changed also un-freezes the cards.
+ *
+ * The upload form has a second link to the Language control above: its value
+ * follows the filter until the reader overrides it here, because someone who
+ * has just filtered the voices to Japanese is usually about to upload a
  * Japanese recording.
  */
 export function syncLanguages() {
@@ -81,6 +96,7 @@ export function syncLanguages() {
   const wanted = refLangChosen ? picker.value : selectedLanguage();
   picker.innerHTML = languageOptions(codes);
   picker.value = codes.includes(wanted) ? wanted : codes[0] || "";
+  fillRowLanguages();
 }
 
 export async function refresh() {
@@ -89,6 +105,7 @@ export async function refresh() {
     ? refs.map(row).join("")
     : '<div class="empty">No cloned voices yet.</div>';
   $("refs").querySelectorAll("textarea.tr-edit").forEach(autoGrow);
+  fillRowLanguages();
   saved.clear();
   for (const r of refs) saved.set(r.id, r.raw_transcript);
 }
@@ -112,8 +129,8 @@ async function saveTranscript(button) {
     box.value = body.raw_transcript;
     autoGrow(box);
     box.classList.remove("dirty");
-    // Show what the model will actually be told, not just what was typed.
-    msg(hintFor(id), `Saved. The model is told: ${body.transcript}`, "ok");
+    // Nothing to quote back: the box is what the model is told, verbatim.
+    msg(hintFor(id), "Saved. The model is told exactly this.", "ok");
   } catch (err) {
     msg(hintFor(id), err.message, "err");
     button.disabled = false;
@@ -130,12 +147,37 @@ async function saveLanguage(select) {
       body: JSON.stringify({ language: select.value }),
     });
     const body = await res.json();
+    select.dataset.language = body.language;
     select.value = body.language;
+    // The server may have tidied the tag into one the list does not carry.
+    fillLanguage(select);
     msg(hintFor(id), `Speaks ${languageName(body.language)}.`, "ok");
   } catch (err) {
     msg(hintFor(id), err.message, "err");
   } finally {
     select.disabled = false;
+  }
+}
+
+async function saveName(input) {
+  const id = input.dataset.refName;
+  input.disabled = true;
+  try {
+    const res = await call(`/references/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: input.value }),
+    });
+    const body = await res.json();
+    // An empty name is not a failure: the voice falls back to its id, which
+    // is the same rule the upload form has.
+    input.value = body.name;
+    msg(hintFor(id), `Now called ${body.name}.`, "ok");
+    await refreshVoices();
+  } catch (err) {
+    msg(hintFor(id), err.message, "err");
+  } finally {
+    input.disabled = false;
   }
 }
 
@@ -215,7 +257,12 @@ export function init() {
     msg(hintFor(id), "");
   });
 
+  // A short field commits on `change` — blur or Enter — the way the two
+  // selects beside it do. Only the transcript earns a button of its own: it
+  // is long enough that leaving the box is not a decision to save it.
   $("refs").addEventListener("change", (e) => {
+    const name = e.target.closest("input[data-ref-name]");
+    if (name) saveName(name);
     const gender = e.target.closest("select[data-ref-gender]");
     if (gender) saveGender(gender);
     const language = e.target.closest("select[data-ref-language]");

@@ -50,7 +50,7 @@ the header would have. Anything that can set headers still does.
 | POST   | `/v1/audio/speech`           | synthesise to a finished file, OpenAI-shaped                                |
 | GET    | `/api/references`            | cloned-voice reference recordings                                           |
 | POST   | `/api/references`            | add one (multipart: audio + transcript + metadata)                          |
-| PATCH  | `/api/references/{id}`       | correct a transcript, the gender label and/or the language                  |
+| PATCH  | `/api/references/{id}`       | correct the name, a transcript, the gender label and/or the language        |
 | DELETE | `/api/references/{id}`       | remove it, and the voice it defined                                         |
 | GET    | `/api/references/{id}/audio` | play the recording back                                                     |
 | DELETE | `/api/models/{id}/stats`     | forget what this host measured for one model; returns it                    |

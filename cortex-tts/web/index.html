@@ -282,14 +282,23 @@
     teaches the model that sentences end mid-word.</li>
     <li><b>Clean beats long.</b> The 80M reads only the first six seconds;
     MOSS, OmniVoice and Qwen3-TTS read all of it.</li>
-    <li><b>Type exactly what is said.</b> The transcript is what tells the
-    model which sounds map to which text.</li>
+    <li><b>Type exactly what is said.</b> The transcript is what tells a
+    model which sounds map to which text, and a wrong one degrades the clone
+    with no error. It is stored as you type it — nothing here rewrites it.
+    <span id="clonesTranscriptNote"></span></li>
+    <li><b>Chinese goes in Simplified.</b> Every model reads Traditional
+    glyphs as the wrong sounds rather than failing on them (measured: 32%
+    character error against 4% converted), so convert the transcript
+    yourself. Every model also reads mainland-standard, so where Taiwan says
+    it differently, write a homophone that forces the reading: 夕阳 comes out
+    <i>xī yáng</i>, and 系阳 — not a word, but read <i>xì yáng</i> — is how
+    you get the Taiwanese one.</li>
     <li><b>Label the language whole.</b> A voice tagged zh-TW is Taiwanese, so
     text read in it gets Taiwan readings by default; zh promises only Chinese.</li>
   </ul>
   <div id="refs" class="refs"></div>
   <div class="addform">
-    <div class="grow"><label for="refName">Name</label><input id="refName" placeholder="客廳女聲"></div>
+    <div class="grow"><label for="refName">Name</label><input id="refName" placeholder="Living room voice"></div>
     <!-- Filled from the cloning models' own languages; see clones.js. -->
     <div class="fixed"><label for="refLang">Language</label>
       <select id="refLang"></select></div>
@@ -297,7 +306,7 @@
       <select id="refGender"><option value="female">female</option><option value="male">male</option><option value="unknown">unknown</option></select></div>
   </div>
   <div class="field" style="margin-top:12px"><label for="refText">Transcript of the recording</label>
-    <textarea id="refText" placeholder="逐字打出錄音裡說的話"></textarea></div>
+    <textarea id="refText" placeholder="exactly what the recording says"></textarea></div>
   <div class="addform">
     <div class="grow"><label for="refFile">Recording (WAV / FLAC / OGG)</label>
       <input type="file" id="refFile" accept=".wav,.flac,.ogg,audio/*"></div>

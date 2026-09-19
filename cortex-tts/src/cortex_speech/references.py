@@ -89,7 +89,9 @@ class Reference:
     Attributes:
         id: Stable voice id used in synthesis requests.
         name: Display name.
-        transcript: Model-ready transcript (normalised and script-converted).
+        transcript: What the model is told the recording says. Stored as
+            typed; references written before that rule may carry a prepared
+            form here that differs from `raw_transcript`.
         raw_transcript: What the user typed, kept for display and editing.
         language: Language tag of the recording, whole: ``zh-TW`` is a
             Taiwanese voice, ``zh`` only says Chinese.
@@ -200,6 +202,22 @@ class ReferenceStore:
     ) -> Reference:
         """Validate and store a reference recording.
 
+        **The transcript is stored as typed**, the same rule `update`
+        applies: a transcript means the same thing whichever call wrote it,
+        and a text pass that rewrites it is deciding the recording said
+        something else. The pipeline still runs, but only to refuse one with
+        nothing pronounceable in it.
+
+        What this gives up is a rewrite that would have been right —
+        `夕陽` stored as `系阳` makes a mainland-trained model read the
+        Taiwan xì yáng, matching the recording. That is a guess, and it is
+        measurably unreliable: the readings table matched `在为` across the
+        `正在 | 为你` boundary and stored a transcript claiming wéi where
+        the recording says wèi. Both a wrong rewrite and a missing one are
+        the same failure — the transcript no longer matches the audio — so
+        the one that is not a guess wins, and someone who wants the stand-in
+        can type it.
+
         Args:
             name: Display name; also seeds the voice id.
             transcript: Exactly what is said in the recording.
@@ -219,8 +237,11 @@ class ReferenceStore:
         language = _tag(language)
         # Validated before anything is written: a wrong transcript degrades
         # the clone with no error, and a rejected upload must leave no file.
-        prepared = prepared_text(prepare(transcript, TextOptions(), language))
-        if not prepared:
+        # The prepared form is only asked whether anything pronounceable is
+        # in there — what is stored is the text itself, the same rule `update`
+        # applies, because a transcript means the same thing whichever call
+        # wrote it.
+        if not prepared_text(prepare(transcript, TextOptions(), language)):
             raise ReferenceError("the transcript has no pronounceable content")
 
         samples, sample_rate = _decode(audio)
@@ -259,7 +280,7 @@ class ReferenceStore:
             reference = Reference(
                 id=reference_id,
                 name=name.strip() or reference_id,
-                transcript=prepared,
+                transcript=transcript.strip(),
                 raw_transcript=transcript.strip(),
                 language=language,
                 gender=gender,
@@ -279,21 +300,42 @@ class ReferenceStore:
         self,
         reference_id: str,
         *,
+        name: str | None = None,
         transcript: str | None = None,
         gender: str | None = None,
         language: str | None = None,
     ) -> Reference:
-        """Correct the transcript, gender label or language of a stored reference.
+        """Correct the name, transcript, gender label or language of a reference.
 
         The recording is untouched, so the cloned voice keeps its timbre; only
         what the model is told the recording contains, or how the voice is
-        labelled, changes. A transcript is run through the same pipeline as a
-        fresh upload, because the model needs it in the same script and
-        normalisation as the target text — and a new language re-runs it,
-        since the tag is what picks that pipeline.
+        labelled, changes.
+
+        **An edited transcript is stored as typed.** The panel asks for
+        exactly what the recording says, and a pass that rewrites the answer
+        is deciding the recording said something else — which is the one
+        error a reference cannot survive, because a transcript that does not
+        match the audio degrades the clone and reports nothing. The pipeline
+        still runs, but only to refuse a transcript with nothing pronounceable
+        in it. Measured: a reference reading `正在為你查詢` was stored as
+        `正在维你查询` because the readings table matched `在为` across the
+        `正在 | 为你` boundary — the recording says wèi and the stored
+        transcript claimed wéi.
+
+        **Changing the language leaves the transcript alone**, for the same
+        reason. The tag says what was spoken; it is not an instruction to
+        re-transcribe the recording.
+
+        **A rename does not re-slug the id.** The id is what a synthesis
+        request names, so a stored automation or pipeline holds it; deriving
+        it from the name again would break every caller silently, which is
+        exactly the failure the name is free of. The two part company at the
+        first rename and that is intended.
 
         Args:
             reference_id: Which reference to edit.
+            name: Display name. Empty means the reference has none of its
+                own and is known by its id, the same rule as on the way in.
             transcript: Corrected wording of what the recording says.
             gender: One of `GENDERS`.
             language: The recording's language tag, whole.
@@ -310,22 +352,26 @@ class ReferenceStore:
         existing = self.get(reference_id)
         if existing is None:
             raise KeyError(reference_id)
+        if name is not None:
+            changes["name"] = name.strip() or reference_id
         if language is not None:
             language = _tag(language)
             if not language:
                 raise ReferenceError("a reference needs a language")
             changes["language"] = language
-        if transcript is None and language is not None:
-            transcript = existing.raw_transcript
         if transcript is not None:
             if not transcript.strip():
                 raise ReferenceError("a reference needs the transcript of what is said")
-            prepared = prepared_text(
+            # Validated through the pipeline, stored as typed. The result is
+            # only asked whether anything pronounceable is in there; what the
+            # model is told is the text itself.
+            if not prepared_text(
                 prepare(transcript, TextOptions(), language or existing.language)
-            )
-            if not prepared:
+            ):
                 raise ReferenceError("the transcript has no pronounceable content")
-            changes.update(transcript=prepared, raw_transcript=transcript.strip())
+            changes.update(
+                transcript=transcript.strip(), raw_transcript=transcript.strip()
+            )
         if gender is not None:
             if gender not in GENDERS:
                 raise ReferenceError(f"gender must be one of {', '.join(GENDERS)}")

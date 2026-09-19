@@ -64,6 +64,14 @@ class ModelSpec:
             from `builtin_voices` because the two cost different amounts to
             render and a caller has to be able to tell them apart — see
             `Voice.source`. No model has both.
+        reads_reference_transcript: Whether a clone's transcript reaches the
+            model. Only meaningful with `cloning`. Every cloning engine here
+            takes the recording, but only some are also told what it says:
+            MOSS conditions on the codec frames alone and its synthesis call
+            has no prompt text, so a transcript typed for it changes nothing.
+            The field is still validated and still required, because one
+            recording is a voice on every cloning model at once — the
+            transcript MOSS ignores is the one Qwen3-TTS learns from.
         cloning: Whether a reference recording can condition it. Independent
             of ``builtin_voices``: a model may have both, one, or neither.
         chunk_streaming: Whether the engine can emit audio before the whole
@@ -121,6 +129,7 @@ class ModelSpec:
     builtin_voices: bool = False
     designed_voices: bool = False
     cloning: bool = False
+    reads_reference_transcript: bool = False
     chunk_streaming: bool = False
     temperature: bool = False
     language_choice: bool = False
@@ -244,6 +253,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         size_mb=437,
         languages=("zh", "en"),
         cloning=True,
+        reads_reference_transcript=True,
         temperature=True,
         rss_hint_mb=2050,
     ),
@@ -376,6 +386,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         size_mb=1271,
         languages=("zh", "en", "ja", "ko", "de", "fr", "it", "pt", "ru", "es"),
         cloning=True,
+        reads_reference_transcript=True,
         chunk_streaming=True,
         temperature=True,
         language_choice=True,
@@ -422,6 +433,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         languages=("zh", "en", "ja", "ko", "de", "fr", "it", "pt", "ru", "es"),
         designed_voices=True,
         cloning=True,
+        reads_reference_transcript=True,
         language_choice=True,
         rss_hint_mb=1140,
     ),
