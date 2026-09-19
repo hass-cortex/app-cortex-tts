@@ -13,6 +13,26 @@ export function esc(value) {
 
 export const pressed = (el) => el.getAttribute("aria-pressed") === "true";
 
+/**
+ * Pause every player on the page but the one that just started.
+ *
+ * Two panels own audio elements — the composer's, and one per cloned voice
+ * so that hearing a recording does not discard the utterance rendered above
+ * — and they play into the same room. Two at once is never what the press
+ * meant, and the second is heard as the first having gone wrong.
+ *
+ * Bound to `play` in the capture phase, so it holds however playback began:
+ * a panel's own button, the element's native controls, or a script. `play`
+ * does not bubble, which is why it is captured rather than listened for at
+ * the target. Neither panel calls it, and neither has to know the other
+ * exists.
+ */
+export function soloAudio(keep) {
+  for (const el of document.querySelectorAll("audio")) {
+    if (el !== keep) el.pause();
+  }
+}
+
 // What a language code is called. The catalog ships codes; a list of bare
 // codes is not a thing anyone can choose from. Shared rather than per-panel
 // so the voice picker, the language picker and the upload form cannot end up

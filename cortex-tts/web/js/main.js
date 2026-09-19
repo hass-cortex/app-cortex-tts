@@ -1,7 +1,7 @@
 // Composition root: it owns the wiring between panels, and nothing else.
 
 import { url } from "./api.js";
-import { $, msg, pressed } from "./dom.js";
+import { $, msg, pressed, soloAudio } from "./dom.js";
 import * as clones from "./clones.js";
 import * as live from "./live.js";
 import * as models from "./models.js";
@@ -11,6 +11,17 @@ import * as settings from "./settings.js";
 import * as theme from "./theme.js";
 
 function wire() {
+  // Whichever player starts takes the room. One listener rather than a call
+  // in each panel: a rule about the page belongs to the page, and a panel
+  // that forgets to make the call is a bug nothing catches.
+  document.addEventListener(
+    "play",
+    (e) => {
+      if (e.target instanceof HTMLAudioElement) soloAudio(e.target);
+    },
+    true,
+  );
+
   theme.init();
   models.init();
   clones.init();

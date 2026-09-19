@@ -1,4 +1,8 @@
-// The one audio element on the page, and the only thing that drives it.
+// The composer's audio element, and the only thing that drives it. It is not
+// the only player on the page — each cloned voice has one, so hearing a
+// recording does not discard the utterance rendered up here — but only one
+// of them is ever audible; `soloAudio`, wired once in main.js, sees to that
+// without either panel having to remember.
 
 import { $, msg, show } from "./dom.js";
 
