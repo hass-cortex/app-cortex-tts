@@ -82,13 +82,27 @@
       </div>
     </div>
     <div class="actions">
-      <button class="primary" id="speak" disabled>Speak</button>
+      <button class="primary" id="live" disabled>Speak</button>
+      <!-- Beside the button rather than among the switches: it is not a
+           property of the text, it is how this one run should be delivered. -->
+      <!-- What separates them is when audio is released, not how the text is
+           cut: every model splits text to its own `max_chars_per_segment`
+           whichever is chosen. Every one but buffered sends audio as it is
+           made; buffered holds all of it to the end. -->
+      <select id="liveMode" aria-label="Delivery">
+        <option value="auto" selected>auto — stream if the model keeps up, else plan</option>
+        <option value="streaming">streaming — plan as the words arrive, speak once there is a lead</option>
+        <option value="planned">planned — plan once all the words are in, hold the opening so it never stalls</option>
+        <option value="unheld">unheld — plan once all the words are in, speak as fast as it renders (will stall)</option>
+        <option value="buffered">buffered — render the whole reply in one request, then play it</option>
+      </select>
       <button class="chip" id="norm" aria-pressed="true">normalise numbers</button>
       <button class="chip" id="num" aria-pressed="false">bare numbers</button>
       <button class="chip" id="conv" aria-pressed="true">to Simplified</button>
       <button class="chip" id="tw" aria-pressed="true">Taiwan readings</button>
     </div>
-    <div class="msg err" id="speakMsg" aria-live="polite" hidden></div>
+    <div class="msg err" id="playerMsg" aria-live="polite" hidden></div>
+    <div class="msg err" id="liveMsg" aria-live="polite" hidden></div>
   </section>
 
   <section>
@@ -98,11 +112,41 @@
     <div class="ledger" id="ledger"></div>
     <div class="result" id="result" hidden>
       <audio id="player" controls></audio>
-      <div class="stats" id="stats"></div>
     </div>
   </section>
 
 </div>
+
+<section id="timeline" hidden>
+  <div class="sec-head">
+    <h2>How the last live reply was delivered</h2>
+    <span class="note">It plays here as it arrives, and every time is
+    observed rather than predicted: one row per request, from when it was sent
+    to when its audio came back, labelled render time → audio produced, and
+    the factor between them. The
+    last row is the listener's own bar — held back, then played, then what is
+    in hand and not played yet, whose width is the lead. When that last piece
+    runs out, playback has caught the renderer: after a cut that ends a
+    sentence that is heard as a pause between sentences, anywhere else as
+    broken.</span>
+  </div>
+  <div class="tl">
+    <div class="tl-head" id="tlHead" hidden></div>
+    <div id="tlRows"></div>
+    <div class="tl-item tl-foot">
+      <div class="tl-track"><div class="tl-ticks" id="tlAxis"></div></div>
+    </div>
+  </div>
+  <div class="stats" id="tlStats"></div>
+  <div class="tl-key">
+    <span><i class="render"></i>rendering</span>
+    <span><i class="wait"></i>held back</span>
+    <span><i class="play"></i>played</span>
+    <span><i class="buffer"></i>in hand, not played yet (the lead)</span>
+    <span><i class="pause"></i>pause between sentences</span>
+    <span><i class="dry"></i>ran dry mid-sentence</span>
+  </div>
+</section>
 
 <section>
   <div class="sec-head">
@@ -196,20 +240,22 @@
     </div>
     <div class="row lone">
       <div class="field">
+        <label for="setSentencePause">Silence a sentence end may carry (seconds)</label>
+        <input id="setSentencePause" type="number" min="0" max="10" step="0.5">
+        <p class="sub">Playback that catches the renderer at a sentence end is heard
+        as a longer pause between sentences, which is where a pause belongs — so the
+        opening need not be held against it, and the first word comes sooner. A cut
+        inside a sentence never earns this, and neither does a model that streams
+        audio while it renders. 0 holds until nothing can ever run dry.</p>
+      </div>
+    </div>
+    <div class="row lone">
+      <div class="field">
         <label for="setIdle">Unload when idle (seconds)</label>
         <input id="setIdle" type="number" min="0" max="86400" step="1">
         <p class="sub">Drop a model this long after its last request; 0 keeps it
         until something evicts it. Worth setting on a GPU shared with another
         workload.</p>
-      </div>
-    </div>
-    <div class="row lone">
-      <div class="field">
-        <label for="setMaxSynth">Refuse over-long replies (seconds)</label>
-        <input id="setMaxSynth" type="number" min="0" max="3600" step="1">
-        <p class="sub">Refuse a reply whose estimated render would take longer than
-        this; 0 accepts any length. Needs the model measured on this host
-        first.</p>
       </div>
     </div>
   </div>
@@ -229,7 +275,9 @@
   <p class="hint">One recording becomes a voice on every model that clones,
   under the same id.</p>
   <ul class="guide">
-    <li><b>6–20 seconds</b> of clean speech that starts talking straight away.</li>
+    <li><b>Six to ten seconds</b> of clean speech that starts talking straight
+    away. Shorter than 2 s or longer than 20 s is refused, and past ten buys
+    nothing on any model here.</li>
     <li><b>End on a finished sentence.</b> A clip cut by a clock is refused: it
     teaches the model that sentences end mid-word.</li>
     <li><b>Clean beats long.</b> The 80M reads only the first six seconds;

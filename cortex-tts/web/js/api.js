@@ -57,7 +57,14 @@ export async function call(path, options = {}, retried = false) {
 
 const KEY_SLOT = "cortex-tts-api-key";
 
-function storedKey() {
+/**
+ * The key this browser was given, if it was given one.
+ *
+ * Exported because the live socket needs it too and cannot reuse `call`: a
+ * `WebSocket` constructor sets no headers, so the key goes in the handshake's
+ * subprotocol list instead. One reader of the slot, so there is one name.
+ */
+export function storedKey() {
   try { return localStorage.getItem(KEY_SLOT) || ""; } catch { return ""; }
 }
 

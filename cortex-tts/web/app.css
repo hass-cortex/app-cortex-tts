@@ -242,3 +242,67 @@ audio{width:100%}
 .rules-empty{color:var(--ink-3);font-size:13px}
 @media (max-width:720px){.rule{grid-template-columns:1fr 1fr}}
 .ref-audio{width:100%;margin:6px 0 4px}
+
+/* The live delivery timeline. One shared axis down the whole panel: a track
+   sized per row would put each request on its own scale, and the chart would
+   read as if every one of them took the same time. Each cut gets a caption
+   line of its own above its bar, because what the reply was cut into is half
+   of what the panel is for and a column narrow enough to sit beside the bar
+   can only show the first few words of it. */
+/* The delivery picker sits in the actions row, so it sizes to its content
+   rather than filling the column the way a field's select does. */
+#liveMode{width:auto;padding:8px 10px;font-size:13px}
+.tl{position:relative;border:1px solid var(--line);border-radius:6px;
+  padding:8px 10px;overflow:hidden}
+/* Where playback is, right now, across every row — so what is being heard
+   and what is being rendered are read off one line. */
+.tl-head{position:absolute;top:0;bottom:0;width:2px;background:var(--ink);
+  opacity:.5;pointer-events:none;z-index:2}
+.tl-item{padding:5px 0;border-bottom:1px solid var(--line)}
+.tl-item:last-child{border-bottom:0}
+.tl-item.heard{margin-top:4px;border-top:2px solid var(--line)}
+.tl-said{display:flex;align-items:baseline;gap:7px;margin-bottom:3px;
+  font-size:12.5px;color:var(--ink);line-height:1.5}
+.tl-said b{flex:none;font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+.tl-said span{min-width:0}
+.tl-mark{flex:none;font-style:normal;font-family:var(--mono);font-size:9.5px;
+  letter-spacing:.03em;padding:1px 5px;border-radius:3px;white-space:nowrap}
+.tl-mark.ok{background:var(--accent-soft);color:var(--accent)}
+.tl-mark.mid{background:var(--warn-soft);color:var(--warn)}
+.tl-track{position:relative;height:20px;background:var(--surface-2);border-radius:3px}
+.tl-bar{position:absolute;top:0;height:20px;border-radius:3px;box-sizing:border-box}
+.tl-bar i{position:absolute;top:0;left:0;right:0;height:20px;display:flex;
+  align-items:center;padding:0 5px;box-sizing:border-box;font-style:normal;
+  font-family:var(--mono);font-size:10px;white-space:nowrap;overflow:hidden}
+/* Too narrow to hold its own label: hand it to the emptier side. */
+.tl-bar.out i,.tl-bar.out-left i{padding:0 4px;color:var(--ink-2);
+  background:var(--surface);border-radius:3px;height:18px;top:1px}
+.tl-bar.out i{left:100%;right:auto}
+.tl-bar.out-left i{right:100%;left:auto;justify-content:flex-end}
+.tl-bar.render{background:var(--accent-soft);color:var(--accent);
+  border:1px solid var(--accent)}
+.tl-bar.wait{background:repeating-linear-gradient(135deg,transparent 0 5px,
+  var(--line) 5px 6px);color:var(--ink-3)}
+.tl-bar.load{background:var(--surface-2);color:var(--ink-3);
+  border:1px solid var(--line)}
+.tl-bar.play{background:var(--accent);opacity:.72}
+/* Audio in hand and not played yet. Its width is the lead, so it is the same
+   green and merely faded: the same stuff, just not heard yet. */
+.tl-bar.buffer{background:var(--accent);opacity:.26;color:var(--ink-2)}
+.tl-bar.pause{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn)}
+.tl-bar.dry{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad)}
+.tl-foot .tl-track{height:16px;background:none}
+.tl-ticks{position:relative;height:16px}
+.tl-ticks span{position:absolute;top:0;transform:translateX(-50%);
+  font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+.tl-key{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;
+  font-size:11.5px;color:var(--ink-3)}
+.tl-key span{display:flex;align-items:center;gap:5px}
+.tl-key i{width:12px;height:12px;border-radius:3px;display:inline-block}
+.tl-key i.render{background:var(--accent-soft);border:1px solid var(--accent)}
+.tl-key i.wait{background:repeating-linear-gradient(135deg,transparent 0 3px,
+  var(--line) 3px 4px);border:1px solid var(--line)}
+.tl-key i.play{background:var(--accent);opacity:.72}
+.tl-key i.buffer{background:var(--accent);opacity:.26}
+.tl-key i.pause{background:var(--warn-soft);border:1px solid var(--warn)}
+.tl-key i.dry{background:var(--bad-soft);border:1px solid var(--bad)}

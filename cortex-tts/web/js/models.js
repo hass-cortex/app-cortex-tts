@@ -19,6 +19,12 @@ let voices = [];
 // nothing to prefer and falls back to the first entry.
 let defaults = { model: "", voice: "" };
 let pollTimer = null;
+// A reply is in flight. Speaking is the other thing that changes which model
+// is resident — it evicts one and loads another — and the table is read from
+// the same `/api/models` as the header badge, so both went on claiming the
+// previous model until the reply ended. Downloads are not the only reason to
+// look again.
+let speaking = false;
 // Models with an action in flight, and those whose Delete awaits its second
 // click. Both are read at render time: the download poll redraws every card,
 // and would otherwise re-enable a button mid-request.
@@ -122,13 +128,24 @@ function rtf(m) {
   }
   const rows = measured.map((r) => {
     const n = r.requests === 1 ? "1 request" : `${r.requests} requests`;
+    // Render seconds over audio seconds, which is what the figure is called.
+    // `per_audio` is only the slope: with a fixed cost a request also pays
+    // `fixed_s / audio`, so the factor falls as the request grows and one
+    // number without its length says nothing. Quoted at `audio_ref_s`, the
+    // mean request this host served, and the length is shown whenever there
+    // is a fixed cost for it to depend on.
+    const at = Number(r.audio_ref_s) || 0;
+    const factor = at > 0 ? Number(r.fixed_s) / at + Number(r.per_audio)
+      : Number(r.per_audio);
+    const quoted = Number(r.fixed_s) > 0 && at > 0
+      ? ` <span class="qual">at ${at.toFixed(1)}s</span>` : "";
     // A clone is measured per voice: its own recording rejoins the prompt on
     // every synthesis, so two clones of different lengths cost differently.
     const label = r.voice
       ? `${KIND_LABEL[r.kind] || r.kind} · ${r.voice}`
       : KIND_LABEL[r.kind] || r.kind;
     return `<span class="rtf-kind">${esc(label)}</span>
-      <span class="val">${Number(r.per_audio).toFixed(2)}</span>
+      <span class="val">${factor.toFixed(2)}</span>${quoted}
       <span class="qual">${n}</span>`;
   }).join("");
   return `<div class="rtf-rows">${rows}</div>`;
@@ -158,8 +175,7 @@ function renderCards() {
       <div class="actions">${actions(m)}</div>
     </div>`).join("");
 
-  if (running().length && !pollTimer) pollTimer = setInterval(poll, 1500);
-  if (!running().length && pollTimer) stopPoll();
+  syncPoll();
 
   // The pill names which models clone, rather than naming one of them.
   const cloners = models.filter((m) => m.cloning).map((m) => shortName(m));
@@ -173,6 +189,19 @@ function renderCards() {
 }
 
 const running = () => models.filter((m) => m.download_state === "running").map((m) => m.id);
+
+/** Look again while anything is changing what the table says. */
+function syncPoll() {
+  const wanted = running().length > 0 || speaking;
+  if (wanted && !pollTimer) pollTimer = setInterval(poll, 1500);
+  if (!wanted && pollTimer) stopPoll();
+}
+
+/** Told by the live panel, which knows when a reply starts and ends. */
+export function setSpeaking(on) {
+  speaking = on;
+  syncPoll();
+}
 
 function stopPoll() {
   clearInterval(pollTimer);

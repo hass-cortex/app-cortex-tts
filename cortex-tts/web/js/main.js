@@ -3,18 +3,18 @@
 import { url } from "./api.js";
 import { $, msg, pressed } from "./dom.js";
 import * as clones from "./clones.js";
+import * as live from "./live.js";
 import * as models from "./models.js";
 import * as preview from "./preview.js";
 import * as samples from "./samples.js";
 import * as settings from "./settings.js";
-import * as speak from "./speak.js";
 import * as theme from "./theme.js";
 
 function wire() {
   theme.init();
   models.init();
   clones.init();
-  speak.init();
+  live.init();
   settings.init();
 
   const clearSamples = samples.init(preview.refresh);
@@ -50,9 +50,9 @@ function wire() {
 
   // The voice's own language is what the text is read in when the language
   // field is empty, so the column follows the voice. Whether there is a
-  // voice at all is what makes Speak available.
+  // voice at all is what makes speaking available.
   models.whenVoiceChanges(() => {
-    speak.syncButton();
+    live.syncButton();
     preview.refresh();
   });
   // The upload form's language list is the models' business, not its own —
@@ -80,7 +80,7 @@ async function load() {
       .then(() => models.refreshModels())
       .then(() => models.refreshVoices())],
     ["refMsg", clones.refresh()],
-    ["speakMsg", preview.refresh()],
+    ["playerMsg", preview.refresh()],
   ];
   const results = await Promise.allSettled(sections.map(([, task]) => task));
   results.forEach((result, i) => {
