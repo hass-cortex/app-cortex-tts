@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from ..providers import CUDA_OPTIONS
+from ..providers import CUDA_OPTIONS, run_options
 
 
 def _cpu_omnivoice() -> type:
@@ -54,7 +54,7 @@ def _cpu_omnivoice() -> type:
     return CpuOmniVoice
 
 
-def _onnx_forward(session: Any) -> Any:
+def _onnx_forward(session: Any, options: Any = None) -> Any:
     """Return a `forward` that runs the exported graph.
 
     The graph takes a 2-D padding mask because its attention is bidirectional,
@@ -67,6 +67,13 @@ def _onnx_forward(session: Any) -> Any:
     `__self__` is a reference cycle, and this closure holds the ONNX session,
     so the model's GPU arena would outlive the last name for it and wait for
     the collector — 618 MiB, on a card that has 4096.
+
+    `options` carries the arena shrinkage on CUDA. Without it this session's
+    arena only grows: measured on a 4 GB GTX 1650, a paced reply took it from
+    690 MiB at load to 3690 in 38 seconds, then failed to place a 32 MiB
+    buffer for a twelve-character request. Every runtime here asks for the
+    shrinkage, and a card that is given back between runs is a card the next
+    reply can still use.
     """
     from .omnivoice.modeling import OmniVoiceModelOutput
 
@@ -106,7 +113,7 @@ def _onnx_forward(session: Any) -> Any:
             .astype(np.int64),
         }
         logits = session.run(
-            ["logits"], {k: v for k, v in feeds.items() if k in accepted}
+            ["logits"], {k: v for k, v in feeds.items() if k in accepted}, options
         )[0]
         return OmniVoiceModelOutput(logits=torch.from_numpy(logits))
 
@@ -170,5 +177,5 @@ def load(
         else ["CPUExecutionProvider"]
     )
     session = ort.InferenceSession(str(directory / onnx_model), options, providers)
-    model.forward = _onnx_forward(session)
+    model.forward = _onnx_forward(session, run_options(session))
     return model, session

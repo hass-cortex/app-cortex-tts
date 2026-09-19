@@ -29,7 +29,7 @@ from typing import Any
 
 import numpy as np
 
-from ..providers import CUDA_OPTIONS
+from ..providers import CUDA_OPTIONS, run_options
 
 SAMPLE_RATE = 24000
 
@@ -169,12 +169,44 @@ class Qwen3TtsOnnx:
             if (root / f"{name}.onnx").is_file():
                 self.sessions[name] = open_session(name)
 
+        # Each session owns a BFC arena that only grows, and this model runs
+        # eight graphs per frame. Without asking for shrinkage the card keeps
+        # the high-water mark of every request the engine has served: measured
+        # on a 4 GB GTX 1650, a 1.07 GB model held 3.6 GB after three replies
+        # and then failed to allocate 0.84 MB. Per session, because not all
+        # eight take CUDA and the request fails the run where there is no
+        # arena to shrink.
+        self._run_options = {
+            name: run_options(session) for name, session in self.sessions.items()
+        }
+
         # The KV cache is fed back under the talker's own input names, which
         # follow the three real inputs. Reading them off the graph keeps the
         # 28-layer count out of this file.
         self._past_names = [
             spec.name for spec in self.sessions["talker_cache"].get_inputs()
         ][3:]
+
+    def _run(self, name: str, feed: dict[str, Any]) -> list[Any]:
+        """Run one graph, asking it to give its arena back afterwards.
+
+        Registering CUDA is not the same as having a CUDA arena: a graph whose
+        nodes all landed on the CPU has none, and asking to shrink one it does
+        not have is an invalid argument that fails the run. Which graphs those
+        are cannot be read off the session — `get_providers` lists what was
+        registered — so it is discovered by asking, once per session.
+        """
+        session = self.sessions[name]
+        options = self._run_options.get(name)
+        if options is None:
+            return session.run(None, feed)
+        try:
+            return session.run(None, feed, options)
+        except Exception as err:  # noqa: BLE001 - narrowed on the message
+            if "memory arena shrink list" not in str(err):
+                raise
+            self._run_options[name] = None
+            return session.run(None, feed)
 
     # -- what the bundle can do -------------------------------------------
 
@@ -205,20 +237,16 @@ class Qwen3TtsOnnx:
     # -- the sub-models ----------------------------------------------------
 
     def _embed_text(self, ids: Any) -> np.ndarray:
-        return self.sessions["text_embed"].run(
-            None, {"text_ids": np.asarray(ids, np.int64)}
-        )[0]
+        return self._run("text_embed", {"text_ids": np.asarray(ids, np.int64)})[0]
 
     def _embed_codec(self, ids: Any) -> np.ndarray:
-        return self.sessions["codec_embed"].run(
-            None, {"codec_ids": np.asarray(ids, np.int64)}
-        )[0]
+        return self._run("codec_embed", {"codec_ids": np.asarray(ids, np.int64)})[0]
 
     def _step_embed(self, codes: Any) -> np.ndarray:
         """Sum the group embeddings of one frame: the talker's next input."""
-        return self.sessions["residual_embed"].run(
-            None, {"codec_ids": np.asarray(codes, np.int64)}
-        )[0]
+        return self._run("residual_embed", {"codec_ids": np.asarray(codes, np.int64)})[
+            0
+        ]
 
     def _talker(
         self,
@@ -233,12 +261,12 @@ class Qwen3TtsOnnx:
             "attention_mask": attention_mask,
         }
         feed.update(zip(self._past_names, past, strict=True))
-        outputs = self.sessions["talker_cache"].run(None, feed)
+        outputs = self._run("talker_cache", feed)
         return outputs[0], outputs[1], list(outputs[2:])
 
     def _predict_group(self, hidden: np.ndarray, codes: np.ndarray) -> np.ndarray:
-        return self.sessions["code_predictor"].run(
-            None,
+        return self._run(
+            "code_predictor",
             {
                 "talker_hidden": hidden.astype(np.float32),
                 "codec_ids": np.asarray(codes, np.int64),
@@ -264,9 +292,9 @@ class Qwen3TtsOnnx:
         block = codes
         if frames < DECODER_FRAMES:
             block = codes[np.arange(DECODER_FRAMES) % frames]
-        wave = self.sessions["tok_decoder"].run(
-            None, {"audio_codes": block[None].astype(np.int64)}
-        )[0]
+        wave = self._run("tok_decoder", {"audio_codes": block[None].astype(np.int64)})[
+            0
+        ]
         wave = np.asarray(wave, dtype=np.float32).reshape(-1)
         if frames < DECODER_FRAMES:
             wave = wave[: int(round(len(wave) * frames / DECODER_FRAMES))]
@@ -280,8 +308,8 @@ class Qwen3TtsOnnx:
             if len(window) < _ENCODER_SAMPLES:
                 window = np.pad(window, (0, _ENCODER_SAMPLES - len(window)))
             blocks.append(
-                self.sessions["tok_encoder"].run(
-                    None,
+                self._run(
+                    "tok_encoder",
                     {
                         "audio": window.reshape(1, 1, _ENCODER_SAMPLES).astype(
                             np.float32
@@ -459,8 +487,8 @@ class Qwen3TtsOnnx:
             raise Qwen3TtsError("this bundle carries no encoders, so it cannot clone")
         if not transcript:
             raise Qwen3TtsError("cloning needs the reference recording's transcript")
-        x_vector = self.sessions["speaker_encoder"].run(
-            None, {"audio": wave[None].astype(np.float32)}
+        x_vector = self._run(
+            "speaker_encoder", {"audio": wave[None].astype(np.float32)}
         )[0]
         return ReferenceConditioning(
             codes=self._encode_reference(wave),

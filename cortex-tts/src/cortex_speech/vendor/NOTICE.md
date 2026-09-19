@@ -26,6 +26,7 @@ three known edits rather than noise:
 | Path                    | Deviation                                                                                                   |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `moss_runtime.py`       | `on_audio_chunk` callback on `synthesize_single_chunk`: publishes each decoded chunk as it appears          |
+| `moss_ort.py`           | run options on every session: a CUDA arena only grows, so each run asks for it back (`providers.run_options`) |
 | `hojo40.py`, `hojo80.py` | `on_step` on `generate` / `_generate_coarse_tokens`: called before every decode step; raising from it aborts |
 | `omnivoice/modeling.py` | `on_step` on `OmniVoiceGenerationConfig`: called before every iterative decoding step; raising aborts       |
 

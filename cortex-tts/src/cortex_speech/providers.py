@@ -72,16 +72,22 @@ class _ClosedSession:
         raise SessionClosedError(f"session is closed ({name} was called)")
 
 
-def run_options(provider: str) -> ort.RunOptions | None:
-    """What every `session.run` should carry on this provider.
+def run_options(session: Any) -> ort.RunOptions | None:
+    """What this session's `run` should carry; `None` where there is nothing.
 
     Each session owns a BFC arena that only grows, and a runtime with many
     sessions keeps every one's high-water mark. Shrinking after each run
     returns the extensions. Measured on a 4 GB GTX 1650 with MOSS-TTS-Nano's
     nine sessions: 3694 MiB standing without it, 2784 with, at RTF 0.38
     against 0.36.
+
+    Asked of the session rather than of the provider the caller wanted, for
+    the same reason `in_use` reads the sessions: a graph that fell back to the
+    CPU has no `gpu:0` arena, and asking to shrink one it does not have is an
+    invalid argument that fails the run rather than doing nothing. Qwen3-TTS
+    runs eight graphs and not all of them take CUDA.
     """
-    if provider != "cuda":
+    if _CUDA not in session.get_providers():
         return None
     import onnxruntime as ort
 

@@ -133,17 +133,24 @@ class TestReleasingSessions:
 
 
 class TestRunOptions:
-    def test_cuda_runs_shrink_the_arena(self) -> None:
+    """Asked of the session, because what was requested is not what it got.
+
+    Shrinking an arena the session does not have is an invalid argument and
+    fails the run rather than being ignored, and a model with several graphs
+    can have some on the GPU and some not.
+    """
+
+    def test_a_cuda_session_shrinks_its_arena(self) -> None:
         from cortex_speech.providers import run_options
 
-        options = run_options("cuda")
+        options = run_options(_Session(CUDA, CPU))
         assert options is not None
         assert (
             options.get_run_config_entry("memory.enable_memory_arena_shrinkage")
             == "gpu:0"
         )
 
-    def test_the_cpu_carries_nothing(self) -> None:
+    def test_a_session_that_fell_back_carries_nothing(self) -> None:
         from cortex_speech.providers import run_options
 
-        assert run_options("cpu") is None
+        assert run_options(_Session(CPU)) is None

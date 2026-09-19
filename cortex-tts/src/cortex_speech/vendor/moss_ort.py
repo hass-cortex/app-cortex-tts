@@ -10,7 +10,9 @@ from typing import Any, Callable
 import numpy as np
 import onnxruntime as ort
 
-from ..providers import run_options
+# DEVIATION: upstream creates its sessions with no run options. See
+# below — every run here asks the arena to shrink afterwards.
+from ..providers import in_use, run_options
 
 SAMPLE_MODE_GREEDY = "greedy"
 SAMPLE_MODE_FIXED = "fixed"
@@ -409,8 +411,18 @@ class OrtCpuRuntime:
         self.tts_meta = json.loads(self.tts_meta_path.read_text(encoding="utf-8"))
         self.codec_meta = json.loads(self.codec_meta_path.read_text(encoding="utf-8"))
         self.rng = np.random.default_rng(1234)
-        self.run_options = run_options(self.execution_provider)
         self.sessions = self._create_sessions()
+        # DEVIATION: upstream passes no run options. A CUDA session's BFC arena
+        # only grows, and this runtime holds nine of them, so every run asks
+        # for the arena back — measured on a 4 GB GTX 1650, 3694 MiB standing
+        # without it against 2784 with. One RunOptions is shared by every
+        # session below, so it may only ask for what all of them can do: a
+        # graph that fell back has no gpu:0 arena and the request would fail
+        # its run rather than be ignored.
+        created = list(self.sessions.values())
+        self.run_options = (
+            run_options(created[0]) if in_use(created) == "cuda" else None
+        )
         self.codec_streaming_session = CodecStreamingDecodeSession(
             codec_meta=self.codec_meta,
             session=self.sessions["codec_decode_step"],
