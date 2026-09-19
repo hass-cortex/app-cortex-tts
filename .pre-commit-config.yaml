@@ -65,7 +65,7 @@ repos:
         name: prettier
         entry: prettier
         language: node
-        additional_dependencies: ["prettier@3.8.3"]
+        additional_dependencies: ["prettier@3.9.8"]
         # Everything prettier understands; .prettierignore does the excluding,
         # exactly as it does for app-ci.
         types_or: [markdown, yaml, json, javascript, css, html]
