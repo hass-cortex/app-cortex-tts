@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from cortex_speech import BY_ID, RenderSample
+from cortex_speech.audio import TARGET_PEAK
 from cortex_speech.catalog import model_dir
 from cortex_speech.engine.base import (
     Delivery,
@@ -81,6 +82,45 @@ class _FakeEngine:
 
     def close(self) -> None:
         pass
+
+
+class _QuietEngine(_FakeEngine):
+    """Renders a quiet tone rather than silence, so level can be measured.
+
+    The models sit around -17 dBFS peak, which is what the level control
+    exists to lift; silence cannot show whether it ran.
+    """
+
+    peak = 0.05
+
+    def synthesize(
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
+    ) -> Synthesis:
+        whole = super().synthesize(segments, voice, delivery=delivery, stop=stop)
+        steps = np.arange(len(whole.audio), dtype=np.float32)
+        tone = np.sin(2 * np.pi * 220.0 * steps / self.sample_rate) * self.peak
+        return Synthesis(
+            audio=tone.astype(np.float32),
+            sample_rate=whole.sample_rate,
+            segments=whole.segments,
+            inference_ms=whole.inference_ms,
+        )
+
+
+def _peak_of(audio: bytes) -> float:
+    """The loudest sample of a WAV reply, as a fraction of full scale.
+
+    The 44-byte RIFF header goes first and would read as a very loud sample.
+    """
+    pcm = audio[44:] if audio[:4] == b"RIFF" else audio
+    pcm = pcm[: len(pcm) - len(pcm) % 2]
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32767.0
+    return float(np.max(np.abs(samples))) if samples.size else 0.0
 
 
 def _pretend_downloaded(data_dir: Path, model_id: str) -> None:
@@ -160,7 +200,7 @@ def _speak(client: TestClient, text: str, **start) -> tuple[dict, bytes, dict]:
                 audio += frame["bytes"]
             elif "text" in frame and frame["text"] is not None:
                 message = json.loads(frame["text"])
-                if message["type"] == "batch":
+                if message["type"] in ("batch", "rendered"):
                     batches.append(message)
                     continue
                 return ready, audio, message
@@ -188,12 +228,125 @@ class TestBatchFrames:
                 message = json.loads(frame["text"])
                 kinds.append(message["type"])
                 if message["type"] == "batch":
-                    assert message["mode"] in ("streaming", "paced", "buffered")
+                    assert message["mode"] in ("streaming", "planned", "buffered")
                     assert message["index"] == kinds.count("batch")
                 if message["type"] == "done":
                     break
         assert kinds[0] == "batch"
         assert kinds.count("batch") == json.loads(frame["text"])["batches"]
+
+
+class TestTheDeliveryIsLegibleFromOutside:
+    """`batch` says how the reply was cut, `rendered` what the cut cost.
+
+    Neither is in the audio, and during the opening hold there is no audio.
+    The admin UI's live panel draws its timeline from these two alone.
+    """
+
+    @staticmethod
+    def _frames(client: TestClient, text: str) -> list[dict]:
+        with client, client.websocket_connect("/api/speak/live", headers=AUTH) as ws:
+            ws.send_json({"type": "start", "model": MODEL, "format": "wav"})
+            ws.receive_json()
+            ws.send_json({"type": "text", "text": text})
+            ws.send_json({"type": "end"})
+            frames: list[dict] = []
+            while True:
+                frame = ws.receive()
+                if frame.get("bytes") is not None:
+                    continue
+                message = json.loads(frame["text"])
+                frames.append(message)
+                if message["type"] == "done":
+                    return frames
+
+    def test_a_batch_says_what_it_is_about_to_say(
+        self, tmp_path: Path, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        _measured(tmp_path)
+        text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
+        batches = [f for f in self._frames(client, text) if f["type"] == "batch"]
+        assert batches, "the reply was cut into nothing"
+        joined = "".join(b["text"] for b in batches)
+        assert joined.replace(" ", "") == text.replace(" ", "")
+
+    def test_every_request_reports_what_it_cost(
+        self, tmp_path: Path, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        _measured(tmp_path)
+        text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
+        frames = self._frames(client, text)
+        sent = [f for f in frames if f["type"] == "batch"]
+        cost = [f for f in frames if f["type"] == "rendered"]
+        done = frames[-1]
+        assert [f["index"] for f in cost] == [f["index"] for f in sent]
+        assert len(cost) == done["batches"]
+        assert sum(f["audio_s"] for f in cost) == pytest.approx(
+            done["audio_seconds"], abs=0.05
+        )
+        assert all(f["render_ms"] >= 0 for f in cost)
+
+    def test_the_cost_is_told_even_while_the_audio_is_held(
+        self, tmp_path: Path, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        """Buffered releases nothing until the end, and still says what it did."""
+        with client, client.websocket_connect("/api/speak/live", headers=AUTH) as ws:
+            ws.send_json(
+                {"type": "start", "model": MODEL, "format": "wav", "mode": "buffered"}
+            )
+            ws.receive_json()
+            ws.send_json({"type": "text", "text": "從前有一座山。山上有一間小廟。"})
+            ws.send_json({"type": "end"})
+            seen: list[str] = []
+            while True:
+                frame = ws.receive()
+                if frame.get("bytes") is not None:
+                    seen.append("audio")
+                    continue
+                message = json.loads(frame["text"])
+                seen.append(message["type"])
+                if message["type"] == "done":
+                    break
+        assert seen.index("rendered") < seen.index("audio")
+
+
+class TestACallerMayInsistOnADelivery:
+    """`auto` is what serves a listener; the rest are for comparing.
+
+    The admin UI's live panel offers all four so one reply can be heard three
+    ways. Insisting is honoured as far as the reply allows, and `done` is what
+    says how it actually went.
+    """
+
+    @staticmethod
+    def _spoken(client: TestClient, mode: str, text: str) -> dict:
+        _, _, done = _speak(client, text, mode=mode)
+        return done
+
+    def test_paced_waits_for_the_whole_reply_even_on_a_fast_host(
+        self, tmp_path: Path, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        _measured(tmp_path)
+        text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
+        assert self._spoken(client, "auto", text)["mode"] == "streaming"
+        assert self._spoken(client, "planned", text)["mode"] == "planned"
+
+    def test_buffered_is_one_request_however_long_the_reply(
+        self, tmp_path: Path, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        _measured(tmp_path)
+        text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
+        done = self._spoken(client, "buffered", text)
+        assert done["batches"] == 1
+        # Buffered survives the count: it is about releasing, not cutting.
+        assert done["mode"] == "buffered"
+
+    def test_an_unmeasured_host_still_paces_what_it_was_told_to_stream(
+        self, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        """Sizing a batch to the lead needs a line before the first byte."""
+        text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
+        assert self._spoken(client, "streaming", text)["mode"] != "streaming"
 
 
 class TestOpening:
@@ -202,6 +355,33 @@ class TestOpening:
             ws.send_json({"type": "text", "text": "hi"})
             error = ws.receive_json()
             assert error["type"] == "error"
+
+    def test_a_browser_may_carry_the_key_as_a_subprotocol(
+        self, client: TestClient
+    ) -> None:
+        """A `WebSocket` constructor cannot set a header; this is what it has."""
+        with (
+            client,
+            client.websocket_connect(
+                "/api/speak/live",
+                subprotocols=["cortex-tts", AUTH["Authorization"][7:]],
+            ) as ws,
+        ):
+            ws.send_json({"type": "start", "model": MODEL, "format": "wav"})
+            assert ws.receive_json()["type"] == "ready"
+
+    def test_a_wrong_key_in_the_subprotocol_is_refused(
+        self, client: TestClient
+    ) -> None:
+        with (
+            client,
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect(
+                "/api/speak/live", subprotocols=["cortex-tts", "nope"]
+            ) as ws,
+        ):
+            ws.send_json({"type": "start"})
+            ws.receive_json()
 
     def test_a_wrong_key_is_refused_before_anything(self, client: TestClient) -> None:
         with (
@@ -234,13 +414,20 @@ class TestOpening:
         assert ready["chunk_streaming"] is False
 
 
-class TestUnmeasuredHostIsBuffered:
-    def test_everything_arrives_after_the_end_in_one_request(
+class TestUnmeasuredHostPaces:
+    """Nothing measured is not the same as nothing to go on.
+
+    The reply's own first request is a measurement of this host in this voice,
+    taken a moment ago — so the reply is planned from it rather than held whole.
+    Buffered is a mode a caller asks for, never one the app concludes.
+    """
+
+    def test_it_is_paced_not_buffered(
         self, client: TestClient, engine: _FakeEngine
     ) -> None:
         ready, audio, done = _speak(client, "從前有一座山。山上有一間小廟。")
-        assert ready["mode"] == "buffered"
-        assert done["mode"] == "whole"
+        assert ready["mode"] != "buffered"
+        assert done["mode"] == "whole", "short enough to fit one request"
         assert done["batches"] == 1
         assert len(engine.calls) == 1
         # 44-byte WAV header plus the audio
@@ -277,7 +464,7 @@ class TestMeasuredHostStreams:
     ) -> None:
         """One sample per request, whatever cadence the planner chose.
 
-        A paced reply's requests are short and of one length, which is exactly
+        A planned reply's requests are short and of one length, which is exactly
         the end of the line a fit needs and exactly what an average of ratios
         could not survive.
         """
@@ -315,7 +502,37 @@ class TestMeasuredHostStreams:
         _measured(tmp_path)
         ready, _, done = _speak(client, "從前有一座山。", mode="buffered")
         assert ready["mode"] == "buffered"
-        assert done["mode"] == "whole"
+        # One request, but still reported as held rather than as `whole`.
+        assert done["mode"] == "buffered"
+
+
+class TestBufferedArrivesAtTheLevelAFileWouldHave:
+    """A held reply has a finished waveform, so it is levelled like one.
+
+    `StreamGain` only attenuates, because a stream cannot know its own peak
+    before it has ended. Buffered has ended by definition — and without this
+    a listener who changes the setting hears the same words arrive far
+    quieter, which is a difference the setting never promised.
+    """
+
+    @pytest.fixture
+    def engine(self) -> _QuietEngine:
+        return _QuietEngine()
+
+    def test_it_is_lifted_to_the_target(
+        self, tmp_path: Path, client: TestClient
+    ) -> None:
+        _measured(tmp_path)
+        _, audio, _ = _speak(client, "從前有一座山。", mode="buffered")
+        assert _peak_of(audio) == pytest.approx(TARGET_PEAK, abs=0.02)
+
+    def test_a_streamed_reply_is_left_where_the_model_put_it(
+        self, tmp_path: Path, client: TestClient
+    ) -> None:
+        """The contrast, so the test above is not passing for some other reason."""
+        _measured(tmp_path)
+        _, audio, _ = _speak(client, "從前有一座山。", mode="streaming")
+        assert _peak_of(audio) == pytest.approx(_QuietEngine.peak, abs=0.02)
 
 
 class TestLeaving:

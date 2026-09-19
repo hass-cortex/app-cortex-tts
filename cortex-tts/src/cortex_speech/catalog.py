@@ -11,6 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# The default cap and the measurements behind it live with the planner,
+# which is the only thing that reads it. A second copy of 9.0 here is a
+# second figure to re-measure.
+from .pacing.model import chars_within
+from .pacing.planner import BATCH_CAP_S
+
 
 @dataclass(frozen=True)
 class BundleSource:
@@ -62,10 +68,11 @@ class ModelSpec:
             of ``builtin_voices``: a model may have both, one, or neither.
         chunk_streaming: Whether the engine can emit audio before the whole
             utterance is rendered, which a live reply carries per request.
-        temperature: Whether a sampling temperature means anything to it. MOSS
-            fuses its sampling into a dedicated ONNX graph and cannot read one,
-            and silently ignoring the parameter is indistinguishable from
-            honouring it — so a caller is told instead.
+        temperature: Whether a sampling temperature means anything to it.
+            False on MOSS, which fuses its sampling into a dedicated ONNX
+            graph, and on OmniVoice, whose own temperatures are not this
+            quantity. Silently ignoring the parameter is indistinguishable
+            from honouring it, so a caller is told instead.
         language_choice: Whether the caller may say which language the text is
             read as. False where the voice decides it and nothing else can —
             the Hojo models and MOSS take no language at all, so a request
@@ -90,6 +97,14 @@ class ModelSpec:
             cannot say are noise. Measured: Hojo read 110 as 十億億安 and
             an English sentence with three numbers as nonsense; MOSS,
             OmniVoice and Qwen3-TTS read digits themselves.
+        batch_cap_s: The most speech one request may carry, in seconds —
+            where this model's fitted cost line stops describing it. Past
+            that the planner would be choosing between plans on arithmetic it
+            knows to be wrong, and it only ever proposes a *longer* request
+            because the line says one is cheaper. Belongs to the model rather
+            than to the host: it is where an autoregressive decode turns
+            quadratic. Measured per model, and the default is the earliest
+            break seen; see `pacing/planner.py` for the figures.
         size_mb: Approximate on-disk size once downloaded.
         languages: Base language codes the model was trained on.
         sample_rate: Output sample rate in Hz.
@@ -112,8 +127,30 @@ class ModelSpec:
     style_instruction: bool = False
     reads_numerals: bool = False
     needs_number_words: bool = False
+    batch_cap_s: float = BATCH_CAP_S
+    max_chars_per_segment: int | None = None
+    max_audio_s: float | None = None
     sample_rate: int = 24000
     rss_hint_mb: int = 0
+
+    def segment_limit(self, text: str) -> int | None:
+        """Characters one synthesis may carry, for this text; `None` for no bound.
+
+        Two bounds meet here and they are not the same kind. A model's token
+        budget is counted in characters and `max_chars_per_segment` says it.
+        A model's generation budget is counted in audio, and a segment over it
+        is not slow but truncated — so `max_audio_s` is turned into characters
+        by `pacing.chars_within`, which owns the speech rates. What is settled
+        here is only which of the two bounds a text meets first.
+        """
+        if self.max_audio_s is None:
+            return self.max_chars_per_segment
+        fits = chars_within(self.max_audio_s, text)
+        if not fits:
+            return self.max_chars_per_segment
+        if self.max_chars_per_segment is None:
+            return fits
+        return min(self.max_chars_per_segment, fits)
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -168,6 +205,11 @@ CATALOG: tuple[ModelSpec, ...] = (
         ),
         backend="hojo-preset",
         needs_number_words=True,
+        # `render` asks the vendored loop for at most 2048 tokens and the
+        # codec runs at 50 Hz. The default character bound reaches 29 s of
+        # Chinese, so this never binds — declared so that stays checkable
+        # rather than coincidental.
+        max_audio_s=40.96,
         size_mb=241,
         languages=("zh", "en"),
         builtin_voices=True,
@@ -194,6 +236,11 @@ CATALOG: tuple[ModelSpec, ...] = (
         ),
         backend="hojo-clone",
         needs_number_words=True,
+        # `render` asks the vendored loop for at most 2048 tokens and the
+        # codec runs at 50 Hz. The default character bound reaches 29 s of
+        # Chinese, so this never binds — declared so that stays checkable
+        # rather than coincidental.
+        max_audio_s=40.96,
         size_mb=437,
         languages=("zh", "en"),
         cloning=True,
@@ -204,8 +251,8 @@ CATALOG: tuple[ModelSpec, ...] = (
         id="moss-nano",
         name="MOSS-TTS-Nano",
         description="18 built-in voices (6 Chinese) and cloning from a "
-        "recording. 48 kHz, and the only model here that can start speaking "
-        "before a sentence is finished.",
+        "recording. 48 kHz, and it starts speaking before a sentence is "
+        "finished.",
         # Two repos: the weights and the audio codec are published apart, and
         # the runtime needs both. The subdirectories match the layout upstream's
         # own loader expects to find under the model directory.
@@ -245,6 +292,34 @@ CATALOG: tuple[ModelSpec, ...] = (
         builtin_voices=True,
         cloning=True,
         chunk_streaming=True,
+        # This model's break, measured the same way as the default's: one
+        # request at a time, the same sentence repeated, against the cost of
+        # the short ones.
+        #
+        #     audio    5.0  10.4  15.0  21.8  26.9  32.3  43.7
+        #     over by  +2%    0%   +4%  +12%  +10%   +8%  +12%
+        #
+        # A step rather than the curve OmniVoice has (19% over by 10.7 s and
+        # 100% by 23.6 s): it holds to fifteen and has stepped up by
+        # twenty-two, then flattens. So fifteen, the longest still on the
+        # line.
+        #
+        # Nine cost it more than the default's reasoning had counted. That
+        # reasoning weighed render time, which is 0.05 s a boundary here, and
+        # not the cuts: a sentence over the cap is split at its clause marks
+        # and every segment is terminated, so those are spoken as full stops.
+        # Measured on one 63 s reply, nine took ten requests with two cuts
+        # inside sentences where fifteen takes three with none.
+        batch_cap_s=15.0,
+        # The runtime splits the text by its own token budget whatever
+        # arrives, so there is no character bound of this model's to declare.
+        # What the generation budget allows, and it is a hard stop rather than
+        # a slowdown: the shipped manifest sets `max_new_frames` to 375 and
+        # the codec runs at 12.5 Hz. Measured on this host, seven inputs from
+        # 155 to 284 Chinese characters all came back as exactly 30.0 s, the
+        # rest of each one missing — the runtime's own text splitting does not
+        # save it, because the budget is spent on audio and not on text.
+        max_audio_s=30.0,
         sample_rate=48000,
         rss_hint_mb=1990,
     ),
@@ -275,6 +350,11 @@ CATALOG: tuple[ModelSpec, ...] = (
         temperature=True,
         language_choice=True,
         style_instruction=True,
+        # The talker tops out at 2048 frames and `FRAMES_PER_SECOND` is 12.5,
+        # so a single call reaches 164 s — four times a Hojo's. `_frame_budget`
+        # cuts each segment far below that, from the duration its own text
+        # needs; this is the ceiling that cuts whatever the text says.
+        max_audio_s=163.84,
         rss_hint_mb=1580,
     ),
     ModelSpec(
@@ -299,13 +379,16 @@ CATALOG: tuple[ModelSpec, ...] = (
         chunk_streaming=True,
         temperature=True,
         language_choice=True,
+        # The same 2048 frames at 12.5 Hz as the built-in entry above.
+        max_audio_s=163.84,
         rss_hint_mb=2120,
     ),
     ModelSpec(
         id="omnivoice",
         name="OmniVoice 0.8B",
         description="Designs a voice from attributes — sex, age, pitch, whisper "
-        "— or clones one from a recording. Reads 800+ languages. The heaviest "
+        "— or clones one from a recording. Reads the ten languages listed here, "
+        "and takes any of the 646 ids its own table names. The heaviest "
         "model here: it needs torch, and it is well over real time on a CPU.",
         # Two repos, and one file deliberately absent from both: the
         # checkpoint's 2.45 GB `model.safetensors`. The int4 export below

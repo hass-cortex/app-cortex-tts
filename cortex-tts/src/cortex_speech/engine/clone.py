@@ -45,6 +45,12 @@ from .overrun import render_with_retries
 
 _LOGGER = logging.getLogger(__name__)
 
+# The seed this runtime samples with unless told otherwise, matching the
+# default in `vendor/hojo80.py`'s `generate`. Tried first, so an ordinary
+# request gets what the model produces upstream; `overrun.RETRY_SEEDS` only
+# follow when a generation truncates.
+_UPSTREAM_SEED = 42
+
 
 class _Prompt(NamedTuple):
     """Codec and speaker encodings for one reference recording."""
@@ -176,7 +182,9 @@ class CloneEngine:
                 raise NoAudioError(f"model produced no audio for {text!r}") from err
             return _wav_from_mag_phase(mag, phase, self._model.istft)
 
-        return render_with_retries(text, self.sample_rate, generate)
+        return render_with_retries(
+            text, self.sample_rate, generate, seed=_UPSTREAM_SEED
+        )
 
     def synthesize(
         self,

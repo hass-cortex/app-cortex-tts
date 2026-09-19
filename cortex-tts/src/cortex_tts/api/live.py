@@ -2,7 +2,13 @@
 
 One WebSocket per reply. The client sends a `start` frame, then `text` frames
 as the writer produces them, then `end`; the server answers with a `ready`
-frame, binary audio frames, and a `done` frame carrying what the reply cost.
+frame, a `batch` frame before each request and a `rendered` frame after it,
+binary audio frames, and a `done` frame carrying what the reply cost.
+
+`batch` and `rendered` are what make the delivery legible from outside: the
+first says how the reply was cut and under which plan, the second what that
+request actually cost. Neither can be worked out from the audio, and during
+the opening hold there is no audio to work anything out from.
 The server decides when to render what — see `cortex_speech.pacing` — from
 what this host has measured about the model, because it is the one holding
 the measurements, the engine queue and the clock.
@@ -21,10 +27,12 @@ import logging
 import time
 from dataclasses import dataclass, field, replace
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from cortex_speech import (
+    BUFFERED,
     STREAM_ENCODERS,
     AbandonedError,
     EngineError,
@@ -34,9 +42,11 @@ from cortex_speech import (
     Send,
     StreamGain,
     Wait,
+    ends_sentence,
+    levelled_frames,
 )
 
-from .deps import AppState, get_state_ws, require_api_key_ws
+from .deps import WS_SUBPROTOCOL, AppState, get_state_ws, require_api_key_ws
 from .routes import (
     check_delivery,
     engine_errors,
@@ -150,6 +160,8 @@ class _Session:
             state.stats.render_model(spec.id, kind, voice.id),
             chunk_streaming=spec.chunk_streaming,
             mode=start.mode,
+            pause_s=state.preferences.max_sentence_pause,
+            batch_cap_s=spec.batch_cap_s,
         )
         self._planner = planner
         encoder = STREAM_ENCODERS[start.format]()
@@ -189,7 +201,20 @@ class _Session:
                 # reply is being delivered while its first audio is still
                 # being made; `done` has the last word once the count is known.
                 await self._send_json(
-                    {"type": "batch", "index": self._requests + 1, "mode": planner.mode}
+                    {
+                        "type": "batch",
+                        "index": self._requests + 1,
+                        "mode": planner.mode,
+                        # What this request carries, as the writer wrote it.
+                        # Where a reply was cut is the one thing a caller
+                        # cannot work out from the audio it gets back.
+                        "text": decision.text,
+                        # Whether this cut may carry a pause. A gap after one
+                        # that ends a sentence is heard as a pause between
+                        # sentences; after a clause cut it is heard as broken,
+                        # and a reader of the timeline needs the two apart.
+                        "ends_sentence": ends_sentence(decision.text),
+                    }
                 )
                 await self._render(
                     spec,
@@ -322,18 +347,43 @@ class _Session:
         self._batch_produced_s = 0.0
         started = self._batch_started = time.perf_counter()
         produced = 0
+        # Buffered releases nothing until the render is over, so unlike a
+        # streamed reply it ends up holding a finished waveform — and a
+        # finished waveform can be levelled rather than merely kept under the
+        # ceiling. Without this a held reply arrives about 16 dB under a file
+        # of the same text, which is audible the moment a listener changes
+        # **Speaking mode**.
+        held: list[np.ndarray] = []
         with engine_errors():
             async for chunk in self._state.registry.synthesize_stream(
                 spec.id, segments, voice_id, delivery, stop=self._gone.is_set
             ):
                 produced += len(chunk)
                 self._batch_produced_s = produced / spec.sample_rate
+                if self._hold.all:
+                    held.append(chunk)
+                    continue
                 await self._emit(
                     encoder.encode(gain.frames(chunk)), len(chunk) / spec.sample_rate
                 )
+        if held:
+            await self._emit(
+                encoder.encode(levelled_frames(held)), produced / spec.sample_rate
+            )
         wall = time.perf_counter() - started
         self._render_s += wall
         seconds = produced / spec.sample_rate
+        # What the request actually cost, said once it is known. `batch` can
+        # only carry the plan; while audio is still banked a listener sees no
+        # bytes at all, so this is the only account of where the time went.
+        await self._send_json(
+            {
+                "type": "rendered",
+                "index": self._requests,
+                "audio_s": round(seconds, 3),
+                "render_ms": round(wall * 1000, 1),
+            }
+        )
         if self._planner is not None:
             # What it really cost, so the opening hold for what is left is
             # sized by this reply and not only by the host's average day.
@@ -378,6 +428,18 @@ class _Session:
         first_audio = not hold.banked and seconds > 0
         hold.banked.append(frames)
         hold.banked_s += seconds
+        # Armed the moment there is anything to play. Checking on arrival alone
+        # could never fire it: a whole-render engine hands over one batch at a
+        # time, so the next check is the next batch landing — by which point
+        # the bank usually covers the need anyway, and the silence this timer
+        # exists to end has already been sat through. The plan's own deadline,
+        # and nothing where it has none — which is a reply whose first request
+        # is still its only measurement, released by the bank once that
+        # request has said what it costs.
+        if first_audio and hold.wall_s and self._hold_timer is None:
+            self._hold_timer = asyncio.get_running_loop().call_later(
+                hold.wall_s, self._release_later
+            )
         if hold.all:
             return
         if hold.bank:
@@ -395,13 +457,8 @@ class _Session:
                 await self._release()
             return
         if hold.wall_s:
-            if first_audio:
-                # The first audio has arrived; the hold is counted from here.
-                self._hold_timer = asyncio.get_running_loop().call_later(
-                    hold.wall_s, self._release_later
-                )
             return
-        if not hold.wall_s and hold.banked_s >= hold.audio_s:
+        if hold.banked_s >= hold.audio_s:
             await self._release()
 
     def _release_later(self) -> None:
@@ -459,9 +516,17 @@ class _Session:
     def _done(self, mode: str) -> dict:
         return {
             "type": "done",
-            # What actually happened, not what was planned: a reply that fit
-            # one request was spoken whole, whichever way it got there.
-            "mode": mode if self._requests > 1 else "whole",
+            # What actually happened, not what was planned. A reply that fit
+            # one request was spoken whole, whichever way it got there — the
+            # plan is about where to cut, and there was nowhere to cut.
+            #
+            # Buffered is the exception, because it is not a statement about
+            # cutting: it is one about releasing, and holding every byte until
+            # the render ends is what it did whether or not that took one
+            # request. Measured on MOSS, the same reply in one request was
+            # heard at 4.53 s spoken as it rendered and at 26.96 s held —
+            # twenty-two seconds apart, and both were reporting `whole`.
+            "mode": mode if self._requests > 1 or mode == BUFFERED else "whole",
             "batches": self._requests,
             "audio_seconds": round(self._sent_audio_s, 3),
             # What the model was busy for, as opposed to what the listener
@@ -470,7 +535,7 @@ class _Session:
             "render_ms": round(self._render_s * 1000, 1),
             # Where the wait went. The model being made resident is paid
             # before `ready`; the writer's time runs from `ready` to `end`
-            # and is what a paced reply waits for before it can render.
+            # and is what a planned reply waits for before it can render.
             "load_ms": round(
                 ((self._ready_at or self._started) - self._started) * 1000, 1
             ),
@@ -493,7 +558,12 @@ async def speak_live(
     websocket: WebSocket, state: AppState = Depends(get_state_ws)
 ) -> None:
     """Speak a reply as it is written; see the module docstring for the frames."""
-    await websocket.accept()
+    # A client that offered subprotocols is dropped by the browser unless one
+    # is selected, and the admin UI offers them to carry its key.
+    offered = websocket.scope.get("subprotocols") or []
+    await websocket.accept(
+        subprotocol=WS_SUBPROTOCOL if WS_SUBPROTOCOL in offered else None
+    )
     session = _Session(websocket, state)
     with contextlib.suppress(WebSocketDisconnect):
         await session.run()

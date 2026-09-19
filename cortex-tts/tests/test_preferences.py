@@ -236,3 +236,27 @@ class TestTextRules:
         )
         save(tmp_path, prefs)
         assert load(tmp_path) == prefs
+
+    def test_every_setting_can_actually_be_written(self) -> None:
+        """A stored field is only real if all three layers carry it.
+
+        The dataclass holds it, `SettingsUpdate` has to accept it over the
+        wire, and `_VALIDATORS` has to let it through — a field missing from
+        either of the last two is stored as its default forever, and the PUT
+        answers 200 with `ignored: []` while dropping the value. That is how
+        the opening-wait setting shipped broken for one deploy, before it was
+        measured to decide nothing and removed.
+        """
+        from dataclasses import fields
+
+        from cortex_tts.api.schemas import SettingsUpdate
+        from cortex_tts.preferences import _VALIDATORS
+
+        stored = {f.name for f in fields(Preferences)}
+        assert stored <= set(SettingsUpdate.model_fields), (
+            "not settable over the API: "
+            f"{sorted(stored - set(SettingsUpdate.model_fields))}"
+        )
+        assert stored <= set(_VALIDATORS), (
+            f"silently dropped by validated(): {sorted(stored - set(_VALIDATORS))}"
+        )

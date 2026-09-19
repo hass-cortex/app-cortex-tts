@@ -140,9 +140,11 @@ class StatsStore:
     ) -> list[RenderSample]:
         """The renders a cost line is fitted from.
 
-        Pooled across a model's own voices, whose cost differs by 4%, and kept
-        apart for clones, whose reference rejoins the prompt every synthesis
-        at 0.354 s of render per second of recording. Pooling is what lets a
+        Pooled across a model's own voices, whose cost differed by 4% where
+        that was measured (MOSS), and kept apart for clones, whose reference
+        rejoins the prompt every synthesis — 0.354 s of render per second of
+        recording on OmniVoice, a tenth of that on MOSS, which is why the
+        intercept is not predicted from the recording's length. Pooling is what lets a
         model with eighteen built-in voices have a cost line at all.
         """
         by_key = self._renders.get(model_id) or {}
@@ -188,6 +190,22 @@ class StatsStore:
             del renders[:-MAX_RENDERS]
             self._write()
 
+    def _stand_in(self, model_id: str, skip: str) -> RenderModel | None:
+        """A line for a voice of this model that has none of its own.
+
+        Which lines are eligible is the store's to say; what one line made of
+        several should be is `RenderModel.dearest`, with the measurements that
+        settled it.
+        """
+        by_key = self._renders.get(model_id) or {}
+        return RenderModel.dearest(
+            [
+                fit
+                for key, samples in by_key.items()
+                if key != skip and (fit := RenderModel.fit(samples)) is not None
+            ]
+        )
+
     def render_model(
         self, model_id: str, kind: str, voice_id: str
     ) -> RenderModel | None:
@@ -195,13 +213,19 @@ class StatsStore:
 
         Two questions with two right groupings: the cost line comes from every
         voice that shares a cost, the pace only from this one.
+
+        A voice with no line of its own stands in one from the model's other
+        voices rather than going without. Without it a voice uploaded a minute
+        ago was buffered however long the model had been in use — and buffered
+        is what a caller asks for, not what the app should conclude on its own
+        while it still has something to go on. `samples` stays 0 on a stand-in,
+        so `get` and the card it feeds never show it as measured.
         """
+        key = self._key(kind, voice_id)
         with self._lock:
             cost = self._cost_samples(model_id, kind, voice_id)
-            own = list(
-                (self._renders.get(model_id) or {}).get(self._key(kind, voice_id)) or []
-            )
-        fit = RenderModel.fit(cost)
+            own = list((self._renders.get(model_id) or {}).get(key) or [])
+            fit = RenderModel.fit(cost) or self._stand_in(model_id, key)
         return fit.with_rates(speech_rates(own)) if fit else None
 
     def get(self, model_id: str) -> list[ModelStats]:

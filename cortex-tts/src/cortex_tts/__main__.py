@@ -31,6 +31,14 @@ def _configure_logging() -> None:
         for noisy in ("httpx", "httpcore", "huggingface_hub", "filelock"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    # Upstream logs each item of a batch, and every batch this app sends holds
+    # one — so the index is always 0 and the reference text and language are
+    # the same line repeated per sentence. What the model was asked to say is
+    # already logged once per request by `text.pipeline`, at the altitude a
+    # reader wants it. Held at INFO even under LOG_LEVEL=debug, because the
+    # point of turning debug on is to read the app, and this buries it.
+    logging.getLogger("cortex_speech.vendor.omnivoice.modeling").setLevel(logging.INFO)
+
 
 def _cap_numeric_threads(threads: int) -> None:
     """Hold BLAS and OpenMP to the same budget ONNX Runtime is given.

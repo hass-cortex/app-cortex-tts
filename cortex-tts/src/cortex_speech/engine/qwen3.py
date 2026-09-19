@@ -94,6 +94,12 @@ _TAG_FOR_LANGUAGE = {
 # temperature 0 it reliably does, and without a ceiling one 120-character
 # segment runs to the model's 2048-frame limit — measured at 2.7 minutes of
 # invented audio for ten characters of text.
+# The seed this runtime samples with unless told otherwise, matching the
+# default in `vendor/qwen3_tts_ort.py`. Zero, not the 42 a Hojo LM uses — the
+# retry ladder starts from the model's own so the streaming path, which
+# cannot retry, produces the same audio as the buffered one.
+_UPSTREAM_SEED = 0
+
 _FRAME_BUDGET_RATIO = 2.5
 _FRAME_BUDGET_FLOOR_SECONDS = 4.0
 
@@ -366,7 +372,9 @@ class Qwen3TtsEngine:
                 return np.zeros(0, dtype=np.float32)
             return np.concatenate(blocks)
 
-        return render_with_retries(text, self.sample_rate, generate)
+        return render_with_retries(
+            text, self.sample_rate, generate, seed=_UPSTREAM_SEED
+        )
 
     def synthesize(
         self,
@@ -450,7 +458,7 @@ class Qwen3TtsEngine:
                             if delivery.temperature is None
                             else delivery.temperature
                         ),
-                        seed=0,
+                        seed=_UPSTREAM_SEED,
                     ),
                     stop,
                 )

@@ -40,6 +40,12 @@ _VOICE_ID = re.compile(r"^hojo_(?P<lang>[a-z]{2})_(?P<sex>[fmu])_(?P<index>\d+)$
 _SEX = {"f": "female", "m": "male", "u": "unknown"}
 _LANG_LABEL = {"zh": "Chinese", "en": "English"}
 
+# The seed this runtime samples with unless told otherwise, matching the
+# default in `vendor/hojo40.py`'s `generate`. Tried first, so an ordinary
+# request gets what the model produces upstream; `overrun.RETRY_SEEDS` only
+# follow when a generation truncates.
+_UPSTREAM_SEED = 42
+
 
 def _describe(voice_id: str) -> Voice:
     match = _VOICE_ID.match(voice_id)
@@ -153,7 +159,9 @@ class PresetEngine:
                 # left empty upstream. Nothing downstream can recover.
                 raise NoAudioError(f"model produced no audio for {text!r}") from err
 
-        return render_with_retries(text, self.sample_rate, generate)
+        return render_with_retries(
+            text, self.sample_rate, generate, seed=_UPSTREAM_SEED
+        )
 
     def synthesize(
         self,

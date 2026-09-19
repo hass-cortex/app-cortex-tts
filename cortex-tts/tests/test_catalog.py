@@ -16,6 +16,7 @@ import yaml
 from cortex_speech import BY_ID, CATALOG, ModelSpec, catalog
 from cortex_speech.catalog import BundleSource
 from cortex_speech.engine import backends
+from cortex_speech.pacing.model import PRIOR_CJK_PER_S
 from cortex_tts.preferences import Preferences
 
 
@@ -338,3 +339,60 @@ class TestOrphanedBundles:
         (tmp_path / "models").mkdir(parents=True)
         (tmp_path / "models" / "notes.txt").write_text("x")
         assert catalog.orphaned_bundles(tmp_path) == {}
+
+
+class TestTheAudioCeiling:
+    """What one call may produce is the model's; what it costs is the host's.
+
+    A generator ceiling truncates: past it the call returns the audio it had
+    and the rest of the text is never spoken. That figure belongs to the model
+    and is declared. How long a request should be *here* is a different
+    question, and `batch_cap_s` answers it from this host's own samples — so a
+    model with no ceiling of its own is given no number on its behalf.
+    """
+
+    ZH = "有一天，臥室裡的立扇決定離家出走。" * 40
+    EN = "One day the fan in the bedroom decided to leave home. " * 40
+
+    def test_a_model_with_no_established_ceiling_is_not_given_one(self) -> None:
+        spec = BY_ID["omnivoice"]
+        assert spec.max_audio_s is None
+        assert spec.max_chars_per_segment is None
+        assert spec.segment_limit(self.ZH) is None
+        assert spec.segment_limit(self.EN) is None
+
+    @pytest.mark.parametrize(
+        ("model", "seconds"),
+        [
+            ("hojo-40m", 40.96),
+            ("hojo-80m-clone", 40.96),
+            ("moss-nano", 30.0),
+            ("qwen3-tts-0.6b", 163.84),
+            ("qwen3-tts-0.6b-clone", 163.84),
+        ],
+    )
+    def test_a_declared_ceiling_is_what_the_model_can_produce(
+        self, model: str, seconds: float
+    ) -> None:
+        assert BY_ID[model].max_audio_s == seconds
+
+    def test_the_limit_is_in_characters_and_so_differs_by_script(self) -> None:
+        """One ceiling, two answers: CJK speaks about 4.1 characters a second
+        against Latin's 14.7, so the same seconds are very different texts."""
+        spec = BY_ID["moss-nano"]
+        assert spec.segment_limit(self.ZH) == int(30.0 * PRIOR_CJK_PER_S)
+        assert spec.segment_limit(self.EN) > 3 * spec.segment_limit(self.ZH)
+
+    def test_no_model_can_be_handed_more_audio_than_it_declares(self) -> None:
+        """The invariant the ceiling exists to keep, over the whole catalog."""
+        for spec in CATALOG:
+            if spec.max_audio_s is None:
+                continue
+            for text, rate in ((self.ZH, PRIOR_CJK_PER_S), (self.EN, 14.7)):
+                limit = spec.segment_limit(text)
+                assert limit is not None
+                assert limit / rate <= spec.max_audio_s + 1e-6
+
+    def test_an_empty_text_falls_back_rather_than_dividing_by_nothing(self) -> None:
+        spec = BY_ID["moss-nano"]
+        assert spec.segment_limit("   ") == spec.max_chars_per_segment

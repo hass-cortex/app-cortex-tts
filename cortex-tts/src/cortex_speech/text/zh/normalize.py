@@ -1,8 +1,8 @@
 """Turn Home Assistant text into something the TTS model can pronounce.
 
-Measured on this model: unnormalised sensor text ("26.5°C", "68%", "14:35")
+Measured on the Hojo 40M: unnormalised sensor text ("26.5°C", "68%", "14:35")
 comes out at 36-50% character error rate, against 4% once the numbers and
-units are spelled out. The model ships no text normalisation, so this module
+units are spelled out. No model here ships text normalisation, so this module
 is the difference between a usable voice and noise.
 
 Latin words are left untouched: the model reads English natively, and

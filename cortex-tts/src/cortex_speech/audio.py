@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, Literal, Protocol
 
 import numpy as np
@@ -214,8 +214,12 @@ class StreamEncoder(Protocol):
     """How a stream's samples become the bytes a player receives.
 
     A format belongs here only if it can be written without knowing how long
-    the audio will be — which is the whole difficulty of streaming synthesis,
-    and why `/api/speak`'s FLAC and OGG are not offered.
+    the audio will be, which is the whole difficulty of streaming synthesis.
+    MP3 can: every frame carries its own header. WAV can, behind a header
+    declaring a length nobody knows yet. OGG could too — it is a sequence of
+    self-describing pages, and `soundfile` emits them as they fill — and is
+    simply not implemented. FLAC cannot as written: libsndfile rewrites the
+    STREAMINFO on close, and a stream has already sent those bytes.
     """
 
     content_type: str
@@ -314,6 +318,20 @@ STREAM_ENCODERS: dict[str, Callable[[], StreamEncoder]] = {
 """Formats a chunked stream can produce, by the name a caller asks for."""
 
 
+def levelled_frames(chunks: Iterable[np.ndarray]) -> bytes:
+    """Finished audio as one levelled block of PCM.
+
+    `StreamGain` only ever attenuates, because a stream has no finished
+    waveform to measure and scaling each chunk to its own peak would pump. A
+    reply held to its end does have one: buffered is defined by holding every
+    byte until the render is over, so it can be levelled exactly as `encode`
+    levels a file, and arrive at the same loudness as one.
+    """
+    blocks = [np.asarray(chunk, dtype=np.float32) for chunk in chunks]
+    audio = np.concatenate(blocks) if blocks else np.zeros(0, dtype=np.float32)
+    return pcm_frames(normalize_level(audio))
+
+
 class StreamGain:
     """A one-way output gain for a single stream, so no chunk hard-clips.
 
@@ -321,7 +339,8 @@ class StreamGain:
     waveform to measure, and for a while had no level control at all — which
     left `pcm_frames` clamping whatever the model generated above full scale.
     Measured on MOSS-TTS-Nano over a Home-Assistant-shaped reply: 11 clamped
-    runs in 8.6 s of audio, against none from `/api/speak` on the same text.
+    runs in 8.6 s of audio, against none from a finished file of the same
+    text, which is levelled before it is encoded.
 
     Scaling each chunk to its own peak is the obvious fix and the wrong one —
     every chunk would arrive at the same loudness and the speech would pump.

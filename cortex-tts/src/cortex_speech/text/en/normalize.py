@@ -236,8 +236,8 @@ def _number(match: re.Match[str], options: NormalizeOptions) -> str:
 
 
 # Whatever still holds Arabic numerals once every other pass has run is welded
-# to letters — "P0", "v1.2", "24V". The model pronounces no digit at all, so
-# leaving these alone does not keep them intact, it makes them silent.
+# to letters — "P0", "v1.2". These are identifiers rather than quantities, so
+# they are read digit by digit whatever the model would have made of them.
 _WELDED = re.compile(r"\d+(?:\.\d+)*")
 
 

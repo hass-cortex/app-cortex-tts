@@ -25,6 +25,7 @@ from cortex_speech import (
     BY_ID,
     CATALOG,
     EXECUTION_PROVIDERS,
+    SENTENCE_PAUSE_S,
     ExecutionProvider,
     write_json,
 )
@@ -94,6 +95,10 @@ class Preferences:
             first the model offers.
         temperature: Sampling temperature for engines that have one.
         preload: Load the default model at startup rather than on first use.
+        max_sentence_pause: The longest silence a sentence end may carry.
+            Playback that catches the renderer there is heard as a pause
+            between sentences, so the opening need not be held against it.
+            A cut inside a sentence never earns this.
         text_rules: What the text switches default to, per model and
             language, for a request that leaves them out.
     """
@@ -106,6 +111,7 @@ class Preferences:
     default_voice: str = "hojo_zh_f_01"
     temperature: float = 0.8
     preload: bool = True
+    max_sentence_pause: float = SENTENCE_PAUSE_S
     text_rules: tuple[TextRule, ...] = ()
 
     def text_defaults(self, model: str, language: str) -> TextRule:
@@ -160,6 +166,13 @@ class Preferences:
             self.num_threads != other.num_threads
             or self.execution_provider != other.execution_provider
         )
+
+
+def _sentence_pause(value: Any) -> float:
+    number = float(value)
+    if not 0.0 <= number <= 10.0:
+        raise ValueError("sentence pause out of range")
+    return number
 
 
 def _threads(value: Any) -> int:
@@ -251,6 +264,7 @@ _VALIDATORS: dict[str, Any] = {
     "execution_provider": _provider,
     "max_loaded_models": _loaded,
     "idle_unload_seconds": _idle,
+    "max_sentence_pause": _sentence_pause,
     "default_model": _model,
     # Deliberately unvalidated: a voice only exists once its model is
     # downloaded, and refusing one that is not there yet would make the field

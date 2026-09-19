@@ -59,8 +59,9 @@ class AppState:
     """How the app behaves, as the user last set it.
 
     Mutable on purpose: `PUT /api/settings` replaces it and the next request
-    reads the new value. The three that are bound when a session is created
-    are applied by dropping what is resident, not by restarting."""
+    reads the new value. The two that are bound when a session is created —
+    `num_threads` and `execution_provider`, the pair `rebuild_needed` compares
+    — are applied by dropping what is resident, not by restarting."""
     settings_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     """Serialises `PUT /api/settings`.
 
@@ -110,11 +111,36 @@ def is_ingress(request: HTTPConnection) -> bool:
     return request.client is not None and request.client.host == INGRESS_PEER
 
 
-def _supplied_key(authorization: str | None, x_api_key: str | None) -> str:
+WS_SUBPROTOCOL = "cortex-tts"
+"""What a browser offers first when it carries the key as a subprotocol.
+
+A `WebSocket` constructor cannot set a header, so a page served from a
+published port has no way to send `X-API-Key` on the handshake. The
+subprotocol list is the one field it can set, and it travels in the same
+handshake the header would have — so `["cortex-tts", "<key>"]` says the same
+thing to the same reader. API clients, which can set headers, still do.
+"""
+
+
+def _subprotocol_key(conn: HTTPConnection) -> str:
+    """The key a browser put in the subprotocol list, if it did."""
+    offered = conn.scope.get("subprotocols") or []
+    if len(offered) < 2 or offered[0] != WS_SUBPROTOCOL:
+        return ""
+    return str(offered[1]).strip()
+
+
+def _supplied_key(
+    authorization: str | None,
+    x_api_key: str | None,
+    conn: HTTPConnection | None = None,
+) -> str:
     if authorization and authorization.lower().startswith("bearer "):
         return authorization[7:].strip()
     if x_api_key:
         return x_api_key.strip()
+    if conn is not None:
+        return _subprotocol_key(conn)
     return ""
 
 
@@ -132,7 +158,7 @@ def _key_accepted(
     if not expected or is_ingress(conn):
         return True
 
-    supplied = _supplied_key(authorization, x_api_key)
+    supplied = _supplied_key(authorization, x_api_key, conn)
     # Constant-time compare so a wrong key cannot be narrowed by timing. Bytes,
     # because the str form raises on a non-ASCII token instead of rejecting it.
     if supplied and hmac.compare_digest(

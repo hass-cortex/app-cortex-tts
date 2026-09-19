@@ -23,6 +23,7 @@ from .audio import (
     decode_reference,
     encode,
     level,
+    levelled_frames,
     wav_header,
 )
 from .catalog import (
@@ -56,8 +57,9 @@ from .notifications import notify_models_changed
 from .notifications import subscribe as subscribe_models_changed
 from .pacing import (
     BUFFERED,
-    PACED,
+    PLANNED,
     STREAMING,
+    UNHELD,
     Decision,
     Finished,
     Planner,
@@ -65,8 +67,10 @@ from .pacing import (
     RenderSample,
     Send,
     Wait,
+    ends_sentence,
 )
 from .pacing.model import count_scripts, speech_rates
+from .pacing.planner import SENTENCE_PAUSE_S
 from .providers import (
     EXECUTION_PROVIDERS,
     ExecutionProvider,
@@ -115,14 +119,17 @@ __all__ = [
     "BY_ID",
     "count_scripts",
     "Decision",
+    "ends_sentence",
     "Finished",
-    "PACED",
+    "PLANNED",
     "Planner",
+    "SENTENCE_PAUSE_S",
     "RenderModel",
     "RenderSample",
     "speech_rates",
     "Send",
     "STREAMING",
+    "UNHELD",
     "StopCheck",
     "Wait",
     "CATALOG",
@@ -137,6 +144,7 @@ __all__ = [
     "EXECUTION_PROVIDERS",
     "ExecutionProvider",
     "level",
+    "levelled_frames",
     "MAX_REFERENCE_SECONDS",
     "ModelNotReadyError",
     "ModelSpec",

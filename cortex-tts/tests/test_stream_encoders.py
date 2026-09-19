@@ -67,7 +67,7 @@ class TestStreamGain:
     `encode` peak-normalises a finished waveform; a stream has none, and the
     clamp in `pcm_frames` turned everything the model generated above full
     scale into distortion — measured as 11 clamped runs in 8.6 s of a
-    Home-Assistant-shaped MOSS reply, against none from `/api/speak`.
+    Home-Assistant-shaped MOSS reply, against none from a levelled file.
     """
 
     @staticmethod

@@ -1,10 +1,12 @@
 """Which models are in memory, and the serialisation around them.
 
-Two constraints shape this. Loading both bundles at once costs roughly 2.8 GB
-of resident memory, which is more than a typical Home Assistant host wants to
-give a text-to-speech service, so the registry keeps a bounded set and evicts
-the least recently used. And ONNX Runtime sessions here drive a stateful
-per-token loop, so each engine serves one request at a time.
+Two constraints shape this. Two resident models cost more memory than a
+typical Home Assistant host wants to give a text-to-speech service — the
+figures are per pair in `docs/models.md` — so the registry keeps a bounded set
+and evicts the least recently used. And an engine serves one request at a
+time: most here drive a stateful per-token loop through ONNX Runtime, and the
+one that does not (OmniVoice unmasks over a fixed number of steps) shares the
+same session state, so interleaving corrupts rather than merely slows.
 """
 
 from __future__ import annotations
@@ -131,7 +133,8 @@ class EngineRegistry:
             max_loaded: How many engines may stay in memory at once.
             idle_seconds: Drop an engine this long after its last request;
                 0 keeps it until something evicts it.
-            temperature: Default sampling temperature for both engines.
+            temperature: Default sampling temperature, for the engines that
+                have one — MOSS and OmniVoice discard it.
             execution_provider: Which provider every engine asks ORT for.
         """
         self._data_dir = data_dir
@@ -475,8 +478,9 @@ class EngineRegistry:
         that the first chunk arrives sooner on some models than others.
 
         The engine lock is held for the whole stream, matching `synthesize`:
-        these ONNX sessions drive a stateful per-token loop and interleaving
-        two of them corrupts state rather than merely slowing things down.
+        these sessions carry state across a render — a per-token loop on
+        most engines, a fixed unmasking schedule on OmniVoice — and
+        interleaving two corrupts it rather than merely slowing things down.
         """
         wanted = self._with_default_temperature(delivery)
         async with self._lease(model_id) as slot:

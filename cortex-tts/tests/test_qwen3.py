@@ -107,8 +107,23 @@ class TestTheGenerationCeiling:
     def test_empty_text_is_not_a_zero_budget(self) -> None:
         assert _frame_budget("") > 0
 
-    def test_it_stays_under_the_models_own_limit_for_one_segment(self) -> None:
-        """A segment is at most `MAX_CHARS_PER_SEGMENT`; the cap has to bite first."""
-        from cortex_speech.text.pipeline import MAX_CHARS_PER_SEGMENT
+    def test_it_bites_long_before_the_models_own_limit_on_ordinary_text(
+        self,
+    ) -> None:
+        """What the budget is for: a short segment must not be able to run to
+        the talker's 2048 frames, which is 2.7 minutes of invented audio."""
+        assert _frame_budget("字" * 120) < 2048
 
-        assert _frame_budget("字" * MAX_CHARS_PER_SEGMENT) < 2048
+    def test_a_segment_sized_by_the_ceiling_predicts_audio_within_it(self) -> None:
+        """At full length the model's own 2048 frames is the bound, and the
+        segment is sized so the audio it predicts stays inside the ceiling —
+        with the slow-side rate, which over-estimates the seconds a character
+        takes and so under-fills the request."""
+        from cortex_speech import BY_ID
+        from cortex_speech.pacing.model import PRIOR_CJK_PER_S
+
+        spec = BY_ID["qwen3-tts-0.6b"]
+        limit = spec.segment_limit("字" * 1000)
+        assert limit is not None
+        assert spec.max_audio_s is not None
+        assert limit / PRIOR_CJK_PER_S <= spec.max_audio_s

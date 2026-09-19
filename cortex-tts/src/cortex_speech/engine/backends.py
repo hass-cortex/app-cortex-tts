@@ -39,8 +39,10 @@ class BuildContext:
         num_threads: ONNX Runtime thread count; 0 lets the runtime decide.
         temperature: Default sampling temperature, for backends that have one.
         execution_provider: Which ONNX Runtime provider to ask for. Every
-            engine honours it, and every engine reports back what it actually
-            got — see `cortex_speech.providers`.
+            engine honours it for the graphs it runs under ORT and reports
+            back what it actually got — see `cortex_speech.providers`. It does
+            not reach what an engine keeps outside ORT: OmniVoice's tokenizer,
+            prompt and decoder stay on the CPU in torch whatever is asked.
     """
 
     directory: Path

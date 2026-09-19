@@ -74,7 +74,7 @@ class TestTheFigureItself:
     ) -> None:
         """The reason the card is fitted at all.
 
-        A paced reply arrives as a burst of short requests of one length.
+        A planned reply arrives as a burst of short requests of one length.
         Averaged, each would carry the whole fixed cost and read high; fitted,
         they add a point at one end of a line the longer ones already define.
         """
@@ -183,9 +183,15 @@ class TestOneFigurePerKind:
         assert abs(measured["designed"] - 3.46) < 0.05
         assert abs(measured["reference:v1"] - 7.17) < 0.05
 
-    def test_a_kind_never_served_has_no_fit(self, store: StatsStore) -> None:
+    def test_a_kind_never_served_stands_in_rather_than_going_without(
+        self, store: StatsStore
+    ) -> None:
+        """Kinds are kept apart on the card; the planner may still borrow."""
         _measure(store, "moss-nano", "reference", factor=1.2)
-        assert store.render_model("moss-nano", "builtin", "v1") is None
+        stand_in = store.render_model("moss-nano", "builtin", "v1")
+        assert stand_in is not None
+        # Borrowed, never counted: the card must not show it as measured.
+        assert stand_in.samples == 0
         assert store.render_model("moss-nano", "reference", "v1") is not None
 
     def test_they_are_returned_in_a_stable_order(self, store: StatsStore) -> None:
@@ -199,6 +205,63 @@ class TestOneFigurePerKind:
         _measure(store, "omnivoice", "reference")
         store.forget("omnivoice")
         assert store.get("omnivoice") == []
+
+
+class TestAVoiceThisHostHasNotHeard:
+    """It stands in the model's other lines rather than going without.
+
+    Buffered is what a caller asks for, not what the app should conclude on
+    its own while it still has something to go on — and what it had was
+    thrown away by a grouping that refused a clone every part of a sibling's
+    line, when only the intercept is really the clone's own. Measured on one
+    host: MOSS 0.401 built-in against 0.360 cloned, OmniVoice 0.717 designed
+    against 0.718 and 0.608 for two clones, while the intercepts ran 0.308
+    against 1.157 and 1.496.
+    """
+
+    def test_a_new_clone_is_not_left_unmeasured(self, store: StatsStore) -> None:
+        _measure(store, "omnivoice", "designed", fixed=0.3, factor=0.72)
+        assert store.render_model("omnivoice", "reference", "just-uploaded") is not None
+
+    def test_it_stands_in_the_dearest_of_them(self, store: StatsStore) -> None:
+        """Too dear costs a wait; too cheap costs a gap nobody can un-hear."""
+        _measure(store, "omnivoice", "designed", fixed=0.3, factor=0.72)
+        _measure(store, "omnivoice", "reference", "ya-ping", fixed=1.16, factor=0.6)
+        stand_in = store.render_model("omnivoice", "reference", "just-uploaded")
+        assert stand_in is not None
+        assert stand_in.per_audio == pytest.approx(0.72, abs=0.02)
+        assert stand_in.fixed_s == pytest.approx(1.16, abs=0.05)
+
+    def test_a_model_with_nothing_measured_still_has_nothing(
+        self, store: StatsStore
+    ) -> None:
+        """No line of any voice is the one case buffered is still the answer."""
+        _measure(store, "moss-nano", "builtin")
+        assert store.render_model("omnivoice", "designed", "v1") is None
+
+    def test_its_own_line_wins_the_moment_it_has_one(self, store: StatsStore) -> None:
+        _measure(store, "omnivoice", "designed", fixed=0.3, factor=0.72)
+        _measure(store, "omnivoice", "reference", "hsiao-chen", fixed=1.5, factor=0.61)
+        own = store.render_model("omnivoice", "reference", "hsiao-chen")
+        assert own is not None
+        assert own.per_audio == pytest.approx(0.61, abs=0.02)
+
+    def test_the_card_never_shows_a_stand_in(self, store: StatsStore) -> None:
+        """`get` answers what was measured; only the planner may borrow."""
+        _measure(store, "omnivoice", "designed")
+        assert [m.kind for m in store.get("omnivoice")] == ["designed"]
+
+    def test_one_render_of_the_real_voice_sets_its_pace(
+        self, store: StatsStore
+    ) -> None:
+        """A borrowed cost line must not bring a borrowed speech rate."""
+        _measure(store, "omnivoice", "designed")
+        blind = store.render_model("omnivoice", "reference", "hsiao-chen")
+        store.record("omnivoice", "reference", "hsiao-chen", _sample(8.0))
+        heard = store.render_model("omnivoice", "reference", "hsiao-chen")
+        assert blind is not None and heard is not None
+        assert blind.cjk_per_s == 4.1, "the prior, deliberately slow"
+        assert heard.cjk_per_s == pytest.approx(4.0, abs=0.05)
 
 
 class TestWhoOwnsWhichNumber:

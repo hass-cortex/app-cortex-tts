@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from cortex_speech import AudioFormat, Delivery
 
-API_VERSION = 3
+API_VERSION = 4
 """Bumped when a route, field or header the integration reads changes shape.
 
 The app's release version says nothing about the wire; this does, and it is
@@ -66,9 +66,10 @@ class VoiceOut(BaseModel):
 class MeasuredRtf(BaseModel):
     """What this host measured for one kind of voice.
 
-    The fit a live reply is paced from — `fixed_s + per_audio × audio` — which
-    is also where a card's figure comes from: `per_audio` is the real-time
-    factor with the per-request fixed cost held out rather than averaged in.
+    The fit a live reply is planned from — `fixed_s + per_audio × audio` — which
+    is also where a card's figure comes from. `per_audio` is the slope, and a
+    real-time factor is `fixed_s / audio + per_audio`, so `audio_ref_s` says
+    at what length to quote it — the mean request this host served.
     """
 
     kind: str
@@ -80,6 +81,8 @@ class MeasuredRtf(BaseModel):
     """Render seconds per audio second."""
     fixed_s: float
     """Render seconds a request costs before any audio."""
+    audio_ref_s: float
+    """The mean audio of the requests fitted: where to quote the factor."""
     spread_s: float
     """One standard deviation of what the line failed to explain."""
     cjk_per_s: float
@@ -192,18 +195,6 @@ class SpeakCommon(BaseModel):
         )
 
 
-class SpeakRequest(SpeakCommon):
-    """A synthesis request: the words, and a container that may declare one."""
-
-    text: str = Field(min_length=1, max_length=4000)
-    format: AudioFormat | None = None
-    """Container to answer in; wav by default. A finished file may declare
-    its own length, which is what separates this from a live reply's mp3."""
-    normalize_level: bool = True
-    """Scale the finished waveform to a target peak. Only a finished waveform
-    can be, which is why a live reply has `StreamGain` instead."""
-
-
 class LiveStart(SpeakCommon):
     """The opening frame of `/api/speak/live`: everything but the words.
 
@@ -214,9 +205,18 @@ class LiveStart(SpeakCommon):
     type: Literal["start"] = "start"
     format: Literal["mp3", "wav"] = "mp3"
     """MP3 unless raw PCM is wanted: a stream cannot declare a length."""
-    mode: Literal["auto", "buffered"] = "auto"
-    """`auto` lets the server pace the reply from what it has measured;
-    `buffered` releases nothing until the whole reply is rendered."""
+    mode: Literal["auto", "buffered", "planned", "unheld", "streaming"] = "auto"
+    """`auto` lets the server choose from what it has measured, and is what
+    anything serving a listener should send.
+
+    The other three insist, for a caller comparing one delivery against
+    another on the same reply: `buffered` releases nothing until the whole
+    reply is rendered, `planned` waits for the whole reply and then plans it,
+    and `streaming` renders as the text arrives even where the server would
+    have judged the model unable to keep ahead. Insisting is honoured as far
+    as the reply allows — streaming needs a cost line before the first byte,
+    and a host that has none still paces — so the `done` frame, not this
+    field, is what says how the reply went."""
 
 
 class LiveText(BaseModel):
@@ -280,11 +280,11 @@ class PreviewRequest(BaseModel):
 
     text: str = Field(min_length=1, max_length=4000)
     model: str | None = None
-    """The model the text is meant for, as on `/api/speak`: one that reads
+    """The model the text is meant for, as on a reply: one that reads
     digits itself changes what is prepared for a language without a locale.
     Left out, the default model's answer."""
     language: str | None = Field(default=None, max_length=32)
-    """The language of the text, as on `/api/speak`; sniffed when left out."""
+    """The language of the text, as on a reply; sniffed when left out."""
     normalize_text: bool | None = None
     expand_numbers: bool | None = None
     convert_script: bool | None = None
@@ -307,8 +307,10 @@ class PreviewResponse(BaseModel):
     language: str
     """The tag the text was read as — the request's, or sniffed."""
     passes: dict[str, bool]
-    """Every switch this language has, and whether it ran: `normalize_text`
-    always, `convert_script` and `taiwan_readings` on Chinese only."""
+    """Every switch this request had, and whether it ran: `normalize_text` and
+    `expand_numbers` always, `convert_script` and `taiwan_readings` on Chinese
+    only. `expand_numbers` is the one the model decides rather than the
+    language, from `needs_number_words`."""
     readings: list[Reading]
     """The Taiwan-reading rewrites, in text order; empty when the pass is off."""
 
@@ -361,6 +363,7 @@ class SettingsOut(BaseModel):
     default_voice: str
     temperature: float
     preload: bool
+    max_sentence_pause: float
     text_rules: list[TextRule]
 
 
@@ -380,6 +383,7 @@ class SettingsUpdate(BaseModel):
     default_voice: str | None = None
     temperature: float | None = None
     preload: bool | None = None
+    max_sentence_pause: float | None = Field(default=None, ge=0.0, le=10.0)
     text_rules: list[TextRule] | None = None
     """The whole list; sending one replaces what was stored."""
 

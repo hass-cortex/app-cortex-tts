@@ -1,8 +1,10 @@
 """Chinese numeral rendering.
 
-The TTS model has no text normalisation of its own: it pronounces whatever
-glyphs it is given. Arabic digits reaching the model come out as noise, so
-every number must already be Chinese characters by the time it is synthesised.
+No model here ships text normalisation: each pronounces whatever glyphs it is
+given. Whether a bare digit survives that is the model's own — the two Hojo
+models declare `needs_number_words` because theirs does not — but a number
+written the way the language reads it is safe on every one of them, which is
+what this module produces.
 
 Two readings are needed and they are not interchangeable:
 

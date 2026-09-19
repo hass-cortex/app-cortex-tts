@@ -296,9 +296,10 @@ class OmniVoiceEngine:
         # One call, not one per segment: the pipeline batches, and a reference
         # prompt is encoded into the batch once rather than per sentence.
         #
-        # The language is told per segment. A request carries none, so the
-        # script the text reads as is the only thing that can answer, and
-        # upstream is measurably better when told than when left to guess.
+        # The language is told per segment. This model declares
+        # `language_choice`, so a request may name one; where it does not, the
+        # script the text reads as answers instead. Upstream is measurably
+        # better when told than when left to guess.
         language = self._language(delivery.language)
         rendered = self._model.generate(
             text=list(segments),

@@ -106,7 +106,7 @@ class TestSampling:
     The runtime seeds once at construction and draws from that generator for
     every frame, so consecutive syntheses came out differently: the same line
     measured 6.80 s, 7.52 s and 9.60 s on three requests. A reply split across
-    requests is several syntheses, which is how one half ended up paced
+    requests is several syntheses, which is how one half ended up planned
     differently from the other.
     """
 

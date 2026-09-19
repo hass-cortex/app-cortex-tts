@@ -18,6 +18,16 @@ _CLAUSE_BREAK = re.compile(r"(?<=[\n；;：:，、,])")
 _ENDS_SENTENCE = re.compile(r"[。！？；!?;\n]$|[^\d\s]\.\s$")
 
 
+def ends_sentence(text: str) -> bool:
+    """Whether this text stops where a speaker would stop.
+
+    A batch cut at a sentence end can absorb silence: the listener hears a
+    pause, which is what belongs there. One cut at a clause mark cannot —
+    the same silence lands inside a sentence, and that is a fault.
+    """
+    return bool(_ENDS_SENTENCE.search(text.rstrip()))
+
+
 def clause_pieces(text: str) -> list[str]:
     """Split on clause marks, keeping each mark with the text before it."""
     return [piece for piece in _CLAUSE_BREAK.split(text) if piece]
@@ -74,13 +84,29 @@ class SentenceBuffer:
         return taken
 
     def take_prefix(self, text: str) -> None:
-        """Remove `text` from the front of the buffer, after a clause cut.
+        """Remove `text` from the front of the buffer, after a cut.
 
         The planner decides where to cut; this only removes what it sent.
+
+        What it sends is sentences joined, and `_split` drops the whitespace
+        between them — a blank line between two paragraphs is in the buffer
+        and not in the cut. So the two are walked together and the buffer's
+        own spacing is allowed to fall away, rather than requiring a literal
+        prefix: a reply with paragraph breaks is ordinary, and demanding one
+        raised `cut does not match the buffer` on every such reply.
         """
-        if not self._text.startswith(text):
-            raise ValueError("cut does not match the buffer")
-        self._text = self._text[len(text) :]
+        index = 0
+        for char in text:
+            while (
+                index < len(self._text)
+                and self._text[index] != char
+                and self._text[index].isspace()
+            ):
+                index += 1
+            if index >= len(self._text) or self._text[index] != char:
+                raise ValueError("cut does not match the buffer")
+            index += 1
+        self._text = self._text[index:]
 
     def take_all(self) -> str:
         """Remove and return everything, sentences and tail alike."""

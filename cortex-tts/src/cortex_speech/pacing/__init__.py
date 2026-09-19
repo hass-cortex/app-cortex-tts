@@ -11,20 +11,22 @@ the lead and reads the decision.
 from .model import RenderModel, RenderSample
 from .planner import (
     BUFFERED,
-    PACED,
+    PLANNED,
     STREAMING,
+    UNHELD,
     Decision,
     Finished,
     Planner,
     Send,
     Wait,
 )
-from .sentences import SentenceBuffer, clause_pieces
+from .sentences import SentenceBuffer, clause_pieces, ends_sentence
 
 __all__ = [
     "BUFFERED",
-    "PACED",
+    "PLANNED",
     "STREAMING",
+    "UNHELD",
     "Decision",
     "Finished",
     "Planner",
@@ -34,4 +36,5 @@ __all__ = [
     "SentenceBuffer",
     "Wait",
     "clause_pieces",
+    "ends_sentence",
 ]

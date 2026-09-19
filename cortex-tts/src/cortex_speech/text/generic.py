@@ -1,7 +1,8 @@
 """The locale a language gets when nobody has written it one.
 
-The models pronounce no Arabic numeral in any language, so the least a
-language needs is its numbers read out — ``num2words`` knows how to for some
+A model that has not declared `reads_numerals` is not trusted with digits or
+unit symbols, and none here has, so the least a language needs is its numbers
+read out — ``num2words`` knows how to for some
 forty of them — and the shapes Home Assistant puts numbers in read the way
 that language reads them: unit symbols named as CLDR names them (``babel``,
 through the table in `units`: 26.5°C is "sechsundzwanzig Komma fünf Grad

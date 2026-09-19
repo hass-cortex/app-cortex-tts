@@ -19,10 +19,13 @@ class Voice:
     Attributes:
         id: Identifier passed back in a synthesis request.
         name: Human-readable label.
-        language: Base language code, or ``None`` when the voice reads
-            whatever it is given — OmniVoice's designed voices. A cloned
-            voice carries the language of its recording, which says what was
-            said in it rather than what the voice may be asked to say.
+        language: Base language code, or ``None`` when there is none to
+            give — either because the voice reads whatever it is given
+            (OmniVoice's designed voices) or because the engine did not
+            recognise the id well enough to say. A caller cannot tell the two
+            apart and should read ``None`` as "unstated". A cloned voice
+            carries the language of its recording, which says what was said
+            in it rather than what the voice may be asked to say.
         gender: ``female``, ``male`` or ``unknown``.
         source: ``builtin`` for voices shipped in the bundle, ``designed``
             for ones the model builds from an attribute vocabulary, and
@@ -162,8 +165,9 @@ class StreamingEngine(Protocol):
     """An engine that can emit audio before a segment is finished.
 
     Deliberately separate from `Engine` rather than an optional method on it.
-    Two of the three engines cannot do this, and a protocol they would have to
-    decline is a protocol that lies about them — the registry asks with
+    Most engines here cannot do this — MOSS and Qwen3-TTS satisfy it, the Hojo
+    pair and OmniVoice do not — and a protocol they would have to decline is a
+    protocol that lies about them: the registry asks with
     `isinstance` and falls back, so an engine that stays silent about streaming
     is simply not asked.
     """
@@ -238,9 +242,11 @@ class UnsupportedLanguageError(EngineError):
 def reference_voices(references: ReferenceStore) -> list[Voice]:
     """Return one voice per stored reference recording.
 
-    Cloning models have no voices of their own — the uploaded recordings are
-    the voices. Keeping this outside the engine means the list can be read
-    without loading a multi-gigabyte bundle just to enumerate it.
+    A recording is a voice on every model that can clone. It is not the whole
+    of such a model's list — MOSS also ships built-in voices and OmniVoice
+    designed ones, and the registry concatenates — but for the two clone-only
+    entries it is all of it. Keeping this outside the engine means the list can
+    be read without loading a multi-gigabyte bundle just to enumerate it.
     """
     return [
         Voice(

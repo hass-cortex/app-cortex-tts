@@ -27,6 +27,19 @@ INGRESS = {"X-Ingress-Path": "/api/hassio_ingress/x"}
 AUTH = {"Authorization": "Bearer test-key"}
 
 
+def _refused_live(client: TestClient, headers: dict[str, str], **start: object) -> dict:
+    """The error frame a live reply is refused with, before any audio exists.
+
+    `check_delivery` runs on the opening frame, so a field the model cannot
+    honour is answered here rather than after a download or a render.
+    """
+    with client, client.websocket_connect("/api/speak/live", headers=headers) as ws:
+        ws.send_json({"type": "start", **start})
+        frame = ws.receive_json()
+    assert frame["type"] == "error", frame
+    return frame
+
+
 class TestHealth:
     """The probe Home Assistant and the deploy loop rely on."""
 
@@ -173,6 +186,51 @@ class TestPreview:
         assert response.status_code == 200
         assert response.json()["prepared"] == "现在室内温度是摄氏二十六点五度。"
 
+    def _preview_segments(self, client: TestClient, text: str, model: str) -> int:
+        response = client.post(
+            "/api/preview", headers=AUTH, json={"text": text, "model": model}
+        )
+        assert response.status_code == 200
+        return len(response.json()["segments"])
+
+    def test_preview_cuts_the_text_the_way_the_chosen_model_will(
+        self, client: TestClient
+    ) -> None:
+        """The whole point of the preview is that it is not an approximation.
+
+        How much text one synthesis takes is the model's own, so a preview
+        that used one figure for all of them would show a reply cut into
+        pieces the engine would never be handed.
+        """
+        text = "".join(
+            f"這是第{n}句話，用來把回覆拉長到超過任何一個模型的上限。"
+            for n in range(40)
+        )
+        counts = {
+            model: self._preview_segments(client, text, model)
+            for model in ("moss-nano", "hojo-40m", "qwen3-tts-0.6b")
+        }
+        # The order of their ceilings: 30 s, 41 s, 164 s. A larger ceiling is
+        # fewer pieces of the same reply.
+        assert counts["moss-nano"] > counts["hojo-40m"] > counts["qwen3-tts-0.6b"], (
+            counts
+        )
+
+    def test_a_model_with_no_established_ceiling_is_not_cut_for_one(
+        self, client: TestClient
+    ) -> None:
+        """OmniVoice declares neither bound, so nothing splits it by length.
+
+        A figure that is neither the model's nor this host's would be wrong on
+        some machine; what bounds a request here is `batch_cap_s`, which the
+        planner measures.
+        """
+        text = "".join(
+            f"這是第{n}句話，用來把回覆拉長到超過任何一個模型的上限。"
+            for n in range(40)
+        )
+        assert self._preview_segments(client, text, "omnivoice") == 1
+
     def test_preview_respects_the_switches(self, client: TestClient) -> None:
         response = client.post(
             "/api/preview",
@@ -255,11 +313,11 @@ class TestPreview:
         assert body["prepared"] == "乐色车来了。"
 
     def test_both_endpoints_leave_the_chinese_switches_to_the_language(self) -> None:
-        # /api/speak and /api/preview must default alike, or a zh-CN call would
-        # get Taiwan readings on one and not the other.
-        from cortex_tts.api.schemas import PreviewRequest, SpeakRequest
+        # The opening frame of a reply and /api/preview must default alike, or
+        # a zh-CN call would get Taiwan readings on one and not the other.
+        from cortex_tts.api.schemas import LiveStart, PreviewRequest
 
-        for request in (SpeakRequest(text="x"), PreviewRequest(text="x")):
+        for request in (LiveStart(), PreviewRequest(text="x")):
             assert request.convert_script is None
             assert request.taiwan_readings is None
 
@@ -361,13 +419,17 @@ class TestSpeakErrors:
     def test_unspeakable_text_is_rejected_before_the_model(
         self, client: TestClient
     ) -> None:
-        response = client.post("/api/speak", headers=AUTH, json={"text": "。。。"})
+        response = client.post(
+            "/v1/audio/speech", headers=AUTH, json={"input": "。。。"}
+        )
         assert response.status_code == 400
         assert response.json()["code"] == "EMPTY_TEXT"
 
     def test_empty_text_fails_validation(self, client: TestClient) -> None:
         assert (
-            client.post("/api/speak", headers=AUTH, json={"text": ""}).status_code
+            client.post(
+                "/v1/audio/speech", headers=AUTH, json={"input": ""}
+            ).status_code
             == 422
         )
 
@@ -392,9 +454,9 @@ class TestACloneOnlyModel:
 
     def test_the_load_is_a_conflict(self, with_reference: TestClient) -> None:
         response = with_reference.post(
-            "/api/speak",
+            "/v1/audio/speech",
             headers=AUTH,
-            json={"text": "你好。", "model": "hojo-80m-clone"},
+            json={"input": "你好。", "model": "hojo-80m-clone"},
         )
         assert response.status_code == 409
         assert response.json()["code"] == "MODEL_NOT_READY"
@@ -508,7 +570,9 @@ class TestResettingStats:
 
     def test_undownloaded_model_is_a_conflict(self, client: TestClient) -> None:
         response = client.post(
-            "/api/speak", headers=AUTH, json={"text": "測試", "model": "hojo-40m"}
+            "/v1/audio/speech",
+            headers=AUTH,
+            json={"input": "測試", "model": "hojo-40m"},
         )
         assert response.status_code == 409
         assert response.json()["code"] == "MODEL_NOT_READY"
@@ -622,18 +686,13 @@ class TestTemperatureOption:
 
     def test_a_request_may_override_it(self, client: TestClient) -> None:
         # Accepted by the schema; synthesis itself needs a downloaded model.
-        response = client.post(
-            "/api/speak",
-            headers=AUTH,
-            json={"text": "測試", "model": "hojo-40m", "temperature": 0},
-        )
-        assert response.status_code == 409
+        frame = _refused_live(client, AUTH, model="hojo-40m", temperature=0)
+        assert frame["code"] == "MODEL_NOT_READY"
 
     def test_an_out_of_range_temperature_is_rejected(self, client: TestClient) -> None:
-        response = client.post(
-            "/api/speak", headers=AUTH, json={"text": "測試", "temperature": 5}
-        )
-        assert response.status_code == 422
+        """Outside 0-1 the opening frame does not parse, and says which field."""
+        frame = _refused_live(client, AUTH, temperature=5)
+        assert "temperature" in frame["message"]
 
 
 class TestSettingsEndpoint:
@@ -713,11 +772,11 @@ class TestErrorShape:
     """Every error is `{"code", "message"}`, whoever raised it."""
 
     def test_validation_errors_use_the_shape(self, client: TestClient) -> None:
-        response = client.post("/api/speak", headers=AUTH, json={"text": ""})
+        response = client.post("/v1/audio/speech", headers=AUTH, json={"input": ""})
         assert response.status_code == 422
         body = response.json()
         assert body["code"] == "VALIDATION"
-        assert "text" in body["message"]
+        assert "input" in body["message"]
 
     def test_unknown_routes_use_the_shape(self, client: TestClient) -> None:
         response = client.get("/api/nope", headers=AUTH)
@@ -727,7 +786,7 @@ class TestErrorShape:
 
 class TestHealthContract:
     def test_health_carries_the_api_version(self, client: TestClient) -> None:
-        assert client.get("/health").json()["api_version"] == 3
+        assert client.get("/health").json()["api_version"] == 4
 
 
 class TestSettingsReporting:
@@ -804,55 +863,40 @@ class TestAKnobTheModelDoesNotHave:
         self, client: TestClient
     ) -> None:
         """MOSS fuses sampling into its graph; there is no knob to turn."""
-        response = client.post(
-            "/api/speak",
-            headers=AUTH,
-            json={"text": "你好。", "model": "moss-nano", "temperature": 0.5},
-        )
-        assert response.status_code == 400
-        assert response.json()["code"] == "NO_TEMPERATURE"
+        frame = _refused_live(client, AUTH, model="moss-nano", temperature=0.5)
+        assert frame["code"] == "NO_TEMPERATURE"
 
     def test_an_instruction_on_a_model_without_one_is_refused(
         self, ingress_client: TestClient
     ) -> None:
-        response = ingress_client.post(
-            "/api/speak",
-            json={
-                "text": "你好。",
-                "model": "moss-nano",
-                "instruct": "speak slowly, in a warm tone",
-            },
-            headers=INGRESS,
+        frame = _refused_live(
+            ingress_client,
+            INGRESS,
+            model="moss-nano",
+            instruct="speak slowly, in a warm tone",
         )
-        assert response.status_code == 400
-        assert response.json()["code"] == "NO_STYLE_INSTRUCTION"
+        assert frame["code"] == "NO_STYLE_INSTRUCTION"
 
     def test_the_cloning_checkpoint_refuses_an_instruction(
         self, ingress_client: TestClient
     ) -> None:
         """Upstream's own feature gate: instruct is a CustomVoice feature and
         the Base checkpoint raises on it."""
-        response = ingress_client.post(
-            "/api/speak",
-            json={
-                "text": "你好。",
-                "model": "qwen3-tts-0.6b-clone",
-                "instruct": "speak slowly, in a warm tone",
-            },
-            headers=INGRESS,
+        frame = _refused_live(
+            ingress_client,
+            INGRESS,
+            model="qwen3-tts-0.6b-clone",
+            instruct="speak slowly, in a warm tone",
         )
-        assert response.status_code == 400
-        assert response.json()["code"] == "NO_STYLE_INSTRUCTION"
+        assert frame["code"] == "NO_STYLE_INSTRUCTION"
 
     def test_the_refusal_beats_not_downloaded(self, ingress_client: TestClient) -> None:
         """No model is on disk in the tests, so a 409 here would mean the
         check moved behind the download and stopped being answerable."""
-        response = ingress_client.post(
-            "/api/speak",
-            json={"text": "你好。", "model": "omnivoice", "instruct": "speak slowly"},
-            headers=INGRESS,
+        frame = _refused_live(
+            ingress_client, INGRESS, model="omnivoice", instruct="speak slowly"
         )
-        assert response.status_code == 400
+        assert frame["code"] == "NO_STYLE_INSTRUCTION"
 
     def test_the_capabilities_are_reported(self, ingress_client: TestClient) -> None:
         """The UI shows a field only where one means something."""

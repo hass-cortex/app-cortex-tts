@@ -30,10 +30,11 @@ TRUNCATION_RATIO = 0.6
 # Too short to judge: normal variation swamps the signal.
 MIN_JUDGEABLE_CHARS = 20
 
-# Seeds tried in order. The first matches the upstream default, so ordinary
-# output is unchanged and reproducible; the rest only come into play when a
-# generation truncates.
-RETRY_SEEDS = (42, 7, 1234)
+# Seeds tried after the model's own, in order, and only when a generation
+# truncates. The first seed is not here because it is the model's: a Hojo LM
+# defaults to 42 and Qwen3-TTS to 0, so hardcoding either would silently
+# change what the other produces for an ordinary request.
+RETRY_SEEDS = (7, 1234)
 
 
 def expected_seconds(text: str) -> float:
@@ -135,7 +136,11 @@ def trim_trailing_babble(audio: np.ndarray, sample_rate: int, text: str) -> np.n
 
 
 def render_with_retries(
-    text: str, sample_rate: int, generate: Callable[[int], np.ndarray]
+    text: str,
+    sample_rate: int,
+    generate: Callable[[int], np.ndarray],
+    *,
+    seed: int,
 ) -> np.ndarray:
     """Render one segment, retrying a generation that stopped early.
 
@@ -143,9 +148,19 @@ def render_with_retries(
     early does so on every retry of the same text; only a different seed
     changes the outcome. When every seed comes up short the best effort is
     returned rather than nothing, the log having said it is incomplete.
+
+    Args:
+        text: The segment, for judging whether what came back is short.
+        sample_rate: The engine's, for turning samples into seconds.
+        generate: Renders the segment at one seed.
+        seed: The model's own default, tried first so an ordinary request
+            gets what that model produces unseeded. It is per model — a Hojo
+            LM defaults to 42, Qwen3-TTS to 0 — and the streaming path, which
+            cannot retry, uses the same one.
     """
     wave = np.zeros(0, dtype=np.float32)
-    for attempt, seed in enumerate(RETRY_SEEDS):
+    seeds = (seed, *RETRY_SEEDS)
+    for attempt, seed in enumerate(seeds):
         wave = generate(seed)
         seconds = len(wave) / sample_rate
         if not looks_truncated(text, seconds):
@@ -156,6 +171,6 @@ def render_with_retries(
             seconds,
             seed,
             attempt + 1,
-            len(RETRY_SEEDS),
+            len(seeds),
         )
     return wave

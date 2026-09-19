@@ -57,11 +57,13 @@ if len(sys.argv) > 3:
 
 
 def speak(model: str, voice: str, text: str) -> dict[str, float]:
+    # The OpenAI-shaped route, which is the one that answers a finished file;
+    # it reports the same `X-Cortex-*` figures.
     body = json.dumps(
-        {"text": text, "model": model, "voice": voice, "format": "wav"}
+        {"input": text, "model": model, "voice": voice, "response_format": "wav"}
     ).encode()
     req = urllib.request.Request(
-        f"{HOST}/api/speak",
+        f"{HOST}/v1/audio/speech",
         data=body,
         method="POST",
         headers={"Authorization": f"Bearer {KEY}", "content-type": "application/json"},

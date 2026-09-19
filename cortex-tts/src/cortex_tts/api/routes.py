@@ -81,7 +81,6 @@ from .schemas import (
     SettingsOut,
     SettingsSaved,
     SettingsUpdate,
-    SpeakRequest,
     SpeakStats,
     VoiceOut,
 )
@@ -236,6 +235,7 @@ def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
                 voice=split_key(m.kind)[1],
                 per_audio=m.render.per_audio,
                 fixed_s=m.render.fixed_s,
+                audio_ref_s=m.render.audio_ref_s,
                 spread_s=m.render.spread_s,
                 cjk_per_s=m.render.cjk_per_s,
                 latin_per_s=m.render.latin_per_s,
@@ -397,7 +397,12 @@ async def preview_text(
         needs_number_words=spec.needs_number_words,
     )
     prepared = run(text, decided, options.normalize_options)
-    segments = segment(prepared, stop=decided.locale.stop)
+    # The model's own ceiling, so the preview shows the segments the engine
+    # would be handed rather than the default's. Read off the prepared text,
+    # which is what the engine gets and what the limit is counted in.
+    segments = segment(
+        prepared, limit=spec.segment_limit(prepared), stop=decided.locale.stop
+    )
     readings: list[Reading] = []
     if decided.rewrites.get("taiwan_readings"):
         # The rewrites are read off the text the pass saw, not diffed back out
@@ -558,6 +563,7 @@ def prepare_segments(
         language,
         reads_numerals=spec.reads_numerals,
         needs_number_words=spec.needs_number_words,
+        limit=spec.segment_limit,
     )
 
 
@@ -620,7 +626,6 @@ async def _synthesize(
     voice: str | None,
     fmt: AudioFormat,
     asked: Switches = _Unasked(),
-    normalize_level: bool = True,
     delivery: Delivery = Delivery(),
     request: Request | None = None,
 ) -> tuple[bytes, SpeakStats]:
@@ -664,7 +669,9 @@ async def _synthesize(
         watcher.cancel()
     wall = time.perf_counter() - started
 
-    audio = encode(result.audio, result.sample_rate, fmt, normalize=normalize_level)
+    # A finished file is levelled; only a stream cannot be, which is what
+    # `StreamGain` and `levelled_frames` are for on the live route.
+    audio = encode(result.audio, result.sample_rate, fmt, normalize=True)
     seconds = len(result.audio) / result.sample_rate
     stats = SpeakStats(
         model_id=spec.id,
@@ -717,25 +724,6 @@ def render_sample(text: str, audio_s: float, wall_s: float) -> RenderSample:
     """One request as the render model learns it, from the caller's own text."""
     cjk, latin = count_scripts(text)
     return RenderSample(audio_s=audio_s, wall_s=wall_s, cjk=cjk, latin=latin)
-
-
-@api.post("/speak", responses={200: {"content": {"audio/wav": {}}}})
-async def speak(
-    body: SpeakRequest, request: Request, state: AppState = Depends(get_state)
-) -> Response:
-    """Synthesise text and return the audio file."""
-    audio, stats = await _synthesize(
-        state,
-        text=body.text,
-        model=body.model,
-        voice=body.voice,
-        fmt=body.format or "wav",
-        asked=body,
-        normalize_level=body.normalize_level,
-        delivery=body.delivery(),
-        request=request,
-    )
-    return _audio_response(audio, body.format or "wav", stats)
 
 
 @compat.post("/audio/speech", responses={200: {"content": {"audio/wav": {}}}})

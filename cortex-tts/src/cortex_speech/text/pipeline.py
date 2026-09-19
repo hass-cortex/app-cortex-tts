@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 from . import en, generic, zh
@@ -24,10 +25,13 @@ _LOGGER = logging.getLogger(__name__)
 register(zh.LOCALE)
 register(en.LOCALE)
 
-# Upper bound on a single synthesis. The LM tops out at 2048 new tokens at a
-# 50 Hz token rate — roughly 40 s of audio — and long prompts degrade before
-# they truncate, so requests are split into sentences well below that.
-MAX_CHARS_PER_SEGMENT = 120
+# A model that says how much text one call may carry declares it here, and a
+# model that does not is not given a number on its behalf: what a request costs
+# is the host's as much as the model's, and a figure that is neither is one
+# that will be wrong on some machine. What truncates rather than slows is the
+# generator's own ceiling, `ModelSpec.max_audio_s`, and that is counted in
+# audio; what bounds a request on this host is `ModelSpec.batch_cap_s`, which
+# the host's own samples replace as soon as they can say anything.
 
 # The ASCII full stop needs its own alternative: it also ends a decimal, so it
 # breaks a sentence only when a non-digit precedes it and whitespace follows.
@@ -280,14 +284,13 @@ def prepared_text(segments: list[str]) -> str:
     return out
 
 
-def segment(
-    text: str, limit: int = MAX_CHARS_PER_SEGMENT, stop: str | None = None
-) -> list[str]:
+def segment(text: str, limit: int | None = None, stop: str | None = None) -> list[str]:
     """Split text into synthesis-sized segments on sentence boundaries.
 
     Args:
         text: Already-normalised text.
-        limit: Maximum characters per segment.
+        limit: Maximum characters per segment, or `None` for no bound of
+            that kind — the text is then split on sentence boundaries only.
         stop: The sentence-final punctuation to add where a segment has
             none; the locale's when it is known, else the sniffed script's.
 
@@ -302,13 +305,13 @@ def segment(
         sentence = sentence.strip()
         if not sentence:
             continue
-        if len(buffer) + len(sentence) > limit and buffer:
+        if limit is not None and len(buffer) + len(sentence) > limit and buffer:
             segments.extend(_split_long(buffer, limit))
             buffer = sentence
         else:
             buffer += _joiner(buffer, sentence) + sentence
     if buffer:
-        segments.extend(_split_long(buffer, limit))
+        segments.extend(_split_long(buffer, limit) if limit is not None else [buffer])
     return [
         _terminate(s, final)
         for s in (seg.strip() for seg in segments)
@@ -360,6 +363,7 @@ def prepare(
     *,
     reads_numerals: bool = False,
     needs_number_words: bool = False,
+    limit: Callable[[str], int | None] | None = None,
 ) -> list[str]:
     """Run the full text path and return synthesis-ready segments.
 
@@ -369,6 +373,13 @@ def prepare(
         language: The request's language tag, or ``None`` to sniff the text.
         reads_numerals: Whether the model reads digits itself; see `plan`.
         needs_number_words: Whether it cannot say a digit at all; see `plan`.
+        limit: Asked for the characters one segment may carry, given the
+            *prepared* text — `ModelSpec.segment_limit`. A function rather
+            than a number because the answer depends on the script, which
+            normalisation can change: a number would have to be read off the
+            raw text, and a preview computed one way beside a synthesis
+            computed the other is two different cuts of the same reply.
+            `None` leaves the text split on sentence boundaries alone.
 
     Returns:
         Segments ready to hand to an engine, in reading order.
@@ -383,8 +394,11 @@ def prepare(
         reads_numerals=reads_numerals,
         needs_number_words=needs_number_words,
     )
+    prepared = run(text, decided, options.normalize_options)
     segments = segment(
-        run(text, decided, options.normalize_options), stop=decided.locale.stop
+        prepared,
+        limit=limit(prepared) if limit is not None else None,
+        stop=decided.locale.stop,
     )
     _LOGGER.debug("text path: %r -> %d segment(s)", text, len(segments))
     return segments
