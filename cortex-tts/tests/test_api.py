@@ -120,14 +120,14 @@ class TestDefaults:
             json.dumps(
                 {
                     "preload": False,
-                    "default_model": "hojo-80m-clone",
+                    "default_model": "moss-nano",
                     "default_voice": "ref_lounge",
                 }
             )
         )
         with TestClient(create_app()) as configured:
             body = configured.get("/api/defaults", headers=AUTH).json()
-        assert body == {"model": "hojo-80m-clone", "voice": "ref_lounge"}
+        assert body == {"model": "moss-nano", "voice": "ref_lounge"}
 
     def test_defaults_need_auth(self, client: TestClient) -> None:
         assert client.get("/api/defaults").status_code == 401
@@ -208,13 +208,11 @@ class TestPreview:
         )
         counts = {
             model: self._preview_segments(client, text, model)
-            for model in ("moss-nano", "hojo-40m", "qwen3-tts-0.6b")
+            for model in ("moss-nano", "hojo-40m")
         }
-        # The order of their ceilings: 30 s, 41 s, 164 s. A larger ceiling is
-        # fewer pieces of the same reply.
-        assert counts["moss-nano"] > counts["hojo-40m"] > counts["qwen3-tts-0.6b"], (
-            counts
-        )
+        # The order of their ceilings: 30 s, 41 s. A larger ceiling is fewer
+        # pieces of the same reply.
+        assert counts["moss-nano"] > counts["hojo-40m"], counts
 
     def test_a_model_with_no_established_ceiling_is_not_cut_for_one(
         self, client: TestClient
@@ -222,8 +220,7 @@ class TestPreview:
         """OmniVoice declares neither bound, so nothing splits it by length.
 
         A figure that is neither the model's nor this host's would be wrong on
-        some machine; what bounds a request here is `batch_cap_s`, which the
-        planner measures.
+        some machine (ADR 0007); a live reply is bounded by its sentences.
         """
         text = "".join(
             f"這是第{n}句話，用來把回覆拉長到超過任何一個模型的上限。"
@@ -456,36 +453,31 @@ class TestACloneOnlyModel:
         response = with_reference.post(
             "/v1/audio/speech",
             headers=AUTH,
-            json={"input": "你好。", "model": "hojo-80m-clone"},
+            json={"input": "你好。", "model": "moss-nano"},
         )
         assert response.status_code == 409
         assert response.json()["code"] == "MODEL_NOT_READY"
 
 
 class TestTheCardsFigure:
-    """What a model card reads, end to end.
-
-    The card and the planner are the same fit, so the number shown is the
-    factor with the per-request fixed cost held out — not an average of what
-    each request happened to cost.
-    """
+    """What a model card reads, end to end: the median, and the verdict it gives."""
 
     @staticmethod
     def _measured(tmp_path: Path) -> None:
         store = StatsStore(tmp_path / STATS_FILE)
-        for audio in (2.0, 4.0, 8.0):
+        for rtf in (0.5, 0.6, 0.55):
             store.record(
                 "hojo-40m",
                 "builtin",
                 "hojo_zh_f_01",
-                RenderSample(audio, 0.3 + 0.5 * audio, int(audio * 4), 0),
+                RenderSample(4.0, rtf * 4.0, "cpu"),
             )
 
     def test_an_unmeasured_model_reports_nothing(self, client: TestClient) -> None:
         body = client.get("/api/models", headers=AUTH).json()
         assert next(m for m in body if m["id"] == "hojo-40m")["rtf"] == []
 
-    def test_the_figure_is_the_fitted_factor(
+    def test_the_figure_is_the_median_and_its_verdict(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._measured(tmp_path)
@@ -495,12 +487,49 @@ class TestTheCardsFigure:
         with TestClient(create_app()) as fresh:
             body = fresh.get("/api/models", headers=AUTH).json()
         [entry] = next(m for m in body if m["id"] == "hojo-40m")["rtf"]
-        assert entry["kind"] == "builtin"
-        # 0.5 is the slope; an average of the three requests' own ratios would
-        # be about 0.6, pulled up by the fixed cost the short one pays.
-        assert abs(entry["per_audio"] - 0.5) < 0.02
-        assert abs(entry["fixed_s"] - 0.3) < 0.05
-        assert entry["requests"] == 3
+        assert entry == {
+            "kind": "builtin",
+            "voice": "hojo_zh_f_01",
+            "rtf": 0.55,
+            "samples": 3,
+            "provider": "cpu",
+            "threshold": 0.8,
+            "verdict": "streaming",
+        }
+
+    def test_a_voice_spoken_once_is_listed_without_a_verdict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = StatsStore(tmp_path / STATS_FILE)
+        store.record(
+            "hojo-40m", "builtin", "hojo_zh_f_02", RenderSample(4.0, 2.0, "cpu")
+        )
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("STATIC_DIR", str(tmp_path / "no-ui"))
+        monkeypatch.setenv("API_KEY", "test-key")
+        with TestClient(create_app()) as fresh:
+            body = fresh.get("/api/models", headers=AUTH).json()
+        [entry] = next(m for m in body if m["id"] == "hojo-40m")["rtf"]
+        assert (entry["voice"], entry["samples"], entry["verdict"]) == (
+            "hojo_zh_f_02",
+            1,
+            None,
+        )
+
+    def test_the_verdict_follows_the_hosts_threshold(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Move the line under the measured 0.55 and the same figure is
+        buffered; the card says which line it was judged against."""
+        self._measured(tmp_path)
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("STATIC_DIR", str(tmp_path / "no-ui"))
+        monkeypatch.setenv("API_KEY", "test-key")
+        with TestClient(create_app()) as fresh:
+            fresh.put("/api/settings", headers=AUTH, json={"stream_rtf": 0.5})
+            body = fresh.get("/api/models", headers=AUTH).json()
+        [entry] = next(m for m in body if m["id"] == "hojo-40m")["rtf"]
+        assert (entry["threshold"], entry["verdict"]) == (0.5, "buffered")
 
 
 class TestWhatAMeasurementCounts:
@@ -525,23 +554,11 @@ class TestWhatAMeasurementCounts:
 
 
 class TestWhatACostIsMeasuredPer:
-    """A clone is measured per voice; everything else per kind.
+    """Every voice is measured on its own, clones and built-in voices alike."""
 
-    Measured on OmniVoice: a reference's codec frames rejoin the prompt on
-    every synthesis, 0.354 s of render per second of recording. Pooled, clones
-    of a 3.4 s and a 6.1 s reference left about a second the line could not
-    explain, and `spread_s` — which every reply waits for — read 2.0 s against
-    0.1 s for the same model's designed voices.
-    """
-
-    def test_a_clone_is_named_by_its_own_voice(self) -> None:
+    def test_a_key_names_its_kind_and_voice(self) -> None:
         assert split_key("reference:ya-ping") == ("reference", "ya-ping")
-
-    @pytest.mark.parametrize("kind", ["builtin", "designed"])
-    def test_a_voice_the_model_brought_is_not(self, kind: str) -> None:
-        """A card names a clone; a model's own voices share one row, because
-        they share one cost line."""
-        assert split_key(kind) == (kind, None)
+        assert split_key("builtin:hojo_zh_f_01") == ("builtin", "hojo_zh_f_01")
 
 
 class TestResettingStats:
@@ -763,6 +780,20 @@ class TestSettingsEndpoint:
             == 300
         )
 
+    def test_the_streaming_threshold_is_a_setting_with_a_range(
+        self, client: TestClient
+    ) -> None:
+        saved = client.put(
+            "/api/settings", headers=AUTH, json={"stream_rtf": 1.2}
+        ).json()
+        assert saved["settings"]["stream_rtf"] == 1.2
+        assert not saved["reloaded"], "the pacer reads it per reply"
+        refused = client.put(
+            "/api/settings", headers=AUTH, json={"stream_rtf": 3.5}
+        ).json()
+        assert refused["ignored"] == ["stream_rtf"]
+        assert refused["settings"]["stream_rtf"] == 1.2
+
     def test_a_change_is_readable_immediately(self, client: TestClient) -> None:
         client.put("/api/settings", headers=AUTH, json={"default_model": "moss-nano"})
         assert (
@@ -829,7 +860,7 @@ class TestErrorShape:
 
 class TestHealthContract:
     def test_health_carries_the_api_version(self, client: TestClient) -> None:
-        assert client.get("/health").json()["api_version"] == 4
+        assert client.get("/health").json()["api_version"] == 5
 
 
 class TestSettingsReporting:
@@ -928,7 +959,7 @@ class TestAKnobTheModelDoesNotHave:
         frame = _refused_live(
             ingress_client,
             INGRESS,
-            model="qwen3-tts-0.6b-clone",
+            model="moss-nano",
             instruct="speak slowly, in a warm tone",
         )
         assert frame["code"] == "NO_STYLE_INSTRUCTION"
@@ -947,7 +978,6 @@ class TestAKnobTheModelDoesNotHave:
             m["id"]: m
             for m in ingress_client.get("/api/models", headers=INGRESS).json()
         }
-        assert models["qwen3-tts-0.6b"]["style_instruction"] is True
-        assert models["qwen3-tts-0.6b"]["language_choice"] is True
+        assert models["omnivoice"]["language_choice"] is True
         assert models["hojo-40m"]["language_choice"] is False
         assert models["omnivoice"]["style_instruction"] is False

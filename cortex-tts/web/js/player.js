@@ -30,4 +30,3 @@ export function play(src, { revokable = false, autoplay = true } = {}) {
     msg($("playerMsg"), err.name === "NotAllowedError" ? "Press play to hear it." : err.message, "warn");
   });
 }
-

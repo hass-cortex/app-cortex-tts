@@ -35,6 +35,7 @@ from cortex_speech import (
     MAX_REFERENCE_SECONDS,
     AbandonedError,
     AudioFormat,
+    BackendUnavailableError,
     Delivery,
     EngineError,
     ModelNotReadyError,
@@ -50,7 +51,6 @@ from cortex_speech import (
     UnknownVoiceError,
     UnsupportedLanguageError,
     Voice,
-    count_scripts,
     encode,
     plan,
     prepare,
@@ -58,12 +58,13 @@ from cortex_speech import (
     resolve_language,
     run,
     segment,
+    standins_for,
     taiwan_readings,
+    verdict,
 )
 
 from ..events import fire_models_changed
 from ..preferences import save as save_preferences
-from ..stats import split_key
 from .deps import AppState, get_state, require_api_key
 from .schemas import (
     DefaultsResponse,
@@ -186,6 +187,7 @@ async def write_settings(
         )
 
     _LOGGER.info("settings changed%s", " (models unloaded)" if reloaded else "")
+    state.updates.publish("settings", "models")
     return SettingsSaved(
         settings=SettingsOut(**asdict(updated)), reloaded=reloaded, ignored=ignored
     )
@@ -211,7 +213,8 @@ def voice_kind(state: AppState, spec: ModelSpec, voice_id: str) -> str:
 def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
     model_state = state.speech.model(spec)
     progress = state.downloads.status(spec.id)
-    measured = state.stats.get(spec.id)
+    provider = provider_of(state, spec)
+    measured = state.stats.get(spec.id, provider)
     return ModelOut(
         id=spec.id,
         name=spec.name,
@@ -232,21 +235,21 @@ def _model_out(state: AppState, spec: ModelSpec) -> ModelOut:
         rss_hint_mb=spec.rss_hint_mb,
         rtf=[
             MeasuredRtf(
-                kind=split_key(m.kind)[0],
-                voice=split_key(m.kind)[1],
-                per_audio=m.render.per_audio,
-                fixed_s=m.render.fixed_s,
-                audio_ref_s=m.render.audio_ref_s,
-                spread_s=m.render.spread_s,
-                cjk_per_s=m.render.cjk_per_s,
-                latin_per_s=m.render.latin_per_s,
-                requests=m.render.samples,
+                kind=m.kind,
+                voice=m.voice,
+                rtf=m.rtf,
+                samples=m.samples,
+                provider=m.provider,
+                threshold=state.preferences.stream_rtf,
+                verdict=(
+                    verdict(m.rtf, state.preferences.stream_rtf) if m.settled else None
+                ),
             )
             for m in measured
         ],
         downloaded=model_state.downloaded,
         loaded=model_state.loaded,
-        provider=state.registry.providers_in_use.get(spec.id),
+        provider=provider,
         missing_files=model_state.missing,
         disk_bytes=model_state.disk_bytes,
         download_state=progress.state if progress else None,
@@ -268,6 +271,7 @@ async def download_model(
     """Start (or rejoin) a background download of a model bundle."""
     spec = spec_or_404(state, model_id)
     state.downloads.start(spec)
+    state.updates.publish("models")
     return _model_out(state, spec)
 
 
@@ -287,6 +291,7 @@ async def delete_model(model_id: str, state: AppState = Depends(get_state)) -> M
     # Up to two gigabytes of files; not on the event loop.
     await asyncio.to_thread(state.speech.delete_model, spec)
     await asyncio.to_thread(state.stats.forget, model_id)
+    state.updates.publish("models", "voices")
     await fire_models_changed(f"deleted:{model_id}")
     return _model_out(state, spec)
 
@@ -297,6 +302,7 @@ async def load_model(model_id: str, state: AppState = Depends(get_state)) -> Mod
     spec = spec_or_404(state, model_id)
     with engine_errors():
         await state.registry.acquire(model_id)
+    state.updates.publish("models")
     return _model_out(state, spec)
 
 
@@ -305,6 +311,7 @@ async def unload_model(model_id: str, state: AppState = Depends(get_state)) -> M
     """Drop a model from memory, leaving its bundle on disk."""
     spec = spec_or_404(state, model_id)
     await state.registry.unload(model_id)
+    state.updates.publish("models")
     return _model_out(state, spec)
 
 
@@ -321,6 +328,7 @@ async def reset_model_stats(
     """
     spec = spec_or_404(state, model_id)
     await asyncio.to_thread(state.stats.forget, model_id)
+    state.updates.publish("models")
     return _model_out(state, spec)
 
 
@@ -328,6 +336,7 @@ async def reset_model_stats(
 async def reset_all_stats(state: AppState = Depends(get_state)) -> list[ModelOut]:
     """Forget every model's measured real-time factors at once."""
     await asyncio.to_thread(state.stats.clear)
+    state.updates.publish("models")
     return [_model_out(state, spec) for spec in CATALOG]
 
 
@@ -396,6 +405,7 @@ async def preview_text(
         body.language,
         reads_numerals=spec.reads_numerals,
         needs_number_words=spec.needs_number_words,
+        misreads=spec.misreads,
     )
     prepared = run(text, decided, options.normalize_options)
     # The model's own ceiling, so the preview shows the segments the engine
@@ -405,16 +415,26 @@ async def preview_text(
         prepared, limit=spec.segment_limit(prepared), stop=decided.locale.stop
     )
     readings: list[Reading] = []
-    if decided.rewrites.get("taiwan_readings"):
+    if decided.rewrites.get("taiwan_readings") or decided.misreads:
         # The rewrites are read off the text the pass saw, not diffed back out
         # of the result — a stand-in is one glyph for one glyph, so a diff
         # could not tell two adjacent rewrites apart.
         before = run(
             text,
-            replace(decided, rewrites={**decided.rewrites, "taiwan_readings": False}),
+            replace(
+                decided,
+                rewrites={**decided.rewrites, "taiwan_readings": False},
+                misreads=(),
+            ),
             options.normalize_options,
         )
-        readings = [Reading(word=w, standin=s) for w, s in taiwan_readings(before)]
+        if decided.rewrites.get("taiwan_readings"):
+            readings += [Reading(word=w, standin=s) for w, s in taiwan_readings(before)]
+        if decided.misreads and decided.locale.code == "zh":
+            readings += [
+                Reading(word=w, standin=s)
+                for w, s in standins_for(before, decided.misreads)
+            ]
     return PreviewResponse(
         original=body.text,
         prepared=prepared_text(segments),
@@ -564,6 +584,7 @@ def prepare_segments(
         language,
         reads_numerals=spec.reads_numerals,
         needs_number_words=spec.needs_number_words,
+        misreads=spec.misreads,
         limit=spec.segment_limit,
     )
 
@@ -684,15 +705,20 @@ async def _synthesize(
         rtf=round(result.inference_ms / 1000 / seconds, 3) if seconds else 0.0,
         prepared_text=prepared_text(segments),
     )
-    # Split by the kind of voice this was — a clone costs about twice what a
-    # designed voice does on the same model. The store is asked rather than
-    # the voice list, because that is a dict lookup and the list is a disk
-    # read on the hot path. The wall clock, not `inference_ms`: what the
-    # caller waited is what the fit has to predict.
+    # Recorded per voice — a clone costs about twice what a designed voice
+    # does on the same model. The store is asked rather than the voice list,
+    # because that is a dict lookup and the list is a disk read on the hot
+    # path. The wall clock, not `inference_ms`: what the caller waited is
+    # what the median has to describe.
     kind = voice_kind(state, spec, voice_id)
-    await asyncio.to_thread(
-        state.stats.record, spec.id, kind, voice_id, render_sample(text, seconds, wall)
-    )
+    if provider := provider_of(state, spec):
+        await asyncio.to_thread(
+            state.stats.record,
+            spec.id,
+            kind,
+            voice_id,
+            RenderSample(seconds, wall, provider),
+        )
     _LOGGER.info(
         "spoke %d chars as %s/%s -> %.2fs audio in %.0fms (RTF %.2f)",
         stats.characters,
@@ -721,10 +747,11 @@ def _audio_response(audio: bytes, fmt: AudioFormat, stats: SpeakStats) -> Respon
     )
 
 
-def render_sample(text: str, audio_s: float, wall_s: float) -> RenderSample:
-    """One request as the render model learns it, from the caller's own text."""
-    cjk, latin = count_scripts(text)
-    return RenderSample(audio_s=audio_s, wall_s=wall_s, cjk=cjk, latin=latin)
+def provider_of(state: AppState, spec: ModelSpec) -> str | None:
+    """The execution provider a resident model is running on; `None` if it
+    is not resident. Read from the sessions, never assumed: a sample labelled
+    with a guessed provider would describe a machine that does not exist."""
+    return state.registry.providers_in_use.get(spec.id)
 
 
 @compat.post("/audio/speech", responses={200: {"content": {"audio/wav": {}}}})
@@ -813,6 +840,7 @@ async def add_reference(
             http_status.HTTP_400_BAD_REQUEST, "BAD_REFERENCE", str(err)
         ) from err
     await state.registry.forget_reference(reference.id)
+    state.updates.publish("references", "voices")
     await fire_models_changed(f"reference-added:{reference.id}")
     return _reference_out(reference)
 
@@ -851,9 +879,11 @@ async def update_reference(
         raise http_error(
             http_status.HTTP_400_BAD_REQUEST, "BAD_REFERENCE", str(err)
         ) from err
+    state.updates.publish("references")
     if body.name is not None or body.gender is not None or body.language is not None:
         # All three are part of what the voice picker shows; a corrected
         # transcript changes nothing anyone can see there.
+        state.updates.publish("voices")
         await fire_models_changed(f"reference-updated:{reference_id}")
     return _reference_out(reference)
 
@@ -866,6 +896,7 @@ async def delete_reference(
     if not state.references.remove(reference_id):
         raise _no_reference(reference_id)
     await state.registry.forget_reference(reference_id)
+    state.updates.publish("references", "voices")
     await fire_models_changed(f"reference-removed:{reference_id}")
     return Response(status_code=http_status.HTTP_204_NO_CONTENT)
 
@@ -905,6 +936,11 @@ _WIRE_ERRORS: tuple[tuple[type[Exception], int, str], ...] = (
         ProviderUnavailableError,
         http_status.HTTP_503_SERVICE_UNAVAILABLE,
         "PROVIDER_UNAVAILABLE",
+    ),
+    (
+        BackendUnavailableError,
+        http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        "BACKEND_MISSING",
     ),
     # 503 rather than 500: the engine has been dropped, so the same request a
     # moment later may well work. It is a condition, not a defect in the call.

@@ -46,8 +46,8 @@ function bar(from, to, total, cls, label = "") {
  * clock the width of that last piece *is* the lead — the seconds of audio
  * between the listener and silence — so where it narrows to nothing is where
  * playback caught the renderer. Two lanes can show when each thing happened
- * and never show the distance between them, which is the quantity every
- * decision in the planner is about.
+ * and never show the distance between them, which is the quantity the
+ * pacing verdict is about.
  */
 function listenerRow(run, batches, total) {
   const audio = run.audio;
@@ -68,10 +68,12 @@ function listenerRow(run, batches, total) {
       + (run.gaps.length ? `, ${run.gaps.length} gap(s)` : "")
       + stopped
     : `held back ${run.released.toFixed(2)}s, then ${arrived.toFixed(1)}s of `
-      + "audio arrived — nothing was played, this browser has no audio clock";
-  const gaps = run.gaps.map((g) =>
-    bar(g.from, g.to, total, gapClass(batches, g.afterS),
-      `${(g.to - g.from).toFixed(2)}s`));
+      + "audio arrived — no audio clock, nothing was played";
+  // A gap too short to be noticed is counted but not drawn.
+  const gaps = run.gaps.map((g) => {
+    const cls = gapClass(g.to - g.from);
+    return cls ? bar(g.from, g.to, total, cls, `${(g.to - g.from).toFixed(2)}s`) : "";
+  });
   return `
       <div class="tl-item heard">
         <div class="tl-said"><b>▶</b><span>${esc(caption)}</span></div>
@@ -85,20 +87,13 @@ function listenerRow(run, batches, total) {
       </div>`;
 }
 /**
- * A gap after a sentence end is a pause; anywhere else it is a fault.
- *
- * Which boundary it fell at is read from how much audio had played when it
- * happened, because that is what the listener had got through — the batch
- * being rendered at the time is a different batch entirely.
+ * A gap is classed by its size alone: under 0.3 s passes unnoticed, up to a
+ * second is heard as a pause, longer is the reply run dry.
  */
-function gapClass(batches, afterS) {
-  let played = 0;
-  for (const batch of batches) {
-    if (batch.audioS === null) break;
-    played += batch.audioS;
-    if (Math.abs(played - afterS) < 0.2) return batch.endsSentence ? "pause" : "dry";
-  }
-  return "dry";
+function gapClass(lengthS) {
+  if (lengthS > 1) return "dry";
+  if (lengthS >= 0.3) return "warn";
+  return "";
 }
 export function axis(total) {
   // A tick every 1, 2, 5, 10… seconds, whichever gives about six of them.
@@ -114,14 +109,19 @@ export function axis(total) {
 export function summary(run) {
   const done = run.done;
   const rows = [];
-  if (run.ready) rows.push(["model", `${run.ready.model} · ${run.ready.voice}`]);
-  // `ready` says what the reply starts as, before any decision; a `batch`
-  // says the plan in force; `done` says what happened. The last one there is.
-  const planned = run.batches.length ? run.batches[run.batches.length - 1].mode : null;
+  if (run.ready) {
+    rows.push(["model", `${run.ready.model} · ${run.ready.voice}`]);
+    // What the verdict rests on: the voice's median RTF on this host, or
+    // nothing yet, in which case `auto` streams on trust.
+    const { rtf, samples } = run.ready;
+    rows.push(["measured", rtf === null || rtf === undefined
+      ? "not yet" : `RTF ${rtf.toFixed(2)} over ${samples}`]);
+  }
+  // `ready` carries the verdict; `done` says what happened. The last one there is.
   const asked = run.asked;
-  const actual = done ? done.mode : (planned || (run.ready ? run.ready.mode : "…"));
-  // What was asked for is only honoured as far as the reply allows, so the
-  // two are shown together when they differ rather than silently diverging.
+  const actual = done ? done.mode : (run.ready ? run.ready.mode : "…");
+  // Under `auto` the verdict is the answer; an insistence is shown beside
+  // the outcome when the two differ rather than silently diverging.
   rows.push(["mode", asked === "auto" || asked === actual
     ? actual : `${actual} (asked ${asked})`]);
   if (run.released !== null) {
@@ -144,8 +144,15 @@ export function summary(run) {
     rows.push(["requests", String(done.batches)]);
     rows.push(["audio", `${done.audio_seconds.toFixed(2)}s`]);
     rows.push(["render", `${(done.render_ms / 1000).toFixed(2)}s`]);
+    // What the first audio waited between being rendered and being released.
+    if (done.bank_wait_ms !== null && done.bank_wait_ms !== undefined) {
+      rows.push(["bank wait", `${Math.round(done.bank_wait_ms)}ms`]);
+    }
     if (done.min_lead_s !== null && done.min_lead_s !== undefined) {
-      rows.push(["min lead", `${done.min_lead_s > 0 ? "+" : ""}${done.min_lead_s.toFixed(2)}s`]);
+      const at = done.gap_at !== null && done.gap_at !== undefined
+        ? ` at request ${done.gap_at}` : "";
+      rows.push(["min lead",
+        `${done.min_lead_s > 0 ? "+" : ""}${done.min_lead_s.toFixed(2)}s${at}`]);
     }
   }
   return rows.map(([label, value]) =>
@@ -157,7 +164,7 @@ export function rows(run, clock, total) {
   const batches = run.batches;
   const rows = [];
 
-  // Making the model resident is paid before anything is planned, and on a
+  // Making the model resident is paid before anything is rendered, and on a
   // cold start it is most of the wait. Left unsaid it reads as dead air.
   if (run.readyAt !== null && run.readyAt > 0.3) {
     rows.push(`
@@ -188,8 +195,6 @@ export function rows(run, clock, total) {
         <div class="tl-said">
           <b>${batch.index}</b>
           <span>${esc(batch.text.replace(/\s+/g, " ").trim())}</span>
-          <i class="tl-mark ${batch.endsSentence ? "ok" : "mid"}">${
-            batch.endsSentence ? "sentence end" : "mid-sentence cut"}</i>
         </div>
         <div class="tl-track">${
           bar(batch.sentAt, to, total, failed ? "dry" : "render", cost)}</div>

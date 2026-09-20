@@ -50,7 +50,7 @@ const row = (r) => `
     <div class="ref-head">
       <input class="ref-name" data-ref-name="${esc(r.id)}" value="${esc(r.name)}"
         aria-label="Name of ${esc(r.id)}" spellcheck="false">
-      <span class="ref-id" title="The id a synthesis request names. It is fixed: renaming the voice does not move it.">${esc(r.id)}</span>
+      <span class="ref-id" title="The id a request names; renaming does not change it.">${esc(r.id)}</span>
       <select class="ref-gender" data-ref-gender="${esc(r.id)}" aria-label="Gender label of ${esc(r.id)}">
         ${GENDERS.map((g) => `<option value="${g}"${g === r.gender ? " selected" : ""}>${g}</option>`).join("")}
       </select>

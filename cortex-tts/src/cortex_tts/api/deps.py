@@ -28,6 +28,7 @@ from cortex_speech import (
 from ..config import Settings
 from ..preferences import Preferences
 from ..stats import StatsStore
+from ..updates import Hub
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +63,8 @@ class AppState:
     reads the new value. The two that are bound when a session is created —
     `num_threads` and `execution_provider`, the pair `rebuild_needed` compares
     — are applied by dropping what is resident, not by restarting."""
+    updates: Hub = field(default_factory=Hub)
+    """Where a route says the UI's picture of something went stale."""
     settings_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     """Serialises `PUT /api/settings`.
 

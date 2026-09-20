@@ -32,8 +32,8 @@ MIN_JUDGEABLE_CHARS = 20
 
 # Seeds tried after the model's own, in order, and only when a generation
 # truncates. The first seed is not here because it is the model's: a Hojo LM
-# defaults to 42 and Qwen3-TTS to 0, so hardcoding either would silently
-# change what the other produces for an ordinary request.
+# defaults to 42 and other runtimes to 0, so hardcoding one would silently
+# change what another produces for an ordinary request.
 RETRY_SEEDS = (7, 1234)
 
 
@@ -62,6 +62,23 @@ BABBLE_GAP_SECONDS = 0.25
 # Only look for babble when the clip runs well past what the text needs;
 # ordinary sentences vary but never by this much.
 OVERRUN_RATIO = 1.5
+
+# And only on text short enough for `CHARS_PER_SECOND` to be worth judging by.
+# That figure is one number for every voice and every sentence, and a voice's
+# own pace moves further than `OVERRUN_RATIO` allows: across the eleven
+# requests of one qwen3-tts-0.6b reply the same voice ran 2.81 to 5.19
+# characters a second. A 20-character sentence that genuinely took 7.12 s
+# therefore read as 1.6x its estimate and lost its last clause — transcribed,
+# the kept audio said 「后来他学会了最远的远方。」 where the model had said
+# 「后来他学会了：最远的远方不一定在门外。」
+#
+# The pathology this exists for is at the other end: a model that fails to
+# emit end-of-speech promptly on very short input, measured at 2 characters
+# ("好了", 0.7 s of text as 2.06 s) and at 5 ("大燈已關閉", 0.90 s as 1.74 s).
+# Between the two failures the choice is not close. Babble is a stray syllable
+# heard after the sentence; an over-cut is the sentence without its ending,
+# and nothing downstream can tell that it happened.
+MAX_BABBLE_CHARS = 20
 
 # How far below the duration estimate the kept audio may fall. Well under the
 # estimate on purpose: speech that simply ran fast must not be rejected.
@@ -112,12 +129,18 @@ def trim_trailing_babble(audio: np.ndarray, sample_rate: int, text: str) -> np.n
     On very short input the model often fails to emit end-of-speech promptly
     and carries on with a syllable or two of its own — audible as a stray
     noise after the sentence. Trailing utterances are dropped only while what
-    remains still covers the duration the text needs, so a real pause inside a
-    sentence is never cut.
+    remains still covers the duration the text needs.
+
+    Short input is also the only input this can judge: everything here rests
+    on `expected_seconds`, and past `MAX_BABBLE_CHARS` that estimate is looser
+    than the ratio it is compared against. The floor is no backstop there —
+    it is anchored on the same estimate.
     """
     seconds = len(audio) / sample_rate
     expected = expected_seconds(text)
-    if not text or seconds <= expected * OVERRUN_RATIO:
+    if not text or len(text) >= MAX_BABBLE_CHARS:
+        return audio
+    if seconds <= expected * OVERRUN_RATIO:
         return audio
 
     runs = _speech_runs(audio, sample_rate)
@@ -155,7 +178,7 @@ def render_with_retries(
         generate: Renders the segment at one seed.
         seed: The model's own default, tried first so an ordinary request
             gets what that model produces unseeded. It is per model — a Hojo
-            LM defaults to 42, Qwen3-TTS to 0 — and the streaming path, which
+            LM defaults to 42 — and the streaming path, which
             cannot retry, uses the same one.
     """
     wave = np.zeros(0, dtype=np.float32)

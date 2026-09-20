@@ -53,7 +53,7 @@ function hint(active) {
     parts.push(
       active.expand_numbers
         ? "A bare number is read as a quantity too."
-        : "A bare number stays as digits: it may be a room, a phone number or a model.",
+        : "A bare number stays as digits.",
     );
   }
   if ("convert_script" in active) {
@@ -127,7 +127,7 @@ function renderLedger(parts) {
     // warning that fires when nothing is wrong is one people learn to ignore.
     const risky = parts.conversionOff && HAS_HAN.test($("text").value);
     $("ledger").innerHTML = risky
-      ? '<div class="msg warn">Script conversion is off — the model will be handed Traditional glyphs it cannot pronounce.</div>'
+      ? '<div class="msg warn">Script conversion is off — the model will misread Traditional glyphs.</div>'
       : '<div class="cap ledger-empty">Nothing to rewrite</div>';
     return;
   }

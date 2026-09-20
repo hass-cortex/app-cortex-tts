@@ -61,8 +61,7 @@ OUT = (
 # cannot be fixed by dropping entries — it is decided per occurrence, from
 # whether a neighbouring word has the better claim on an edge character.
 BOUNDARIES = (
-    Path(__file__).resolve().parents[1]
-    / "src/cortex_speech/text/zh/boundary_words.tsv"
+    Path(__file__).resolve().parents[1] / "src/cortex_speech/text/zh/boundary_words.tsv"
 )
 
 # A word the corpus never saw is as likely a dictionary artefact as a word.

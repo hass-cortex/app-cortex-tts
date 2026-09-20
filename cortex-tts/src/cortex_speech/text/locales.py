@@ -68,6 +68,12 @@ class Locale:
     Home Assistant emits with num2words and CLDR and nothing else. A model
     that reads numerals itself beats the generic locale, and not a written
     one."""
+    misreads: Callable[[str, tuple[str, ...]], str] | None = None
+    """Respell the words a model misreads, given which words those are.
+
+    Which words is the model's to declare (`ModelSpec.misreads`); how to
+    respell one is the language's. A locale without this ignores the
+    declaration."""
 
     def rewrite(self, name: str) -> Rewrite | None:
         return next((r for r in self.rewrites if r.name == name), None)

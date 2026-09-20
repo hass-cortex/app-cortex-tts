@@ -165,8 +165,8 @@ class StreamingEngine(Protocol):
     """An engine that can emit audio before a segment is finished.
 
     Deliberately separate from `Engine` rather than an optional method on it.
-    Most engines here cannot do this — MOSS and Qwen3-TTS satisfy it, the Hojo
-    pair and OmniVoice do not — and a protocol they would have to decline is a
+    Most engines here cannot do this — MOSS satisfies it, the Hojo pair and
+    OmniVoice do not — and a protocol they would have to decline is a
     protocol that lies about them: the registry asks with
     `isinstance` and falls back, so an engine that stays silent about streaming
     is simply not asked.

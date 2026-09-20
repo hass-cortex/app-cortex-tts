@@ -16,7 +16,7 @@ import yaml
 from cortex_speech import BY_ID, CATALOG, ModelSpec, catalog
 from cortex_speech.catalog import BundleSource
 from cortex_speech.engine import backends
-from cortex_speech.pacing.model import PRIOR_CJK_PER_S
+from cortex_speech.text.scripts import HAN_RATE, LATIN_RATE
 from cortex_tts.preferences import Preferences
 
 
@@ -59,9 +59,7 @@ class TestCapabilities:
     # it, or the two drift and the disagreement is silent: the UI promises
     # the transcript matters, the model never sees it.
     CLONING_BACKENDS = {
-        "hojo-clone": "clone.py",
         "moss": "moss.py",
-        "qwen3-tts": "qwen3.py",
         "omnivoice": "omni.py",
     }
 
@@ -94,12 +92,10 @@ class TestCapabilities:
                 assert spec.cloning, f"{spec.id} reads a transcript it can never get"
 
     def test_shipped_models_declare_what_they_actually_do(self) -> None:
-        """The 40M has voices, the 80M clones; neither streams sub-sentence."""
+        """The 40M has voices and neither clones nor streams sub-sentence."""
         preset = BY_ID["hojo-40m"]
-        clone = BY_ID["hojo-80m-clone"]
         assert (preset.builtin_voices, preset.cloning) == (True, False)
-        assert (clone.builtin_voices, clone.cloning) == (False, True)
-        assert not preset.chunk_streaming and not clone.chunk_streaming
+        assert not preset.chunk_streaming
 
     def test_every_entry_can_produce_a_voice_somehow(self) -> None:
         """A model with neither capability would be unselectable in the UI."""
@@ -161,10 +157,10 @@ class TestListingVoicesLoadsNothing:
         assert not missing, f"models whose voices need a load: {missing}"
 
     def test_a_backend_without_a_reader_says_so(self) -> None:
-        """The 80M has no built-in voices, so it registers none."""
+        """A backend that registered no reader is refused by name."""
         with pytest.raises(backends.UnknownBackendError) as err:
-            backends.own_voices("hojo-clone", Path("/nowhere"))
-        assert "hojo-clone" in str(err.value)
+            backends.own_voices("no-such-backend", Path("/nowhere"))
+        assert "no-such-backend" in str(err.value)
 
     def test_a_reader_is_optional_at_registration(self) -> None:
         """A cloning-only backend must not be forced to write a stub."""
@@ -386,8 +382,8 @@ class TestTheAudioCeiling:
     A generator ceiling truncates: past it the call returns the audio it had
     and the rest of the text is never spoken. That figure belongs to the model
     and is declared. How long a request should be *here* is a different
-    question, and `batch_cap_s` answers it from this host's own samples — so a
-    model with no ceiling of its own is given no number on its behalf.
+    question, answered per reply by the pacing rules — so a model with no
+    ceiling of its own is given no number on its behalf.
     """
 
     ZH = "有一天，臥室裡的立扇決定離家出走。" * 40
@@ -404,10 +400,7 @@ class TestTheAudioCeiling:
         ("model", "seconds"),
         [
             ("hojo-40m", 40.96),
-            ("hojo-80m-clone", 40.96),
             ("moss-nano", 30.0),
-            ("qwen3-tts-0.6b", 163.84),
-            ("qwen3-tts-0.6b-clone", 163.84),
         ],
     )
     def test_a_declared_ceiling_is_what_the_model_can_produce(
@@ -419,7 +412,7 @@ class TestTheAudioCeiling:
         """One ceiling, two answers: CJK speaks about 4.1 characters a second
         against Latin's 14.7, so the same seconds are very different texts."""
         spec = BY_ID["moss-nano"]
-        assert spec.segment_limit(self.ZH) == int(30.0 * PRIOR_CJK_PER_S)
+        assert spec.segment_limit(self.ZH) == int(30.0 * HAN_RATE)
         assert spec.segment_limit(self.EN) > 3 * spec.segment_limit(self.ZH)
 
     def test_no_model_can_be_handed_more_audio_than_it_declares(self) -> None:
@@ -427,7 +420,7 @@ class TestTheAudioCeiling:
         for spec in CATALOG:
             if spec.max_audio_s is None:
                 continue
-            for text, rate in ((self.ZH, PRIOR_CJK_PER_S), (self.EN, 14.7)):
+            for text, rate in ((self.ZH, HAN_RATE), (self.EN, LATIN_RATE)):
                 limit = spec.segment_limit(text)
                 assert limit is not None
                 assert limit / rate <= spec.max_audio_s + 1e-6
@@ -435,3 +428,14 @@ class TestTheAudioCeiling:
     def test_an_empty_text_falls_back_rather_than_dividing_by_nothing(self) -> None:
         spec = BY_ID["moss-nano"]
         assert spec.segment_limit("   ") == spec.max_chars_per_segment
+
+
+class TestADeclaredMisreadHasAStandIn:
+    def test_every_word_a_model_misreads_can_be_respelled(self) -> None:
+        """A declaration nothing can act on would be silent."""
+        from cortex_speech.text.zh.readings import standins
+
+        table = standins()
+        for spec in CATALOG:
+            for word in spec.misreads:
+                assert word in table, f"{spec.id} misreads {word!r} but no stand-in"

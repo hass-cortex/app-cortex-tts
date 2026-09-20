@@ -25,7 +25,7 @@ from cortex_speech import (
     BY_ID,
     CATALOG,
     EXECUTION_PROVIDERS,
-    SENTENCE_PAUSE_S,
+    STREAM_RTF,
     ExecutionProvider,
     write_json,
 )
@@ -94,11 +94,14 @@ class Preferences:
         default_voice: Voice used when a request names none. Empty takes the
             first the model offers.
         temperature: Sampling temperature for engines that have one.
+        stream_rtf: The real-time factor under which a voice on this host
+            streams a live reply; at or over it the reply is held until
+            rendered. Raising it trades the wait before the first word for
+            the chance of a gap on a long reply — an engine that releases
+            audio within a sentence, as MOSS does, runs dry only past
+            roughly `6 s / (rtf - 1)` of audio, so a host may reasonably
+            put it above 1.
         preload: Load the default model at startup rather than on first use.
-        max_sentence_pause: The longest silence a sentence end may carry.
-            Playback that catches the renderer there is heard as a pause
-            between sentences, so the opening need not be held against it.
-            A cut inside a sentence never earns this.
         text_rules: What the text switches default to, per model and
             language, for a request that leaves them out.
     """
@@ -110,8 +113,8 @@ class Preferences:
     default_model: str = "hojo-40m"
     default_voice: str = "hojo_zh_f_01"
     temperature: float = 0.8
+    stream_rtf: float = STREAM_RTF
     preload: bool = True
-    max_sentence_pause: float = SENTENCE_PAUSE_S
     text_rules: tuple[TextRule, ...] = ()
 
     def text_defaults(self, model: str, language: str) -> TextRule:
@@ -168,13 +171,6 @@ class Preferences:
         )
 
 
-def _sentence_pause(value: Any) -> float:
-    number = float(value)
-    if not 0.0 <= number <= 10.0:
-        raise ValueError("sentence pause out of range")
-    return number
-
-
 def _threads(value: Any) -> int:
     number = int(value)
     if not 0 <= number <= 16:
@@ -217,6 +213,13 @@ def _temperature(value: Any) -> float:
     number = float(value)
     if not 0.0 <= number <= 1.0:
         raise ValueError("temperature out of range")
+    return number
+
+
+def _stream_rtf(value: Any) -> float:
+    number = float(value)
+    if not 0.1 <= number <= 3.0:
+        raise ValueError("stream_rtf out of range")
     return number
 
 
@@ -264,7 +267,6 @@ _VALIDATORS: dict[str, Any] = {
     "execution_provider": _provider,
     "max_loaded_models": _loaded,
     "idle_unload_seconds": _idle,
-    "max_sentence_pause": _sentence_pause,
     "default_model": _model,
     # Deliberately unvalidated: a voice only exists once its model is
     # downloaded, and refusing one that is not there yet would make the field
@@ -272,6 +274,7 @@ _VALIDATORS: dict[str, Any] = {
     # offer is reported at synthesis, where the model is loaded and knows.
     "default_voice": lambda value: str(value).strip(),
     "temperature": _temperature,
+    "stream_rtf": _stream_rtf,
     "preload": _flag,
     "text_rules": _text_rules,
 }

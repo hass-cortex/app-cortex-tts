@@ -2,43 +2,19 @@
 
 from __future__ import annotations
 
-import re
-
-from ..text.pipeline import _SENTENCE_BREAK
-
-# Where a sentence may be cut when it has to be: line breaks and clause marks,
-# the places a reader already pauses. The mark stays with the text before it,
-# and every piece is given a sentence-final stop downstream, so a cut lands in
-# the audio as a full stop rather than a splice.
-_CLAUSE_BREAK = re.compile(r"(?<=[\n；;：:，、,])")
-
-# What ends a sentence outright. The ASCII stop is only a break when followed
-# by whitespace (`_SENTENCE_BREAK` guards decimals), so a buffer ending in "."
-# is still open: the next character decides.
-_ENDS_SENTENCE = re.compile(r"[。！？；!?;\n]$|[^\d\s]\.\s$")
-
-
-def ends_sentence(text: str) -> bool:
-    """Whether this text stops where a speaker would stop.
-
-    A batch cut at a sentence end can absorb silence: the listener hears a
-    pause, which is what belongs there. One cut at a clause mark cannot —
-    the same silence lands inside a sentence, and that is a fault.
-    """
-    return bool(_ENDS_SENTENCE.search(text.rstrip()))
-
-
-def clause_pieces(text: str) -> list[str]:
-    """Split on clause marks, keeping each mark with the text before it."""
-    return [piece for piece in _CLAUSE_BREAK.split(text) if piece]
+# The live form of the batch splitter: the same terminators, so a sentence
+# the pacer hands out is the sentence `segment` would have cut. The ASCII
+# stop is only a break when followed by whitespace (a decimal guard), so a
+# buffer ending in "." is still open: the next character decides.
+from ..text.scripts import ENDS_SENTENCE, SENTENCE_BREAK
 
 
 class SentenceBuffer:
     """Accumulates text deltas and hands out the sentences that are complete.
 
     The last sentence is complete only once its stop has arrived; until then
-    it is the `tail`, which a planner may read but not take — unless the
-    writer has finished, when the tail is all there will ever be.
+    it is the `tail` — unless the writer has finished, when the tail is all
+    there will ever be.
     """
 
     def __init__(self) -> None:
@@ -59,10 +35,10 @@ class SentenceBuffer:
         self._ended = True
 
     def _split(self) -> tuple[list[str], str]:
-        parts = [p for p in _SENTENCE_BREAK.split(self._text) if p.strip()]
+        parts = [p for p in SENTENCE_BREAK.split(self._text) if p.strip()]
         if not parts:
             return [], ""
-        if self._ended or _ENDS_SENTENCE.search(self._text):
+        if self._ended or ENDS_SENTENCE.search(self._text):
             return parts, ""
         return parts[:-1], parts[-1]
 
@@ -82,31 +58,6 @@ class SentenceBuffer:
         taken, kept = sentences[:count], sentences[count:]
         self._text = "".join(kept) + tail
         return taken
-
-    def take_prefix(self, text: str) -> None:
-        """Remove `text` from the front of the buffer, after a cut.
-
-        The planner decides where to cut; this only removes what it sent.
-
-        What it sends is sentences joined, and `_split` drops the whitespace
-        between them — a blank line between two paragraphs is in the buffer
-        and not in the cut. So the two are walked together and the buffer's
-        own spacing is allowed to fall away, rather than requiring a literal
-        prefix: a reply with paragraph breaks is ordinary, and demanding one
-        raised `cut does not match the buffer` on every such reply.
-        """
-        index = 0
-        for char in text:
-            while (
-                index < len(self._text)
-                and self._text[index] != char
-                and self._text[index].isspace()
-            ):
-                index += 1
-            if index >= len(self._text) or self._text[index] != char:
-                raise ValueError("cut does not match the buffer")
-            index += 1
-        self._text = self._text[index:]
 
     def take_all(self) -> str:
         """Remove and return everything, sentences and tail alike."""

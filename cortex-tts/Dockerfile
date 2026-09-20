@@ -36,15 +36,13 @@ COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Dependencies first: the layer only rebuilds when the lockfile moves, not on
-# every source edit. Two extras carry the models that are not pure ONNX
-# Runtime: `hojo-80m` pulls torch and librosa for that model's reference mel
-# spectrogram, and `omnivoice` adds torchaudio, transformers and pydub for the
-# half of OmniVoice the ONNX graph does not replace. Together they are most of
-# the image. The three ONNX-only models — the 40M, MOSS and Qwen3-TTS — touch
-# none of it.
+# every source edit. One extra carries the model that is not pure ONNX
+# Runtime: `omnivoice` adds torch, torchaudio, transformers, librosa and pydub
+# for the half of OmniVoice the ONNX graph does not replace, and is most of
+# the image. The two ONNX-only models — the 40M and MOSS — touch none of it.
 COPY pyproject.toml uv.lock README.md ./
 RUN uv venv /opt/venv \
-    && uv sync --frozen --no-dev --extra hojo-80m --extra omnivoice --active --no-install-project \
+    && uv sync --frozen --no-dev --extra omnivoice --active --no-install-project \
     && find /opt/venv -name '__pycache__' -type d -prune -exec rm -rf {} + \
     && rm -rf /root/.cache
 

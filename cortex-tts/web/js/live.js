@@ -3,9 +3,9 @@
 //
 // Every figure on the chart is observed here — from frames, from byte
 // arrivals, and from what the audio clock actually did. Nothing is a
-// prediction the server made. That is the point: the planner's arithmetic is
-// already written down, and what this answers is whether the delivery matched
-// it, which a chart drawn from the same arithmetic could never say.
+// prediction the server made. That is the point: the pacing rule is already
+// written down, and what this answers is whether the delivery matched it,
+// which a chart drawn from the same arithmetic could never say.
 //
 // The reply plays here while it arrives, and the playback is scheduled
 // sample-accurately rather than handed to an `<audio>` element, because the
@@ -19,7 +19,7 @@
 
 import { api, storedKey } from "./api.js";
 import { $, esc, msg, show } from "./dom.js";
-import { delivery, hasVoice, refreshModels, setSpeaking } from "./models.js";
+import { delivery, hasVoice } from "./models.js";
 import { play } from "./player.js";
 import { axis, pct, rows, span, summary } from "./timeline.js";
 import { switches } from "./preview.js";
@@ -67,10 +67,6 @@ function syncStopButton() {
 
 function start() {
   stopAudio();
-  // The table below is about to go stale: this reply evicts whatever is
-  // resident and loads what it asked for, and neither shows up in a page that
-  // only looks again when the reply is over.
-  setSpeaking(true);
   const t0 = now();
   const key = storedKey();
   const target = new URL(api("/speak/live"));
@@ -155,7 +151,6 @@ function receiveFrame(frame) {
       index: frame.index,
       mode: frame.mode,
       text: frame.text || "",
-      endsSentence: !!frame.ends_sentence,
       sentAt: at,
       renderedAt: null,
       audioS: null,
@@ -199,10 +194,6 @@ function finish() {
     ticker = setInterval(draw, 100);
     requestAnimationFrame(() => movePlayhead(true));
   }
-  // A reply loads and evicts models, and it has just added a measurement to
-  // the model's own line. One last look, then stop looking.
-  setSpeaking(false);
-  refreshModels().catch(() => { /* the table says its own errors */ });
 }
 
 // -- hearing it -------------------------------------------------------------
@@ -265,8 +256,7 @@ function movePlayhead(fromFrame = false) {
     audio.stalled = true;
     head.hidden = true;
     msg($("liveMsg"),
-      "this browser has no audio clock, so nothing was played — the times "
-      + "below are when the audio arrived", "warn");
+      "no audio clock in this browser — nothing was played; the times are arrivals", "warn");
   }
   // Only once there is nothing left to draw: a stalled clock stops the
   // playhead, not the reply, whose later requests still have to reach the
@@ -415,8 +405,7 @@ function draw() {
   // to read as a connection that will not open.
   $("tlRows").innerHTML = rows(run, clock, total) || `<p class="hint">${
     socket && socket.readyState === WebSocket.OPEN
-      ? "Connected — the server is getting the model ready. A model that is "
-        + "not resident is loaded first, which on a cold start is most of the wait."
+      ? "Connected — loading the model."
       : "Connecting…"}</p>`;
   $("tlAxis").innerHTML = axis(total);
   $("tlStats").innerHTML = summary(run);

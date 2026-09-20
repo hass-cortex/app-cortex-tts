@@ -11,11 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# The default cap and the measurements behind it live with the planner,
-# which is the only thing that reads it. A second copy of 9.0 here is a
-# second figure to re-measure.
-from .pacing.model import chars_within
-from .pacing.planner import BATCH_CAP_S
+from .text.scripts import chars_within
 
 
 @dataclass(frozen=True)
@@ -71,7 +67,7 @@ class ModelSpec:
             has no prompt text, so a transcript typed for it changes nothing.
             The field is still validated and still required, because one
             recording is a voice on every cloning model at once — the
-            transcript MOSS ignores is the one Qwen3-TTS learns from.
+            transcript MOSS ignores is the one OmniVoice learns from.
         cloning: Whether a reference recording can condition it. Independent
             of ``builtin_voices``: a model may have both, one, or neither.
         chunk_streaming: Whether the engine can emit audio before the whole
@@ -103,16 +99,12 @@ class ModelSpec:
             digit at all, so a bare number is expanded for it by default —
             a quantity reading of a room number misleads, but digits it
             cannot say are noise. Measured: Hojo read 110 as 十億億安 and
-            an English sentence with three numbers as nonsense; MOSS,
-            OmniVoice and Qwen3-TTS read digits themselves.
-        batch_cap_s: The most speech one request may carry, in seconds —
-            where this model's fitted cost line stops describing it. Past
-            that the planner would be choosing between plans on arithmetic it
-            knows to be wrong, and it only ever proposes a *longer* request
-            because the line says one is cheaper. Belongs to the model rather
-            than to the host: it is where an autoregressive decode turns
-            quadratic. Measured per model, and the default is the earliest
-            break seen; see `pacing/planner.py` for the figures.
+            an English sentence with three numbers as nonsense; MOSS and
+            OmniVoice read digits themselves.
+        misreads: Words this model reads with the wrong character, measured,
+            which the locale respells with a stand-in it reads right
+            (`text/zh/standins.tsv`). The defect is the model's to declare and
+            the fix is the language's, so neither is guessed for the other.
         size_mb: Approximate on-disk size once downloaded.
         languages: Base language codes the model was trained on.
         sample_rate: Output sample rate in Hz.
@@ -136,7 +128,7 @@ class ModelSpec:
     style_instruction: bool = False
     reads_numerals: bool = False
     needs_number_words: bool = False
-    batch_cap_s: float = BATCH_CAP_S
+    misreads: tuple[str, ...] = ()
     max_chars_per_segment: int | None = None
     max_audio_s: float | None = None
     sample_rate: int = 24000
@@ -149,7 +141,7 @@ class ModelSpec:
         budget is counted in characters and `max_chars_per_segment` says it.
         A model's generation budget is counted in audio, and a segment over it
         is not slow but truncated — so `max_audio_s` is turned into characters
-        by `pacing.chars_within`, which owns the speech rates. What is settled
+        by `text.scripts.chars_within`, which owns the speech rates. What is settled
         here is only which of the two bounds a text meets first.
         """
         if self.max_audio_s is None:
@@ -168,32 +160,6 @@ class ModelSpec:
 
 
 _COMMON_FILES = ("config.json", "tokenizer.json", "tokenizer_config.json")
-
-# Qwen3-TTS is assembled from two repositories and one export directory.
-# `cpu_int4` names a precision rather than a device: the export ships the same
-# graphs again under `cuda_int4`, and which provider runs them is this app's
-# decision, not the export's.
-_QWEN3_EXPORT = "cpu_int4"
-_QWEN3_ONNX = tuple(
-    f"{_QWEN3_EXPORT}/{name}.onnx"
-    for name in (
-        "text_embed",
-        "codec_embed",
-        "residual_embed",
-        "talker_cache",
-        "code_predictor",
-        "tok_decoder",
-    )
-)
-# Only the cloning checkpoint exports these: the encoder that turns a
-# recording into codec frames, and the one that turns it into an x-vector.
-_QWEN3_CLONE_ONNX = tuple(
-    f"{_QWEN3_EXPORT}/{name}.onnx" for name in ("tok_encoder", "speaker_encoder")
-)
-# The checkpoint ships no assembled `tokenizer.json`; `engine.qwen_tokenizer`
-# builds one from these. `config.json` carries the talker's token ids and the
-# speaker table beside them.
-_QWEN3_TEXT = ("config.json", "vocab.json", "merges.txt", "tokenizer_config.json")
 
 CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec(
@@ -214,6 +180,9 @@ CATALOG: tuple[ModelSpec, ...] = (
         ),
         backend="hojo-preset",
         needs_number_words=True,
+        # Measured 2026-09-21: 行程 came out as héng chéng in 「你有 3 個行程」;
+        # respelled 形程 it reads xíng chéng.
+        misreads=("行程",),
         # `render` asks the vendored loop for at most 2048 tokens and the
         # codec runs at 50 Hz. The default character bound reaches 29 s of
         # Chinese, so this never binds — declared so that stays checkable
@@ -224,38 +193,6 @@ CATALOG: tuple[ModelSpec, ...] = (
         builtin_voices=True,
         temperature=True,
         rss_hint_mb=780,
-    ),
-    ModelSpec(
-        id="hojo-80m-clone",
-        name="Hojo TTS Light 80M (voice cloning)",
-        description="Clones a voice from a few seconds of reference audio. "
-        "No built-in voices; ~4x the compute of the 40M.",
-        sources=(
-            BundleSource(
-                repo_id="HojoAI/Hojo-TTS-Light",
-                files=(
-                    "Hojo-TTS-Light-llm.onnx",
-                    "Hojo-TTS-Light-decoder.onnx",
-                    "Hojo-TTS-Light-encoder.onnx",
-                    "Hojo-TTS-Light-speaker.onnx",
-                    "Hojo-TTS-Light-voice.npz",
-                    *_COMMON_FILES,
-                ),
-            ),
-        ),
-        backend="hojo-clone",
-        needs_number_words=True,
-        # `render` asks the vendored loop for at most 2048 tokens and the
-        # codec runs at 50 Hz. The default character bound reaches 29 s of
-        # Chinese, so this never binds — declared so that stays checkable
-        # rather than coincidental.
-        max_audio_s=40.96,
-        size_mb=437,
-        languages=("zh", "en"),
-        cloning=True,
-        reads_reference_transcript=True,
-        temperature=True,
-        rss_hint_mb=2050,
     ),
     ModelSpec(
         id="moss-nano",
@@ -302,25 +239,6 @@ CATALOG: tuple[ModelSpec, ...] = (
         builtin_voices=True,
         cloning=True,
         chunk_streaming=True,
-        # This model's break, measured the same way as the default's: one
-        # request at a time, the same sentence repeated, against the cost of
-        # the short ones.
-        #
-        #     audio    5.0  10.4  15.0  21.8  26.9  32.3  43.7
-        #     over by  +2%    0%   +4%  +12%  +10%   +8%  +12%
-        #
-        # A step rather than the curve OmniVoice has (19% over by 10.7 s and
-        # 100% by 23.6 s): it holds to fifteen and has stepped up by
-        # twenty-two, then flattens. So fifteen, the longest still on the
-        # line.
-        #
-        # Nine cost it more than the default's reasoning had counted. That
-        # reasoning weighed render time, which is 0.05 s a boundary here, and
-        # not the cuts: a sentence over the cap is split at its clause marks
-        # and every segment is terminated, so those are spoken as full stops.
-        # Measured on one 63 s reply, nine took ten requests with two cuts
-        # inside sentences where fifteen takes three with none.
-        batch_cap_s=15.0,
         # The runtime splits the text by its own token budget whatever
         # arrives, so there is no character bound of this model's to declare.
         # What the generation budget allows, and it is a hard stop rather than
@@ -332,67 +250,6 @@ CATALOG: tuple[ModelSpec, ...] = (
         max_audio_s=30.0,
         sample_rate=48000,
         rss_hint_mb=1990,
-    ),
-    ModelSpec(
-        id="qwen3-tts-0.6b",
-        name="Qwen3-TTS 0.6B (built-in voices)",
-        description="Nine built-in speakers across five languages. The widest "
-        "language coverage here, and the slowest model by a wide margin.",
-        # Two repos: Qwen publishes the checkpoint, onnx-community the export.
-        # Only the int4 graphs are fetched — the export's `cpu_*` and `cuda_*`
-        # directories hold byte-identical files and differ only in a manifest
-        # naming an execution provider this app chooses for itself.
-        sources=(
-            BundleSource(
-                repo_id="onnx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-                files=_QWEN3_ONNX,
-            ),
-            BundleSource(
-                repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-                files=_QWEN3_TEXT,
-            ),
-        ),
-        backend="qwen3-tts",
-        size_mb=1021,
-        languages=("zh", "en", "ja", "ko", "de", "fr", "it", "pt", "ru", "es"),
-        builtin_voices=True,
-        chunk_streaming=True,
-        temperature=True,
-        language_choice=True,
-        style_instruction=True,
-        # The talker tops out at 2048 frames and `FRAMES_PER_SECOND` is 12.5,
-        # so a single call reaches 164 s — four times a Hojo's. `_frame_budget`
-        # cuts each segment far below that, from the duration its own text
-        # needs; this is the ceiling that cuts whatever the text says.
-        max_audio_s=163.84,
-        rss_hint_mb=1580,
-    ),
-    ModelSpec(
-        id="qwen3-tts-0.6b-clone",
-        name="Qwen3-TTS 0.6B (voice cloning)",
-        description="The same model conditioned on a reference recording "
-        "instead of a bundled speaker. No built-in voices.",
-        sources=(
-            BundleSource(
-                repo_id="onnx-community/Qwen3-TTS-12Hz-0.6B-Base",
-                files=(*_QWEN3_ONNX, *_QWEN3_CLONE_ONNX),
-            ),
-            BundleSource(
-                repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-                files=_QWEN3_TEXT,
-            ),
-        ),
-        backend="qwen3-tts",
-        size_mb=1271,
-        languages=("zh", "en", "ja", "ko", "de", "fr", "it", "pt", "ru", "es"),
-        cloning=True,
-        reads_reference_transcript=True,
-        chunk_streaming=True,
-        temperature=True,
-        language_choice=True,
-        # The same 2048 frames at 12.5 Hz as the built-in entry above.
-        max_audio_s=163.84,
-        rss_hint_mb=2120,
     ),
     ModelSpec(
         id="omnivoice",

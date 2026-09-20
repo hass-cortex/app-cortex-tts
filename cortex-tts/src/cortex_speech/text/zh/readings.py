@@ -27,20 +27,32 @@ from functools import lru_cache
 from importlib import resources
 
 
-@lru_cache(maxsize=1)
-def _table() -> tuple[dict[str, str], int]:
+def _read_table(name: str) -> dict[str, str]:
     words: dict[str, str] = {}
-    text = (
-        resources.files(__package__)
-        .joinpath("taiwan_readings.tsv")
-        .read_text(encoding="utf-8")
-    )
+    text = resources.files(__package__).joinpath(name).read_text(encoding="utf-8")
     for line in text.splitlines():
-        if line.startswith("#"):
+        if line.startswith("#") or not line.strip():
             continue
         word, standin, *_ = line.split("\t")
         words[word] = standin
+    return words
+
+
+@lru_cache(maxsize=1)
+def _table() -> tuple[dict[str, str], int]:
+    words = _read_table("taiwan_readings.tsv")
     return words, max(map(len, words), default=0)
+
+
+@lru_cache(maxsize=1)
+def standins() -> dict[str, str]:
+    """Stand-ins for polyphones a model may misread — `standins.tsv`.
+
+    Not a Taiwan difference and not applied to every model: a word is
+    respelled only for a model whose catalog entry declares it misreads it
+    (`ModelSpec.misreads`). This table only says what to respell it as.
+    """
+    return _read_table("standins.tsv")
 
 
 @lru_cache(maxsize=1)
@@ -99,8 +111,30 @@ def apply_taiwan_readings(text: str) -> str:
     return _substitute(text)[0]
 
 
-def _substitute(text: str) -> tuple[str, list[tuple[str, str]]]:
-    words, longest = _table()
+def apply_standins(text: str, misread: tuple[str, ...]) -> str:
+    """Respell the words in `misread` with their stand-ins.
+
+    Raises:
+        KeyError: A word has no stand-in in `standins.tsv`.
+    """
+    return _substitute(text, _chosen(misread))[0]
+
+
+def standins_for(text: str, misread: tuple[str, ...]) -> list[tuple[str, str]]:
+    """Return the (word, stand-in) rewrites `apply_standins` would make."""
+    return _substitute(text, _chosen(misread))[1]
+
+
+def _chosen(misread: tuple[str, ...]) -> tuple[dict[str, str], int]:
+    table = standins()
+    words = {word: table[word] for word in misread}
+    return words, max(map(len, words), default=0)
+
+
+def _substitute(
+    text: str, table: tuple[dict[str, str], int] | None = None
+) -> tuple[str, list[tuple[str, str]]]:
+    words, longest = _table() if table is None else table
     out: list[str] = []
     rewrites: list[tuple[str, str]] = []
     i = 0

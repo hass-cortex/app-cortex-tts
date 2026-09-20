@@ -81,12 +81,6 @@ class TestBuiltinVoices:
 
 
 class TestCloningVoices:
-    async def test_a_cloning_model_needs_no_bundle_on_disk(
-        self, registry: EngineRegistry
-    ) -> None:
-        """Its voices are the reference store, which is never in the bundle."""
-        assert await registry.voices("hojo-80m-clone") == []
-
     async def test_a_model_with_both_kinds_concatenates_them(
         self, registry: EngineRegistry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

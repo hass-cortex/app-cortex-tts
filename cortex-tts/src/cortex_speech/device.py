@@ -82,9 +82,20 @@ def memory() -> Memory | None:
 # What ONNX Runtime says when the device has no memory left. Matched on the
 # message, not the type: the arena raises through a pybind class that only
 # exists once onnxruntime is imported, and nothing else here needs that import.
-# Both spellings are the same BFC arena; which one appears depends on whether
-# the allocation failed inside a kernel or while extending.
-_EXHAUSTED = ("Failed to allocate memory for requested buffer", "out of memory")
+# The first two are the BFC arena, inside a kernel or while extending. The
+# rest are the libraries a kernel calls failing to get their workspace once
+# the arena has the card: measured on a 4 GB GTX 1650 with three models
+# resident (3666/4096 MiB), Hojo failed every request with cuBLAS "resource
+# allocation failed" and cuDNN "INTERNAL_ERROR" and was kept, so nothing
+# recovered until a restart.
+_EXHAUSTED = (
+    "Failed to allocate memory for requested buffer",
+    "out of memory",
+    "CUBLAS_STATUS_ALLOC_FAILED",
+    "the resource allocation failed",
+    "CUDNN_STATUS_ALLOC_FAILED",
+    "CUDNN_STATUS_INTERNAL_ERROR",
+)
 
 
 def exhausted(error: BaseException) -> bool:

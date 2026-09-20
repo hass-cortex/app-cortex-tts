@@ -21,6 +21,10 @@ from ..references import ReferenceStore
 from .base import Engine, EngineError, Voice
 
 
+class BackendUnavailableError(EngineError):
+    """The backend exists but a dependency it needs is not installed."""
+
+
 class UnknownBackendError(EngineError):
     """A catalog entry names a backend nothing registered."""
 
@@ -56,6 +60,9 @@ Builder = Callable[[BuildContext], Engine]
 VoiceReader = Callable[[Path], list[Voice]]
 
 _BUILDERS: dict[str, Builder] = {}
+
+# Which `[project.optional-dependencies]` extra carries a backend's imports.
+_EXTRAS = {"omnivoice": "omnivoice"}
 _VOICE_READERS: dict[str, VoiceReader] = {}
 
 
@@ -87,12 +94,23 @@ def build(backend: str, context: BuildContext) -> Engine:
 
     Raises:
         UnknownBackendError: Nothing registered that key.
+        BackendUnavailableError: A dependency the backend imports is missing.
     """
     builder = _BUILDERS.get(backend)
     if builder is None:
         known = ", ".join(sorted(_BUILDERS)) or "none"
         raise UnknownBackendError(f"no backend {backend!r} (registered: {known})")
-    return builder(context)
+    try:
+        return builder(context)
+    except ImportError as err:
+        # Builders import lazily, so a missing extra surfaces here and
+        # nowhere earlier; say which one rather than a bare traceback.
+        extra = _EXTRAS.get(backend)
+        hint = f"install the `{extra}` extra" if extra else "check the installation"
+        raise BackendUnavailableError(
+            f"backend {backend!r} needs {err.name or 'a package'} that is not "
+            f"installed; {hint}"
+        ) from err
 
 
 def own_voices(backend: str, directory: Path) -> list[Voice]:
@@ -143,32 +161,10 @@ def _register_builtin_backends() -> None:
             execution_provider=context.execution_provider,
         )
 
-    def hojo_clone(context: BuildContext) -> Engine:
-        from .clone import CloneEngine
-
-        return CloneEngine(
-            context.directory,
-            context.references,
-            num_threads=context.num_threads,
-            temperature=context.temperature,
-            execution_provider=context.execution_provider,
-        )
-
     def moss(context: BuildContext) -> Engine:
         from .moss import MossEngine
 
         return MossEngine(
-            context.directory,
-            context.references,
-            num_threads=context.num_threads,
-            temperature=context.temperature,
-            execution_provider=context.execution_provider,
-        )
-
-    def qwen3_tts(context: BuildContext) -> Engine:
-        from .qwen3 import Qwen3TtsEngine
-
-        return Qwen3TtsEngine(
             context.directory,
             context.references,
             num_threads=context.num_threads,
@@ -197,25 +193,13 @@ def _register_builtin_backends() -> None:
 
         return own_voices(directory)
 
-    def qwen3_tts_voices(directory: Path) -> list[Voice]:
-        from .qwen3 import own_voices
-
-        return own_voices(directory)
-
     def omnivoice_voices(directory: Path) -> list[Voice]:
         from .omni import own_voices
 
         return own_voices(directory)
 
     register("hojo-preset", hojo_preset, voices=hojo_preset_voices)
-    # No reader: every 80M voice is a reference recording, which the registry
-    # lists from the store without asking any backend.
-    register("hojo-clone", hojo_clone)
     register("moss", moss, voices=moss_voices)
-    # One backend, two catalog entries: the cloning checkpoint lists no
-    # built-in voices, but the reader is harmless there and the registry only
-    # calls it for a model that declares them.
-    register("qwen3-tts", qwen3_tts, voices=qwen3_tts_voices)
     register("omnivoice", omnivoice, voices=omnivoice_voices)
 
 

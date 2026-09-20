@@ -18,7 +18,6 @@ dependencies = [
     "lameenc>=1.7",
     "scipy>=1.13",
     "tokenizers>=0.15",
-    "onnxruntime>=1.20",
     # MOSS-TTS-Nano tokenises with a SentencePiece model.
     "sentencepiece>=0.2",
     # Not listed by upstream, but required: the LM and fine-local weights ship
@@ -34,14 +33,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The 80M needs a mel spectrogram of its reference recording, which upstream
-# computes with torch + librosa, and its code is vendored as-is so it keeps
-# them. Named for the model rather than for cloning: MOSS-TTS-Nano clones too
-# and needs none of this, so "the clone extra" would now mislead.
-hojo-80m = [
-    "torch>=2.4",
-    "librosa>=0.10",
-]
 # OmniVoice's pipeline is PyTorch, and only its transformer is replaced by the
 # ONNX graph — the audio tokenizer, the prompt handling and the iterative
 # decoder all stay in torch. `transformers` is not optional for it either: the
@@ -54,6 +45,8 @@ hojo-80m = [
 omnivoice = [
     "torch>=2.4",
     "torchaudio>=2.4",
+    # Reference recordings are resampled and trimmed with librosa.
+    "librosa>=0.10",
     "transformers>=5.17",
     # Silence trimming on reference recordings.
     "pydub>=0.25",
@@ -66,6 +59,31 @@ omnivoice = [
 cortex-tts = "cortex_tts.__main__:main"
 
 [dependency-groups]
+# ONNX Runtime is one build or the other, never both: the CPU and the GPU wheel
+# unpack into the same package directory and whichever installs later shadows
+# the first, silently. So neither is a base dependency; `cpu` is a default
+# group and the CUDA groups replace it — `uv sync --no-default-groups
+# --group cuda --group dev`. Which CUDA generation a driver can serve decides
+# between the two GPU groups; the wheels ship the CUDA libraries themselves.
+cpu = ["onnxruntime>=1.20"]
+cuda = [
+    "onnxruntime-gpu==1.29.*",
+    "nvidia-cuda-runtime; sys_platform == 'linux'",
+    "nvidia-cuda-nvrtc; sys_platform == 'linux'",
+    "nvidia-cublas; sys_platform == 'linux'",
+    "nvidia-cufft; sys_platform == 'linux'",
+    "nvidia-curand; sys_platform == 'linux'",
+    "nvidia-cudnn-cu13; sys_platform == 'linux'",
+]
+cuda12 = [
+    "onnxruntime-gpu==1.26.*",
+    "nvidia-cuda-runtime-cu12; sys_platform == 'linux'",
+    "nvidia-cuda-nvrtc-cu12; sys_platform == 'linux'",
+    "nvidia-cublas-cu12; sys_platform == 'linux'",
+    "nvidia-cufft-cu12; sys_platform == 'linux'",
+    "nvidia-curand-cu12; sys_platform == 'linux'",
+    "nvidia-cudnn-cu12; sys_platform == 'linux'",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
@@ -85,8 +103,11 @@ path = "src/cortex_tts/__init__.py"
 packages = ["src/cortex_tts"]
 
 [tool.uv]
-# CPU-only wheels: the addon has no GPU and the CUDA build is a 2 GB download
-# that would never be used.
+default-groups = ["dev", "cpu"]
+conflicts = [[{ group = "cpu" }, { group = "cuda" }, { group = "cuda12" }]]
+
+# CPU-only torch wheels: the addon has no GPU and the CUDA build is a 2 GB
+# download that would never be used; only the ONNX sessions move to a card.
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
@@ -106,13 +127,11 @@ ignore = ["E501", "B008", "SIM108"]
 
 [tool.ruff.lint.per-file-ignores]
 # Vendored upstream code is kept diffable against its source, not restyled.
-# Listed file by file rather than as `vendor/**`: two files in that directory
-# are ours — `qwen3_tts_ort.py` is a derivation that upstream would not
-# recognise and `omnivoice_ort.py` is original glue — and a blanket ignore
+# Listed file by file rather than as `vendor/**`: one file in that directory
+# is ours — `omnivoice_ort.py` is original glue — and a blanket ignore
 # put 726 lines of our own code outside both linters without anyone deciding
 # to.
 "src/cortex_speech/vendor/hojo40.py" = ["ALL"]
-"src/cortex_speech/vendor/hojo80.py" = ["ALL"]
 "src/cortex_speech/vendor/moss_ort.py" = ["ALL"]
 "src/cortex_speech/vendor/moss_runtime.py" = ["ALL"]
 "src/cortex_speech/vendor/omnivoice/**/*.py" = ["ALL"]
@@ -126,7 +145,6 @@ exclude = [
     "tests",
     # Upstream code only; the two derived files in that directory are checked.
     "src/cortex_speech/vendor/hojo40.py",
-    "src/cortex_speech/vendor/hojo80.py",
     "src/cortex_speech/vendor/moss_ort.py",
     "src/cortex_speech/vendor/moss_runtime.py",
     "src/cortex_speech/vendor/omnivoice",

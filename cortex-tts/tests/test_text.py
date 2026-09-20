@@ -13,6 +13,7 @@ from importlib.resources import files
 import pytest
 
 from cortex_speech.engine.overrun import (
+    MAX_BABBLE_CHARS,
     expected_seconds,
     looks_truncated,
     trim_trailing_babble,
@@ -21,12 +22,17 @@ from cortex_speech.text.pipeline import (
     TextOptions,
     is_chinese,
     prepare,
+    prepare_text,
     prepared_text,
     segment,
 )
 from cortex_speech.text.zh.normalize import NormalizeOptions, normalize
 from cortex_speech.text.zh.numbers import cardinal, decimal, digit_string
-from cortex_speech.text.zh.readings import apply_taiwan_readings, taiwan_readings
+from cortex_speech.text.zh.readings import (
+    apply_standins,
+    apply_taiwan_readings,
+    taiwan_readings,
+)
 from cortex_speech.text.zh.script import to_simplified
 
 # The number passes are exercised with bare numbers on: the default leaves
@@ -237,6 +243,33 @@ class TestTaiwanReadings:
 
     def test_words_read_alike_on_both_sides_are_untouched(self) -> None:
         assert apply_taiwan_readings("客厅的灯已经打开了。") == "客厅的灯已经打开了。"
+
+
+class TestAWordAModelMisreads:
+    """The defect is the model's to declare; the stand-in is the language's."""
+
+    def test_the_declared_word_is_respelled(self) -> None:
+        """Hojo 40M read 行程 as héng chéng; 形程 reads xíng chéng."""
+        assert apply_standins("你有三个行程。", ("行程",)) == "你有三个形程。"
+
+    def test_a_model_that_reads_it_right_is_left_alone(self) -> None:
+        assert apply_standins("你有三个行程。", ()) == "你有三个行程。"
+        assert apply_taiwan_readings("你有三个行程。") == "你有三个行程。"
+
+    def test_the_stand_in_yields_to_the_word_before_it(self) -> None:
+        """银行 has the better claim on 行 than 行程 does."""
+        assert apply_standins("银行程序更新了。", ("行程",)) == "银行程序更新了。"
+
+    def test_a_word_without_a_stand_in_is_refused(self) -> None:
+        with pytest.raises(KeyError):
+            apply_standins("没有这个词。", ("没有",))
+
+    def test_it_runs_after_script_conversion_in_the_pipeline(self) -> None:
+        text = "明天你有 3 個行程。"
+        with_it = prepare_text(text, language="zh-TW", misreads=("行程",))
+        without = prepare_text(text, language="zh-TW")
+        assert "形程" in with_it and "行程" not in with_it
+        assert "行程" in without
 
     def test_japanese_never_meets_the_pass(self) -> None:
         # Kanji share glyphs with the table (研究) and none of its readings;
@@ -601,6 +634,22 @@ class TestTrailingBabble:
         trimmed = trim_trailing_babble(audio, self.SR, "好" * 10)
 
         assert len(trimmed) / self.SR >= (10 / 4.5) * 0.7
+
+    def test_a_whole_sentence_is_never_judged_by_the_estimate(self) -> None:
+        """Measured on qwen3-tts-0.6b: 20 characters the model spoke in 7.12 s,
+        against an estimate of 4.44 s, came back as 4.89 s — transcribed,
+        「后来他学会了最远的远方。」 where the model had said 「后来他学会了：最
+        远的远方不一定在门外。」. The voice ran 2.81 characters a second on that
+        sentence and 5.19 on another in the same reply, so the estimate the cut
+        rests on is looser than the ratio it is compared against."""
+        # Speech to 4.89 s, a pause, then the final clause to 7.12 s.
+        audio = self._clip([(0.1, 4.89), (5.4, 7.12)], 7.12)
+        text = "好" * MAX_BABBLE_CHARS
+
+        assert len(trim_trailing_babble(audio, self.SR, text)) == len(audio)
+        # One character shorter is the failure this does exist for.
+        shorter = trim_trailing_babble(audio, self.SR, text[:-1])
+        assert len(shorter) < len(audio)
 
     def test_tail_after_a_fast_sentence_is_still_dropped(self) -> None:
         # Measured "大燈已關閉": 5 chars spoken in 0.90 s — faster than the

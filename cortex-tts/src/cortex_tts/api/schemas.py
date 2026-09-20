@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from cortex_speech import AudioFormat, Delivery
 
-API_VERSION = 4
+API_VERSION = 5
 """Bumped when a route, field or header the integration reads changes shape.
 
 The app's release version says nothing about the wire; this does, and it is
@@ -64,31 +64,30 @@ class VoiceOut(BaseModel):
 
 
 class MeasuredRtf(BaseModel):
-    """What this host measured for one kind of voice.
+    """What this host measured for one voice of a model.
 
-    The fit a live reply is planned from — `fixed_s + per_audio × audio` — which
-    is also where a card's figure comes from. `per_audio` is the slope, and a
-    real-time factor is `fixed_s / audio + per_audio`, so `audio_ref_s` says
-    at what length to quote it — the mean request this host served.
+    The median real-time factor of the voice's most recent requests on the
+    execution provider now in use, and the way a live reply in this voice
+    will be spoken because of it. One row per voice: a clone and a built-in
+    voice on the same model are different work.
     """
 
     kind: str
     """`builtin`, `designed` or `reference` — see `Voice.source`."""
-    voice: str | None = None
-    """Which voice, when the kind is `reference`: a clone's cost follows the
-    length of its own recording, so clones are measured one voice at a time."""
-    per_audio: float
-    """Render seconds per audio second."""
-    fixed_s: float
-    """Render seconds a request costs before any audio."""
-    audio_ref_s: float
-    """The mean audio of the requests fitted: where to quote the factor."""
-    spread_s: float
-    """One standard deviation of what the line failed to explain."""
-    cjk_per_s: float
-    latin_per_s: float
-    requests: int
-    """How many requests the fit rests on."""
+    voice: str
+    """Which voice."""
+    rtf: float
+    """Render seconds over audio seconds, the median of `samples` requests."""
+    samples: int
+    """How many requests the median rests on."""
+    provider: str
+    """The execution provider those requests ran on."""
+    threshold: float
+    """This host's `stream_rtf`: under it the voice streams."""
+    verdict: Literal["streaming", "buffered"] | None
+    """How a live reply in this voice is spoken under `auto`: `rtf` against
+    `threshold`. `None` until three requests: the figure is shown from the
+    first but decides nothing before then (a reply is buffered)."""
 
 
 class ModelOut(BaseModel):
@@ -135,6 +134,7 @@ class ModelOut(BaseModel):
     missing_files: list[str]
     disk_bytes: int
     download_state: str | None = None
+    """`queued`, `running`, `done` or `failed`; `null` if never asked for."""
     download_percent: float | None = None
     download_error: str | None = None
 
@@ -209,18 +209,14 @@ class LiveStart(SpeakCommon):
     type: Literal["start"] = "start"
     format: Literal["mp3", "wav"] = "mp3"
     """MP3 unless raw PCM is wanted: a stream cannot declare a length."""
-    mode: Literal["auto", "buffered", "planned", "unheld", "streaming"] = "auto"
-    """`auto` lets the server choose from what it has measured, and is what
-    anything serving a listener should send.
+    mode: Literal["auto", "streaming", "buffered"] = "auto"
+    """`auto` takes the verdict this host's measurements give the voice, and
+    is what anything serving a listener should send.
 
-    The other three insist, for a caller comparing one delivery against
-    another on the same reply: `buffered` releases nothing until the whole
-    reply is rendered, `planned` waits for the whole reply and then plans it,
-    and `streaming` renders as the text arrives even where the server would
-    have judged the model unable to keep ahead. Insisting is honoured as far
-    as the reply allows — streaming needs a cost line before the first byte,
-    and a host that has none still paces — so the `done` frame, not this
-    field, is what says how the reply went."""
+    The other two insist: `streaming` renders one sentence per request and
+    plays from a bank of audio whatever the voice measured — on a host
+    that cannot keep ahead it will stall, and that is the caller's trade —
+    and `buffered` releases nothing until the whole reply is rendered."""
 
 
 class LiveText(BaseModel):
@@ -315,7 +311,7 @@ class PreviewRequest(BaseModel):
 
 
 class Reading(BaseModel):
-    """One word rewritten for its Taiwan reading."""
+    """One word respelled with a homophone — a Taiwan reading, or a stand-in for a word the model misreads."""
 
     word: str
     standin: str
@@ -385,8 +381,8 @@ class SettingsOut(BaseModel):
     default_model: str
     default_voice: str
     temperature: float
+    stream_rtf: float
     preload: bool
-    max_sentence_pause: float
     text_rules: list[TextRule]
 
 
@@ -405,8 +401,9 @@ class SettingsUpdate(BaseModel):
     default_model: str | None = None
     default_voice: str | None = None
     temperature: float | None = None
+    stream_rtf: float | None = None
+    """0.1 to 3.0; under it a voice streams. See `Preferences.stream_rtf`."""
     preload: bool | None = None
-    max_sentence_pause: float | None = Field(default=None, ge=0.0, le=10.0)
     text_rules: list[TextRule] | None = None
     """The whole list; sending one replaces what was stored."""
 

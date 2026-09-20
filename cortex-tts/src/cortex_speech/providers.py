@@ -84,8 +84,8 @@ def run_options(session: Any) -> ort.RunOptions | None:
     Asked of the session rather than of the provider the caller wanted, for
     the same reason `in_use` reads the sessions: a graph that fell back to the
     CPU has no `gpu:0` arena, and asking to shrink one it does not have is an
-    invalid argument that fails the run rather than doing nothing. Qwen3-TTS
-    runs eight graphs and not all of them take CUDA.
+    invalid argument that fails the run rather than doing nothing. A runtime
+    may build several graphs and not every one of them takes CUDA.
     """
     if _CUDA not in session.get_providers():
         return None
@@ -124,6 +124,42 @@ class _Session(Protocol):
 
 class ProviderUnavailableError(RuntimeError):
     """`cuda` was required and the sessions came back on the CPU."""
+
+
+def installed_builds() -> list[str]:
+    """Which ONNX Runtime distributions this environment holds.
+
+    The CPU and the GPU wheel unpack into the same package directory, so an
+    environment holding both runs whichever installed last — and says so
+    nowhere. One build is the only sane state; `pyproject.toml` keeps them in
+    conflicting dependency groups so a sync cannot produce two.
+    """
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    found = []
+    for name in ("onnxruntime", "onnxruntime-gpu"):
+        try:
+            distribution(name)
+        except PackageNotFoundError:
+            continue
+        found.append(name)
+    return found
+
+
+def check_installation() -> None:
+    """Refuse to start on an environment holding both ONNX Runtime builds.
+
+    Raises:
+        RuntimeError: Both are installed; the message says how to sync one.
+    """
+    builds = installed_builds()
+    if len(builds) > 1:
+        raise RuntimeError(
+            "both onnxruntime and onnxruntime-gpu are installed and one shadows "
+            "the other; sync exactly one group — `uv sync --frozen` for the "
+            "CPU build, `uv sync --frozen --no-default-groups --group dev "
+            "--group cuda` (or `cuda12`) for a card"
+        )
 
 
 def requested(choice: ExecutionProvider) -> str:

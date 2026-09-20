@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from ..locales import Locale, Rewrite
 from .normalize import normalize
-from .readings import apply_taiwan_readings, taiwan_readings
+from .readings import (
+    apply_standins,
+    apply_taiwan_readings,
+    standins_for,
+    taiwan_readings,
+)
 from .script import is_traditional, to_simplified
 
 
@@ -41,14 +46,17 @@ LOCALE = Locale(
             requires=("convert_script",),
         ),
     ),
+    misreads=apply_standins,
 )
 
 __all__ = [
     "LOCALE",
+    "apply_standins",
     "apply_taiwan_readings",
     "is_taiwanese",
     "is_traditional",
     "normalize",
+    "standins_for",
     "taiwan_readings",
     "to_simplified",
 ]

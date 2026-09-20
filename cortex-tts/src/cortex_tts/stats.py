@@ -1,68 +1,82 @@
-"""What this host measured, kept so a model card can stop guessing.
+"""What this host measured, kept so a model card and a live reply can read it.
 
 Why the catalog carries no figure of its own is in AGENTS.md, under "A
-real-time factor belongs to a host, not to a model" — including the
-measurements that settled it. Two decisions live here rather than there:
+real-time factor belongs to a host, not to a model". What lives here:
 
-Kept per *voice kind*, because what a model costs depends on how it was asked
-to speak, so one figure averaging the kinds would describe neither.
+One primitive, recorded once per request: a `RenderSample` of raw audio and
+wall seconds and the execution provider it ran on. What a caller gets back is
+the median real-time factor of a voice's most recent requests on the provider
+now in use — one number per model and voice, never pooled across voices and
+never borrowed from another, because a clone and a built-in voice on the same
+model are different work.
 
 Stored beside the models rather than in the settings file: settings are what a
 user chose and stats are what the app observed, and a "reset settings" must
 not erase measurements that took real work to gather.
-
-One primitive, recorded once per request: a `RenderSample` of raw audio and
-wall seconds. Everything a caller asks for is fitted from those, so there is
-no second series to keep honest and no cadence a transport can get wrong.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import statistics
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from cortex_speech import RenderModel, RenderSample, speech_rates, write_json
+from cortex_speech import RenderSample, write_json
 
 _LOGGER = logging.getLogger(__name__)
 
 FILE_NAME = "stats.json"
 
-# How many recent requests are kept, and so how many a fit rests on — this is
-# the only bound, `RenderModel.fit` uses whatever it is handed. Enough that one
-# odd request cannot define it, few enough that it follows a host that changed
-# — a thread count, an execution provider, a busier machine. More than a bare
-# figure of merit would need, because a fit wants requests of different lengths
-# to find a slope, and a dozen replies to an assistant are mostly one length.
+# The file's layout. Anything older kept samples without a provider, which
+# cannot be told from a run on another machine, so it is not carried forward.
+FORMAT = 2
+
+# How many recent requests are kept per voice. More than the median reads, so
+# a run of one length cannot be all there is once ordinary replies return.
 MAX_RENDERS = 24
 
+# How many of the most recent same-provider requests the median is taken over.
+# Small enough to follow a host that changed within a few replies.
+WINDOW = 8
 
-def split_key(key: str) -> tuple[str, str | None]:
-    """A bucket back into its kind and, for a clone, which voice.
+# Fewer than this and there is no median worth acting on.
+MIN_SAMPLES = 3
+
+
+def split_key(key: str) -> tuple[str, str]:
+    """A bucket back into its kind and voice.
 
     The other half of `StatsStore._key`, kept beside it so the two cannot
     drift: a card reads what the store wrote.
     """
     kind, _, voice = key.partition(":")
-    return kind, voice or None
+    return kind, voice
 
 
 @dataclass(frozen=True)
-class ModelStats:
-    """One model-and-voice-kind's cost on this host.
+class Measured:
+    """One voice's real-time factor on this host.
 
     Attributes:
         kind: The `Voice.source` these were measured with — `builtin`,
             `designed` or `reference`.
-        render: The fit those requests produced. Its `per_audio` is the
-            real-time factor a card shows, with the per-request fixed cost
-            held beside it rather than averaged into it.
+        voice: Which voice.
+        rtf: The median of `samples` requests' render-over-audio seconds.
+        samples: How many requests the median rests on.
+        provider: The execution provider they ran on.
+        settled: Whether `samples` reaches `MIN_SAMPLES` — before that the
+            figure is shown but decides nothing.
     """
 
     kind: str
-    render: RenderModel
+    voice: str
+    rtf: float
+    samples: int
+    provider: str
+    settled: bool
 
 
 class StatsStore:
@@ -77,7 +91,7 @@ class StatsStore:
     def __init__(self, path: Path) -> None:
         """Load what was measured before, if anything."""
         self._path = path
-        # model id -> voice kind -> requests as they went.
+        # model id -> "kind:voice" -> requests as they went.
         self._renders: dict[str, dict[str, list[RenderSample]]] = {}
         self._lock = threading.Lock()
         self._read()
@@ -91,36 +105,39 @@ class StatsStore:
             # Measurements are not worth failing a start over.
             _LOGGER.warning("stats unreadable, starting empty: %s", err)
             return
-        if not isinstance(stored, dict):
+        if not isinstance(stored, dict) or stored.get("format") != FORMAT:
             return
-        for model_id, by_kind in stored.items():
-            if not isinstance(by_kind, dict):
+        models = stored.get("models")
+        if not isinstance(models, dict):
+            return
+        for model_id, by_key in models.items():
+            if not isinstance(by_key, dict):
                 continue
-            for kind, entry in by_kind.items():
-                # An earlier layout also kept ready-divided ratios under
-                # "rtf". The pairs they came from are not in the file, so
-                # there is nothing to fit and nothing to carry forward.
+            for key, entry in by_key.items():
                 renders = entry.get("renders") if isinstance(entry, dict) else None
                 samples = [
-                    RenderSample(float(r[0]), float(r[1]), int(r[2]), int(r[3]))
+                    RenderSample(float(r[0]), float(r[1]), str(r[2]))
                     for r in renders or []
-                    if isinstance(r, list) and len(r) == 4
+                    if isinstance(r, list) and len(r) == 3
                 ]
                 if samples:
-                    self._renders.setdefault(str(model_id), {})[str(kind)] = samples[
+                    self._renders.setdefault(str(model_id), {})[str(key)] = samples[
                         -MAX_RENDERS:
                     ]
 
     def _write(self) -> None:
         """Write the file. Callers hold `_lock`."""
         stored = {
-            model_id: {
-                kind: {
-                    "renders": [[r.audio_s, r.wall_s, r.cjk, r.latin] for r in renders]
+            "format": FORMAT,
+            "models": {
+                model_id: {
+                    key: {
+                        "renders": [[r.audio_s, r.wall_s, r.provider] for r in renders]
+                    }
+                    for key, renders in by_key.items()
                 }
-                for kind, renders in by_kind.items()
-            }
-            for model_id, by_kind in self._renders.items()
+                for model_id, by_key in self._renders.items()
+            },
         }
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,43 +152,14 @@ class StatsStore:
     def _key(kind: str, voice_id: str) -> str:
         return f"{kind}:{voice_id}"
 
-    def _cost_samples(
-        self, model_id: str, kind: str, voice_id: str
-    ) -> list[RenderSample]:
-        """The renders a cost line is fitted from.
-
-        Pooled across a model's own voices, whose cost differed by 4% where
-        that was measured (MOSS), and kept apart for clones, whose reference
-        rejoins the prompt every synthesis — 0.354 s of render per second of
-        recording on OmniVoice, a tenth of that on MOSS, which is why the
-        intercept is not predicted from the recording's length. Pooling is what lets a
-        model with eighteen built-in voices have a cost line at all.
-        """
-        by_key = self._renders.get(model_id) or {}
-        if kind == "reference":
-            return list(by_key.get(self._key(kind, voice_id)) or [])
-        merged: list[RenderSample] = []
-        for key, samples in by_key.items():
-            if key.split(":", 1)[0] == kind:
-                merged.extend(samples)
-        return merged
-
     def record(
         self, model_id: str, kind: str, voice_id: str, sample: RenderSample
     ) -> None:
         """Note how one request went.
 
-        Every request counts, short ones included: the fixed cost is exactly
-        what a short request exposes, and the fit needs both ends of the line.
-
-        Args:
-            model_id: Catalog id.
-            kind: The `Voice.source` it was rendered with.
-            voice_id: Which voice. Kept even where the cost is pooled, because
-                the speech rate never is.
-            sample: Audio and wall seconds as measured, undivided. What the
-                render clock means is the caller's to state and the fit's to
-                use; a ratio would hide it.
+        Every request counts, short ones included: a short sentence is what a
+        streaming reply is made of, and its cost is what the median has to
+        describe.
         """
         if sample.audio_s <= 0 or sample.wall_s <= 0:
             return
@@ -181,87 +169,67 @@ class StatsStore:
             )
             renders.append(
                 RenderSample(
-                    round(sample.audio_s, 3),
-                    round(sample.wall_s, 3),
-                    sample.cjk,
-                    sample.latin,
+                    round(sample.audio_s, 3), round(sample.wall_s, 3), sample.provider
                 )
             )
             del renders[:-MAX_RENDERS]
             self._write()
 
-    def _stand_in(self, model_id: str, skip: str) -> RenderModel | None:
-        """A line for a voice of this model that has none of its own.
-
-        Which lines are eligible is the store's to say; what one line made of
-        several should be is `RenderModel.dearest`, with the measurements that
-        settled it.
-        """
-        by_key = self._renders.get(model_id) or {}
-        return RenderModel.dearest(
-            [
-                fit
-                for key, samples in by_key.items()
-                if key != skip and (fit := RenderModel.fit(samples)) is not None
-            ]
+    @staticmethod
+    def _measure(
+        key: str, samples: list[RenderSample], provider: str | None
+    ) -> Measured | None:
+        """The median over the newest `WINDOW` samples on this provider,
+        or `None` when the voice has not run on it."""
+        if provider is None:
+            if not samples:
+                return None
+            provider = samples[-1].provider
+        matching = [s for s in samples if s.provider == provider][-WINDOW:]
+        if not matching:
+            return None
+        kind, voice = split_key(key)
+        return Measured(
+            kind=kind,
+            voice=voice,
+            rtf=round(statistics.median(s.rtf for s in matching), 3),
+            samples=len(matching),
+            provider=provider,
+            settled=len(matching) >= MIN_SAMPLES,
         )
 
-    def render_model(
-        self, model_id: str, kind: str, voice_id: str
-    ) -> RenderModel | None:
-        """What a request in this voice costs here, and how fast it speaks.
-
-        Two questions with two right groupings: the cost line comes from every
-        voice that shares a cost, the pace only from this one.
-
-        A voice with no line of its own stands in one from the model's other
-        voices rather than going without. Without it a voice uploaded a minute
-        ago was buffered however long the model had been in use — and buffered
-        is what a caller asks for, not what the app should conclude on its own
-        while it still has something to go on. `samples` stays 0 on a stand-in,
-        so `get` and the card it feeds never show it as measured.
-        """
+    def rtf(
+        self, model_id: str, kind: str, voice_id: str, provider: str
+    ) -> Measured | None:
+        """What this voice measured on `provider`, or `None` until it is
+        settled: a verdict rests on `MIN_SAMPLES` requests, never fewer."""
         key = self._key(kind, voice_id)
         with self._lock:
-            cost = self._cost_samples(model_id, kind, voice_id)
-            own = list((self._renders.get(model_id) or {}).get(key) or [])
-            fit = RenderModel.fit(cost) or self._stand_in(model_id, key)
-        return fit.with_rates(speech_rates(own)) if fit else None
+            samples = list((self._renders.get(model_id) or {}).get(key) or [])
+        measured = self._measure(key, samples, provider)
+        return measured if measured and measured.settled else None
 
-    def get(self, model_id: str) -> list[ModelStats]:
-        """Return what this host measured for a model, one entry per cost line.
+    def get(self, model_id: str, provider: str | None = None) -> list[Measured]:
+        """What this host measured for a model, one entry per voice that
+        has run, settled or not — a voice spoken once is a voice with a cost.
 
-        One per clone, because each carries its own recording; one per kind for
-        a model's own voices, because they cost the same. Empty until enough
-        requests exist to fit a line. Ordered so a card renders the same twice.
+        `provider` is the one the model is running on now; a model not
+        resident is read on whichever provider each voice last ran on. Ordered
+        so a card renders the same twice.
         """
         with self._lock:
-            keys = sorted((self._renders.get(model_id) or {}).keys())
-        seen: set[str] = set()
-        out: list[ModelStats] = []
-        for key in keys:
-            kind, _, voice = key.partition(":")
-            bucket = key if kind == "reference" else kind
-            if bucket in seen:
-                continue
-            seen.add(bucket)
-            # The pooled line, rates included: a row covering a model's own
-            # voices cannot quote one of their paces as if it were the row's.
-            # A clone's bucket is one voice, so there is nothing to pool.
-            with self._lock:
-                cost = self._cost_samples(model_id, kind, voice)
-            fit = RenderModel.fit(cost)
-            if fit:
-                out.append(ModelStats(kind=bucket, render=fit))
-        return out
+            by_key = {
+                key: list(samples)
+                for key, samples in sorted((self._renders.get(model_id) or {}).items())
+            }
+        return [
+            measured
+            for key, samples in by_key.items()
+            if (measured := self._measure(key, samples, provider)) is not None
+        ]
 
     def clear(self) -> None:
-        """Drop every model's measurements.
-
-        For when the host changed under all of them at once — a new execution
-        provider, a different thread count — and every stored figure now
-        describes a machine that is gone.
-        """
+        """Drop every model's measurements."""
         with self._lock:
             if self._renders:
                 self._renders = {}

@@ -7,6 +7,8 @@ import os
 
 import uvicorn
 
+from cortex_speech import check_installation
+
 from . import config, preferences
 
 GRACEFUL_SHUTDOWN_SECONDS = 10
@@ -63,6 +65,7 @@ def _cap_numeric_threads(threads: int) -> None:
 def main() -> None:
     """Run the HTTP server."""
     _configure_logging()
+    check_installation()
     settings = config.load()
     _cap_numeric_threads(preferences.load(settings.data_dir).num_threads)
     uvicorn.run(

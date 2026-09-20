@@ -5,9 +5,11 @@ real-time factor is a property of the host, so a card shows what that host
 measured or nothing at all (`cortex_tts.stats`); what this script produces is
 documentation, for comparing models with each other on one machine.
 
-Not the same statistic as the card: this divides each sentence's whole cost,
-fixed part included, while a card fits the per-second part apart from it. On
-one host the card reads a little lower, and that is not a disagreement.
+The same division the card makes — each request's whole cost over its audio,
+fixed part included — but over four chosen sentences rather than the newest
+requests a voice served. A run of one length leaves the card's median
+describing only that length, so `DELETE /api/models/{id}/stats` afterwards on
+any host whose figures are in use.
 
 The reference host is written down in docs/models.md ("The reference host") and
 that is the authority on it; the figure is the median over the four sentence
@@ -40,15 +42,12 @@ SENTENCES = {
     "story": "從前有一座山，山上有一間小廟，廟裡住著一位老和尚和一位小和尚。每天早上，老和尚都會帶著小和尚到山下的溪邊打水，然後一起回到廟裡念經。日子過得很平靜，直到有一天，山下來了一位陌生的旅人。",
 }
 # Cheapest first, so a run that is cut short still has the comparable pairs.
-# The three cloning entries name a reference recording that has to exist on the
-# host being measured; the third argument is how a run skips them.
+# Each entry names a built-in or designed voice, so nothing has to be uploaded
+# to the host being measured; the third argument narrows the run.
 MODELS = [
     ("hojo-40m", "hojo_zh_f_01"),
     ("moss-nano", "Yuewen"),
-    ("hojo-80m-clone", "ya-ping"),
     ("omnivoice", "female-young"),
-    ("qwen3-tts-0.6b", "vivian"),
-    ("qwen3-tts-0.6b-clone", "ya-ping"),
 ]
 # An optional third argument narrows the run to some model ids, comma-separated.
 if len(sys.argv) > 3:

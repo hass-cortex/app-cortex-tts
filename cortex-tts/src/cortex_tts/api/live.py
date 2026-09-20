@@ -6,17 +6,21 @@ frame, a `batch` frame before each request and a `rendered` frame after it,
 binary audio frames, and a `done` frame carrying what the reply cost.
 
 `batch` and `rendered` are what make the delivery legible from outside: the
-first says how the reply was cut and under which plan, the second what that
-request actually cost. Neither can be worked out from the audio, and during
-the opening hold there is no audio to work anything out from.
-The server decides when to render what — see `cortex_speech.pacing` — from
-what this host has measured about the model, because it is the one holding
-the measurements, the engine queue and the clock.
+first says what a request carries, the second what it actually cost. Neither
+can be worked out from the audio, and while the opening is banked there is no
+audio to work anything out from.
 
-What the transport owns, and the planner does not: releasing audio (the
-opening hold), measuring the listener's lead, and noticing that the listener
-has gone — a closed socket, a `cancel` frame, or a client that has stopped
-reading — so the engine stops at its next checkpoint.
+How the reply is spoken is settled at `ready` — see `cortex_speech.pacing`:
+the voice's measured real-time factor on this host says whether it streams
+(one sentence per request, played from a bank of `BANK_S`, or of less once
+the writer has finished and `bank_needed` can be asked) or is buffered
+(rendered as written, released once it is all rendered), unless the caller
+insisted on one of the two.
+
+What the transport owns: releasing audio (the bank), measuring the listener's
+lead, and noticing that the listener has gone — a closed socket, a `cancel`
+frame, or a client that has stopped reading — so the engine stops at its next
+checkpoint.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -32,18 +37,22 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from pydantic import ValidationError
 
 from cortex_speech import (
+    BANK_S,
     BUFFERED,
     STREAM_ENCODERS,
+    STREAMING,
     AbandonedError,
+    Delivery,
     EngineError,
-    Finished,
     ModelSpec,
-    Planner,
-    Send,
+    Pacer,
+    RenderSample,
+    StreamEncoder,
     StreamGain,
-    Wait,
-    ends_sentence,
+    bank_needed,
     levelled_frames,
+    spoken_seconds,
+    verdict,
 )
 
 from .deps import WS_SUBPROTOCOL, AppState, get_state_ws, require_api_key_ws
@@ -52,7 +61,7 @@ from .routes import (
     engine_errors,
     pick_voice,
     prepare_segments,
-    render_sample,
+    provider_of,
     spec_or_404,
     told_language,
     voice_kind,
@@ -68,7 +77,7 @@ live = APIRouter(prefix="/api", dependencies=[Depends(require_api_key_ws)])
 # healthy client never comes near it.
 STALL_S = 15.0
 
-# How long the speaker waits for text before asking the planner again. The
+# How long the speaker waits for text before asking the pacer again. The
 # reader wakes it on every frame, so this only bounds the idle case.
 IDLE_POLL_S = 0.5
 
@@ -88,16 +97,18 @@ _INTERNAL = 1011
 
 
 @dataclass
-class _Hold:
-    """What the first batch said about releasing audio, applied by the session."""
+class _Bank:
+    """Audio kept back before the first sound.
 
-    all: bool = False
-    audio_s: float = 0.0
-    wall_s: float = 0.0
-    bank: bool = False
+    A streaming reply releases once `_Session._hold` seconds of audio are
+    banked or the reply is rendered whole; a buffered one only when it is
+    rendered whole.
+    """
+
     released: bool = False
-    banked: list[bytes] = field(default_factory=list)
-    banked_s: float = 0.0
+    frames: list[bytes] = field(default_factory=list)
+    seconds: float = 0.0
+    first_audio_at: float | None = None
 
 
 class _GoneError(Exception):
@@ -114,22 +125,21 @@ class _Session:
         self._first_release: float | None = None
         self._sent_audio_s = 0.0
         self._min_lead: float | None = None
+        self._gap_at: int | None = None
         self._first_audio_ms: float | None = None
+        self._bank_wait_ms: float | None = None
         self._requests = 0
         self._render_s = 0.0
-        self._planner: Planner | None = None
-        self._batch_produced_s = 0.0
-        self._batch_started: float | None = None
         self._ready_at: float | None = None
         self._ended_at: float | None = None
-        self._hold = _Hold()
-        # Kept so the reply's end can cancel it: an uncancelled timer holds
-        # this session, its socket and its banked audio in the loop's heap
-        # for the rest of the hold, which the listener has already left.
-        self._hold_timer: asyncio.TimerHandle | None = None
-        # The loop keeps only a weak reference to a bare task, so one left
-        # unheld can be collected before it has released anything.
-        self._timer_release: asyncio.Task | None = None
+        self._mode: str = BUFFERED
+        self._bank = _Bank()
+        self._pacer: Pacer | None = None
+        self._measured_rtf: float | None = None
+        # The request being rendered: what it was expected to produce, and
+        # what it has produced so far — the bank's view of what is still owed.
+        self._inflight_est = 0.0
+        self._inflight_done = 0.0
         # A container header goes out with the first audio, not before it:
         # sending it alone would start the listener's clock on silence.
         self._header = b""
@@ -156,14 +166,26 @@ class _Session:
         # being made resident, which is reported on its own.
         self._ready_at = time.perf_counter()
         kind = voice_kind(state, spec, voice.id)
-        planner = Planner(
-            state.stats.render_model(spec.id, kind, voice.id),
-            chunk_streaming=spec.chunk_streaming,
-            mode=start.mode,
-            pause_s=state.preferences.max_sentence_pause,
-            batch_cap_s=spec.batch_cap_s,
+        provider = provider_of(state, spec)
+        measured = (
+            state.stats.rtf(spec.id, kind, voice.id, provider) if provider else None
         )
-        self._planner = planner
+        rtf = measured.rtf if measured else None
+        # Every request is a measurement of this host in this voice — on the
+        # provider it is actually running on, or it is no measurement at all.
+        record: Callable[[float, float], None] | None = (
+            (
+                lambda seconds, wall: state.stats.record(
+                    spec.id, kind, voice.id, RenderSample(seconds, wall, provider)
+                )
+            )
+            if provider
+            else None
+        )
+        threshold = state.preferences.stream_rtf
+        self._mode = verdict(rtf, threshold) if start.mode == "auto" else start.mode
+        self._measured_rtf = rtf
+        pacer = self._pacer = Pacer(self._mode)
         encoder = STREAM_ENCODERS[start.format]()
         await self._send_json(
             {
@@ -173,79 +195,91 @@ class _Session:
                 "bitrate": encoder.bitrate or spec.sample_rate * 16,
                 "sample_rate": spec.sample_rate,
                 "chunk_streaming": spec.chunk_streaming,
-                "mode": planner.mode,
+                # Settled here and never revised: what the voice measured on
+                # this host, and the way the reply is spoken because of it.
+                "mode": self._mode,
+                "rtf": rtf,
+                "samples": measured.samples if measured else 0,
+                "threshold": threshold,
             }
         )
 
-        reader = asyncio.create_task(self._read(planner))
+        reader = asyncio.create_task(self._read(pacer))
         language = start.language or voice.language
         delivery = start.delivery()
         try:
             self._header = encoder.open(spec.sample_rate)
             while not self._gone.is_set():
-                # Cleared before planning so a frame that lands while the
-                # planner runs is not a wake-up lost until the next poll.
+                # Cleared before asking so a frame that lands while the pacer
+                # answers is not a wake-up lost until the next poll.
                 self._wake.clear()
-                decision = planner.plan(self._lead())
-                if isinstance(decision, Finished):
-                    break
-                if isinstance(decision, Wait):
+                text = pacer.next_request()
+                if text is None:
+                    if pacer.finished():
+                        break
                     await self._sleep_until_woken()
                     continue
-                assert isinstance(decision, Send)
-                self._apply_hold(decision)
-                segments = prepare_segments(state, spec, decision.text, language, start)
+                segments = prepare_segments(state, spec, text, language, start)
                 if not segments:
                     continue
                 # Said before the render, so a listener can show how the
                 # reply is being delivered while its first audio is still
-                # being made; `done` has the last word once the count is known.
+                # being made.
                 await self._send_json(
                     {
                         "type": "batch",
                         "index": self._requests + 1,
-                        "mode": planner.mode,
+                        "mode": self._mode,
                         # What this request carries, as the writer wrote it.
                         # Where a reply was cut is the one thing a caller
                         # cannot work out from the audio it gets back.
-                        "text": decision.text,
-                        # Whether this cut may carry a pause. A gap after one
-                        # that ends a sentence is heard as a pause between
-                        # sentences; after a clause cut it is heard as broken,
-                        # and a reader of the timeline needs the two apart.
-                        "ends_sentence": ends_sentence(decision.text),
+                        "text": text,
                     }
                 )
                 await self._render(
                     spec,
-                    kind,
                     voice.id,
                     segments,
-                    decision.text,
                     replace(
                         delivery,
-                        language=told_language(spec, decision.text, language),
+                        language=told_language(spec, text, language),
                     ),
                     encoder,
                     StreamGain(),
+                    record,
                 )
             if self._gone.is_set():
                 raise _GoneError
             await self._emit(encoder.close(), 0.0)
             await self._release()
-            done = self._done(planner.mode)
-            _LOGGER.info(
-                "spoke live as %s/%s -> %.2fs audio, %s in %d request(s), "
-                "first audio %.0fms, min lead %s",
+            done = self._done()
+            _LOGGER.log(
+                logging.WARNING
+                if done["min_lead_s"] is not None and done["min_lead_s"] < 0
+                else logging.INFO,
+                "spoke live model=%s voice=%s setting=%s verdict=%s rtf=%s "
+                "threshold=%.2f samples=%d provider=%s outcome=%s requests=%d "
+                "audio_s=%.1f first_audio_ms=%.0f bank_wait_ms=%s min_lead_s=%s "
+                "gap_at=%s",
                 spec.id,
                 voice.id,
-                done["audio_seconds"],
+                start.mode,
+                verdict(rtf, threshold),
+                f"{rtf:.2f}" if rtf is not None else "-",
+                threshold,
+                measured.samples if measured else 0,
+                provider or "-",
                 done["mode"],
                 done["batches"],
+                done["audio_seconds"],
                 done["first_audio_ms"],
-                done["min_lead_s"],
+                _field(done["bank_wait_ms"]),
+                _field(done["min_lead_s"]),
+                _field(done["gap_at"]),
             )
             await self._send_json(done)
+            # A measurement landed and a model may have been made resident.
+            state.updates.publish("models")
             await self._ws.close()
         except (_GoneError, AbandonedError, WebSocketDisconnect):
             _LOGGER.info(
@@ -259,6 +293,13 @@ class _Session:
             # and it may itself be gone by now.
             with contextlib.suppress(_GoneError):
                 await self._refuse(err, code=_INTERNAL)
+        except Exception as err:  # noqa: BLE001 - the socket must still hear it
+            # A runtime failure no one gave a shape to. Said on the socket
+            # rather than left to the server: a listener whose reply simply
+            # stops cannot tell a crash from a slow render.
+            _LOGGER.exception("%s: reply failed", spec.id)
+            with contextlib.suppress(_GoneError):
+                await self._fail(err, code=_INTERNAL)
         except asyncio.CancelledError:
             # The server is shutting down under the reply; the engine hears
             # it through `stop` in `finally`.
@@ -267,8 +308,6 @@ class _Session:
         finally:
             self._gone.set()
             reader.cancel()
-            if self._hold_timer is not None:
-                self._hold_timer.cancel()
 
     async def _opening_frame(self) -> LiveStart | None:
         try:
@@ -300,16 +339,16 @@ class _Session:
 
     # -- the reader -------------------------------------------------------
 
-    async def _read(self, planner: Planner) -> None:
-        """Feed the planner from the socket until `end`, `cancel` or a close."""
+    async def _read(self, pacer: Pacer) -> None:
+        """Feed the pacer from the socket until `end`, `cancel` or a close."""
         try:
-            while not planner.ended:
+            while not pacer.ended:
                 frame = await self._ws.receive_json()
                 kind = frame.get("type") if isinstance(frame, dict) else None
                 if kind == "text":
-                    planner.feed(LiveText.model_validate(frame).text)
+                    pacer.feed(LiveText.model_validate(frame).text)
                 elif kind == "end":
-                    planner.end()
+                    pacer.end()
                     self._ended_at = time.perf_counter()
                 elif kind == "cancel":
                     self._gone.set()
@@ -334,20 +373,24 @@ class _Session:
     async def _render(
         self,
         spec: ModelSpec,
-        kind: str,
         voice_id: str,
         segments: list[str],
-        text: str,
-        delivery,
-        encoder,
+        delivery: Delivery,
+        encoder: StreamEncoder,
         gain: StreamGain,
+        record: Callable[[float, float], None] | None,
     ) -> None:
-        """Render one batch, emitting audio as the engine produces it."""
+        """Render one request, emitting audio as the engine produces it.
+
+        `record` is told what it cost, audio seconds and wall seconds, once
+        known; `None` when this host cannot say which provider ran it.
+        """
         self._requests += 1
-        self._batch_produced_s = 0.0
-        started = self._batch_started = time.perf_counter()
+        started = time.perf_counter()
         produced = 0
-        # Buffered releases nothing until the render is over, so unlike a
+        self._inflight_est = sum(spoken_seconds(s) for s in segments)
+        self._inflight_done = 0.0
+        # Buffered releases nothing until the reply is over, so unlike a
         # streamed reply it ends up holding a finished waveform — and a
         # finished waveform can be levelled rather than merely kept under the
         # ceiling. Without this a held reply arrives about 16 dB under a file
@@ -359,8 +402,8 @@ class _Session:
                 spec.id, segments, voice_id, delivery, stop=self._gone.is_set
             ):
                 produced += len(chunk)
-                self._batch_produced_s = produced / spec.sample_rate
-                if self._hold.all:
+                self._inflight_done += len(chunk) / spec.sample_rate
+                if self._mode == BUFFERED:
                     held.append(chunk)
                     continue
                 await self._emit(
@@ -372,9 +415,10 @@ class _Session:
             )
         wall = time.perf_counter() - started
         self._render_s += wall
+        self._inflight_est = self._inflight_done = 0.0
         seconds = produced / spec.sample_rate
         # What the request actually cost, said once it is known. `batch` can
-        # only carry the plan; while audio is still banked a listener sees no
+        # only carry the text; while audio is still banked a listener sees no
         # bytes at all, so this is the only account of where the time went.
         await self._send_json(
             {
@@ -384,19 +428,13 @@ class _Session:
                 "render_ms": round(wall * 1000, 1),
             }
         )
-        if self._planner is not None:
-            # What it really cost, so the opening hold for what is left is
-            # sized by this reply and not only by the host's average day.
-            self._planner.rendered(seconds, wall)
-        if seconds:
-            # Every request teaches the render model; a listener who left
-            # never reaches here, so an abandoned render teaches it nothing.
+        if seconds and record:
+            # A listener who left never reaches here, so an abandoned render
+            # teaches the host nothing.
             await asyncio.to_thread(
-                self._state.stats.record,
-                spec.id,
-                kind,
-                voice_id,
-                render_sample(text, seconds, wall),
+                record,
+                seconds,
+                wall,
             )
 
     def _rtf(self) -> float | None:
@@ -407,72 +445,48 @@ class _Session:
 
     # -- releasing audio --------------------------------------------------
 
-    def _apply_hold(self, decision: Send) -> None:
-        if self._requests:
-            return
-        self._hold = _Hold(
-            all=decision.hold_all,
-            audio_s=decision.hold_audio_s,
-            wall_s=decision.hold_wall_s,
-            bank=decision.hold_bank,
-        )
-
     async def _emit(self, frames: bytes, seconds: float) -> None:
-        """Send audio, or bank it while the opening hold says to."""
+        """Send audio, or bank it while the opening is still being held."""
         if not frames and not seconds:
             return
-        hold = self._hold
-        if hold.released:
+        bank = self._bank
+        if bank.released:
             await self._send_audio(frames, seconds)
             return
-        first_audio = not hold.banked and seconds > 0
-        hold.banked.append(frames)
-        hold.banked_s += seconds
-        # Armed the moment there is anything to play. Checking on arrival alone
-        # could never fire it: a whole-render engine hands over one batch at a
-        # time, so the next check is the next batch landing — by which point
-        # the bank usually covers the need anyway, and the silence this timer
-        # exists to end has already been sat through. The plan's own deadline,
-        # and nothing where it has none — which is a reply whose first request
-        # is still its only measurement, released by the bank once that
-        # request has said what it costs.
-        if first_audio and hold.wall_s and self._hold_timer is None:
-            self._hold_timer = asyncio.get_running_loop().call_later(
-                hold.wall_s, self._release_later
-            )
-        if hold.all:
-            return
-        if hold.bank:
-            # Enough banked to outlast what the rest is still predicted to
-            # lose: released now, and sooner if the render runs ahead.
-            assert self._planner is not None
-            elapsed = (
-                time.perf_counter() - self._batch_started
-                if self._batch_started is not None
-                else 0.0
-            )
-            if hold.banked_s >= self._planner.bank_needed(
-                self._batch_produced_s, elapsed
-            ):
-                await self._release()
-            return
-        if hold.wall_s:
-            return
-        if hold.banked_s >= hold.audio_s:
+        if bank.first_audio_at is None and seconds > 0:
+            bank.first_audio_at = time.perf_counter()
+        bank.frames.append(frames)
+        bank.seconds += seconds
+        if self._mode == STREAMING and bank.seconds >= self._hold():
             await self._release()
 
-    def _release_later(self) -> None:
-        """Release from the opening hold's timer, which cannot await."""
-        self._timer_release = asyncio.ensure_future(self._release())
+    def _hold(self) -> float:
+        """Audio to bank before the first sound.
+
+        `BANK_S` while the writer is still writing, because how much reply
+        is still to come is unknown. Once the writer has finished the rest is
+        in hand, and holding more than it needs at this voice's measured pace
+        is silence for nothing: a two-sentence reply at 1.05x waited three
+        seconds it did not need to. The estimate uses the slow-side priors,
+        so it errs toward holding.
+        """
+        pacer = self._pacer
+        if pacer is None or not pacer.ended or self._measured_rtf is None:
+            return BANK_S
+        rest = [max(self._inflight_est - self._inflight_done, 0.0)]
+        rest += [spoken_seconds(s) for s in pacer.remaining()]
+        return min(BANK_S, bank_needed(self._measured_rtf, rest))
 
     async def _release(self) -> None:
-        hold = self._hold
-        if hold.released or self._gone.is_set():
+        bank = self._bank
+        if bank.released or self._gone.is_set():
             return
-        hold.released = True
-        frames, seconds = b"".join(hold.banked), hold.banked_s
-        hold.banked.clear()
-        hold.banked_s = 0.0
+        bank.released = True
+        if bank.first_audio_at is not None:
+            self._bank_wait_ms = (time.perf_counter() - bank.first_audio_at) * 1000
+        frames, seconds = b"".join(bank.frames), bank.seconds
+        bank.frames.clear()
+        bank.seconds = 0.0
         await self._send_audio(frames, seconds)
 
     async def _send_audio(self, frames: bytes, seconds: float) -> None:
@@ -482,10 +496,13 @@ class _Session:
         # The lead as this audio lands: what the listener still held. The
         # first release holds nothing by definition and is not a measurement.
         lead = self._lead()
-        if lead is not None and self._sent_audio_s > 0:
-            self._min_lead = (
-                lead if self._min_lead is None else min(self._min_lead, lead)
-            )
+        if (
+            lead is not None
+            and self._sent_audio_s > 0
+            and (self._min_lead is None or lead < self._min_lead)
+        ):
+            self._min_lead = lead
+            self._gap_at = self._requests
         self._sent_audio_s += seconds
         frames, self._header = self._header + frames, b""
         if not frames:
@@ -513,29 +530,23 @@ class _Session:
             self._gone.set()
             raise _GoneError from err
 
-    def _done(self, mode: str) -> dict:
+    def _done(self) -> dict:
         return {
             "type": "done",
-            # What actually happened, not what was planned. A reply that fit
-            # one request was spoken whole, whichever way it got there — the
-            # plan is about where to cut, and there was nowhere to cut.
-            #
-            # Buffered is the exception, because it is not a statement about
-            # cutting: it is one about releasing, and holding every byte until
-            # the render ends is what it did whether or not that took one
-            # request. Measured on MOSS, the same reply in one request was
-            # heard at 4.53 s spoken as it rendered and at 26.96 s held —
-            # twenty-two seconds apart, and both were reporting `whole`.
-            "mode": mode if self._requests > 1 or mode == BUFFERED else "whole",
+            # How the reply was spoken. Buffered is about releasing, not
+            # cutting, so a one-request reply held to its end is buffered too.
+            "mode": self._mode,
             "batches": self._requests,
             "audio_seconds": round(self._sent_audio_s, 3),
             # What the model was busy for, as opposed to what the listener
             # waited: the sum of the requests' render time, and that over
-            # the audio it produced — the figure the stats card keeps.
+            # the audio it produced. One reply's aggregate, not the card's
+            # figure, which is a median of per-request factors.
             "render_ms": round(self._render_s * 1000, 1),
             # Where the wait went. The model being made resident is paid
-            # before `ready`; the writer's time runs from `ready` to `end`
-            # and is what a planned reply waits for before it can render.
+            # before `ready`; the writer's time runs from `ready` to `end`;
+            # the bank is what the first audio waited between being rendered
+            # and being released.
             "load_ms": round(
                 ((self._ready_at or self._started) - self._started) * 1000, 1
             ),
@@ -544,13 +555,24 @@ class _Session:
                 if self._ended_at is not None
                 else None
             ),
+            "bank_wait_ms": (
+                round(self._bank_wait_ms, 1) if self._bank_wait_ms is not None else None
+            ),
             "rtf": self._rtf(),
             "first_audio_ms": round(self._first_audio_ms or 0.0, 1),
             "min_lead_s": round(self._min_lead, 3)
             if self._min_lead is not None
             else None,
+            # The request whose audio landed at the lowest lead — where a
+            # reply that ran dry went quiet.
+            "gap_at": self._gap_at,
             "wall_ms": round((time.perf_counter() - self._started) * 1000, 1),
         }
+
+
+def _field(value: object) -> str:
+    """A log field: the value, or `-` for none."""
+    return "-" if value is None else str(value)
 
 
 @live.websocket("/speak/live")

@@ -18,13 +18,6 @@ let voices = [];
 // What the addon is configured to speak with. Until it answers, a picker has
 // nothing to prefer and falls back to the first entry.
 let defaults = { model: "", voice: "" };
-let pollTimer = null;
-// A reply is in flight. Speaking is the other thing that changes which model
-// is resident — it evicts one and loads another — and the table is read from
-// the same `/api/models` as the header badge, so both went on claiming the
-// previous model until the reply ended. Downloads are not the only reason to
-// look again.
-let speaking = false;
 // Models with an action in flight, and those whose Delete awaits its second
 // click. Both are read at render time: the download poll redraws every card,
 // and would otherwise re-enable a button mid-request.
@@ -75,6 +68,7 @@ export function previewLanguage() {
 const shortName = (m) => (m.name.match(/\d+M/) || [m.name])[0];
 
 function statePill(m) {
+  if (m.download_state === "queued") return '<span class="pill warn">queued</span>';
   if (m.download_state === "running") {
     return `<span class="pill warn">downloading ${Math.round(m.download_percent)}%</span>`;
   }
@@ -95,7 +89,7 @@ function detail(m) {
 }
 
 function actions(m) {
-  if (m.download_state === "running") return "";
+  if (m.download_state === "running" || m.download_state === "queued") return "";
   const button = (act, label, cls = "sm") =>
     `<button class="${cls}" data-act="${act}" data-id="${esc(m.id)}"${busy.has(m.id) ? " disabled" : ""}>${label}</button>`;
   if (!m.downloaded) return button("download", "Download");
@@ -114,11 +108,15 @@ function voiceCount(m) {
 
 const KIND_LABEL = { builtin: "built-in", designed: "designed", reference: "cloned" };
 
-/** The real-time factors this host measured, one per kind of voice.
+/** The real-time factors this host measured, one row per voice.
  *
- * `per_audio` and not a plain average of what each request cost: the fixed
- * cost every request pays is fitted separately, so a card is not read down by
- * short replies or up by a reply that was rendered in many requests.
+ * The median of the voice's recent requests on the provider in use, and the
+ * verdict that follows from it: how a live reply in that voice is spoken
+ * under `auto`. The comparison is shown, not only its answer, so a verdict
+ * reads as the settings' threshold applied and not as a judgement on the
+ * voice. A clone is its own row — its recording rejoins the prompt on every
+ * synthesis, so it costs differently from a built-in voice on the same
+ * model.
  */
 function rtf(m) {
   const measured = m.rtf || [];
@@ -127,26 +125,19 @@ function rtf(m) {
     return `<p class="qual rtf-none">Not measured yet.</p>`;
   }
   const rows = measured.map((r) => {
-    const n = r.requests === 1 ? "1 request" : `${r.requests} requests`;
-    // Render seconds over audio seconds, which is what the figure is called.
-    // `per_audio` is only the slope: with a fixed cost a request also pays
-    // `fixed_s / audio`, so the factor falls as the request grows and one
-    // number without its length says nothing. Quoted at `audio_ref_s`, the
-    // mean request this host served, and the length is shown whenever there
-    // is a fixed cost for it to depend on.
-    const at = Number(r.audio_ref_s) || 0;
-    const factor = at > 0 ? Number(r.fixed_s) / at + Number(r.per_audio)
-      : Number(r.per_audio);
-    const quoted = Number(r.fixed_s) > 0 && at > 0
-      ? ` <span class="qual">at ${at.toFixed(1)}s</span>` : "";
-    // A clone is measured per voice: its own recording rejoins the prompt on
-    // every synthesis, so two clones of different lengths cost differently.
-    const label = r.voice
-      ? `${KIND_LABEL[r.kind] || r.kind} · ${r.voice}`
-      : KIND_LABEL[r.kind] || r.kind;
+    const n = r.samples === 1 ? "1 request" : `${r.samples} requests`;
+    const label = `${KIND_LABEL[r.kind] || r.kind} · ${r.voice}`;
+    // A voice is listed from its first request; the verdict waits for three.
+    const settled = r.verdict !== null;
+    const against = settled
+      ? `${r.verdict === "streaming" ? "<" : "≥"} ${Number(r.threshold).toFixed(2)}`
+      : "";
     return `<span class="rtf-kind">${esc(label)}</span>
-      <span class="val">${factor.toFixed(2)}</span>${quoted}
-      <span class="qual">${n}</span>`;
+      <span class="val">${Number(r.rtf).toFixed(2)}</span>
+      <span class="qual">${against}</span>
+      <span class="qual">${n}</span>
+      <span class="qual">${esc(r.provider)}</span>
+      <span class="rtf-verdict ${settled ? esc(r.verdict) : "pending"}">${settled ? esc(r.verdict) : "not yet"}</span>`;
   }).join("");
   return `<div class="rtf-rows">${rows}</div>`;
 }
@@ -175,7 +166,6 @@ function renderCards() {
       <div class="actions">${actions(m)}</div>
     </div>`).join("");
 
-  syncPoll();
 
   // The pill names which models clone, rather than naming one of them.
   const cloners = models.filter((m) => m.cloning).map((m) => shortName(m));
@@ -193,10 +183,8 @@ function renderCards() {
   const note = document.getElementById("clonesTranscriptNote");
   if (note) {
     note.textContent = deaf.length
-      ? `${deaf.join(", ")} ${deaf.length > 1 ? "are" : "is"} the exception: `
-        + "conditioned on the recording alone, never told what it says. Type "
-        + "it properly anyway — one recording is a voice on every cloning "
-        + "model at once."
+      ? `${deaf.join(", ")} ${deaf.length > 1 ? "ignore" : "ignores"} the transcript; `
+        + "type it properly anyway, the other cloning models read it."
       : "";
   }
 
@@ -206,39 +194,7 @@ function renderCards() {
     : '<span class="pill idle">no model resident</span>';
 }
 
-const running = () => models.filter((m) => m.download_state === "running").map((m) => m.id);
 
-/** Look again while anything is changing what the table says. */
-function syncPoll() {
-  const wanted = running().length > 0 || speaking;
-  if (wanted && !pollTimer) pollTimer = setInterval(poll, 1500);
-  if (!wanted && pollTimer) stopPoll();
-}
-
-/** Told by the live panel, which knows when a reply starts and ends. */
-export function setSpeaking(on) {
-  speaking = on;
-  syncPoll();
-}
-
-function stopPoll() {
-  clearInterval(pollTimer);
-  pollTimer = null;
-}
-
-// A download that ends may have added voices, which only /voices knows. A
-// fetch that fails ends the poll rather than failing again every tick.
-async function poll() {
-  const before = running();
-  try {
-    await refreshModels();
-    const after = running();
-    if (before.some((id) => !after.includes(id))) await refreshVoices();
-  } catch (err) {
-    msg($("modelMsg"), err.message, "err");
-    stopPoll();
-  }
-}
 
 function selectedModel() {
   return models.find((m) => m.id === $("model").value) || null;
@@ -304,14 +260,14 @@ function renderDeliveryFields() {
   $("voiceRow").classList.toggle("lone", !instruct);
   if (!instruct) $("instruct").value = "";
   $("instructHint").textContent =
-    "Plain language, beside the voice. Left empty the speaker reads it as it normally would.";
+    "Plain language; leave empty for the voice's normal delivery.";
 
   // The language field stays on every model: it narrows the voice list and
   // picks how the text is prepared whatever the model does with it, and only
   // some are additionally told which language to read.
   $("languageHint").textContent = spoken
-    ? "Narrows the voices below, picks how the text is prepared, and tells the model which language to read it in."
-    : "Narrows the voices below and picks how the text is prepared. This model reads whichever language its voice does.";
+    ? "Filters the voices, sets text preparation, and tells the model which language to read."
+    : "Filters the voices and sets text preparation; this model follows its voice's language.";
 
   const codes = model ? model.languages || [] : [];
   fillPicker(
@@ -332,8 +288,8 @@ function renderDeliveryFields() {
  * voice behind a filter is the one case that would actually annoy.
  *
  * When nothing matches, the whole list comes back rather than an empty one:
- * Qwen3-TTS reads ten languages with nine speakers, so asking for German
- * names no voice and is still a sensible request. There the timbre and the
+ * OmniVoice reads ten languages with nine designed voices, so asking
+ * for German names no voice and is still a sensible request. There the timbre and the
  * language are separate things.
  */
 function narrowed(all) {

@@ -32,9 +32,9 @@ class TestBundleSource:
 
     def test_single_repo_models_are_unchanged_by_the_generalisation(self) -> None:
         """The common case stays flat: no subdir, no path prefixes."""
-        for spec in (BY_ID["hojo-40m"], BY_ID["hojo-80m-clone"]):
-            assert len(spec.sources) == 1
-            assert all("/" not in name for name in spec.files)
+        spec = BY_ID["hojo-40m"]
+        assert len(spec.sources) == 1
+        assert all("/" not in name for name in spec.files)
 
 
 class TestInspect:

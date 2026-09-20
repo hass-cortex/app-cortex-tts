@@ -5,6 +5,7 @@ import { $, msg, pressed, soloAudio } from "./dom.js";
 import * as clones from "./clones.js";
 import * as live from "./live.js";
 import * as models from "./models.js";
+import * as updates from "./updates.js";
 import * as preview from "./preview.js";
 import * as samples from "./samples.js";
 import * as settings from "./settings.js";
@@ -58,6 +59,9 @@ function wire() {
       .then(() => models.refreshModels())
       .then(() => preview.refresh())
       .catch((err) => msg($("modelMsg"), err.message, "err")));
+
+  // One socket says which section went stale; nothing polls.
+  updates.init();
 
   // The voice's own language is what the text is read in when the language
   // field is empty, so the column follows the voice. Whether there is a

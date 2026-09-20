@@ -1,40 +1,33 @@
-"""Deciding when to render what, so a spoken reply neither stalls nor waits.
+"""Deciding what each request of a live reply carries.
 
-Three pieces, all pure: `RenderModel` is what this host has measured about a
-model (how long a request takes to render, how fast the voice speaks),
-`SentenceBuffer` turns text arriving in pieces into sentences, and `Planner`
-turns the two into decisions — send this much now, wait, hold the opening
-this long. Nothing here knows about sockets or clocks; the caller supplies
-the lead and reads the decision.
+All pure: `SentenceBuffer` turns text arriving in pieces into sentences,
+`verdict` turns a measured real-time factor into a way of speaking, and
+`Pacer` hands out the next request's text under that verdict. Nothing here
+knows about sockets or clocks; releasing audio is the transport's.
 """
 
-from .model import RenderModel, RenderSample
-from .planner import (
+from .model import RenderSample
+from .release import (
+    BANK_S,
     BUFFERED,
-    PLANNED,
+    STREAM_RTF,
     STREAMING,
-    UNHELD,
-    Decision,
-    Finished,
-    Planner,
-    Send,
-    Wait,
+    Mode,
+    Pacer,
+    bank_needed,
+    verdict,
 )
-from .sentences import SentenceBuffer, clause_pieces, ends_sentence
+from .sentences import SentenceBuffer
 
 __all__ = [
+    "BANK_S",
     "BUFFERED",
-    "PLANNED",
-    "STREAMING",
-    "UNHELD",
-    "Decision",
-    "Finished",
-    "Planner",
-    "RenderModel",
+    "Mode",
+    "Pacer",
     "RenderSample",
-    "Send",
+    "STREAMING",
+    "STREAM_RTF",
     "SentenceBuffer",
-    "Wait",
-    "clause_pieces",
-    "ends_sentence",
+    "bank_needed",
+    "verdict",
 ]

@@ -28,9 +28,9 @@ const THREE_WAY = [
 export const whenSaved = (fn) => { onSaved = fn; };
 
 const PROVIDERS = [
-  ["auto", "auto — take a GPU if one answers"],
+  ["auto", "auto — GPU if available, else CPU"],
   ["cpu", "cpu"],
-  ["cuda", "cuda — fail rather than fall back"],
+  ["cuda", "cuda — no CPU fallback"],
 ];
 
 // What each field is called on the page, for naming one the server refused.
@@ -41,8 +41,8 @@ const LABELS = {
   execution_provider: "Execution provider",
   max_loaded_models: "Models kept in memory",
   idle_unload_seconds: "Unload when idle",
-  max_sentence_pause: "Silence a sentence end may carry",
   temperature: "Sampling temperature",
+  stream_rtf: "Stream under RTF",
   preload: "Preload",
   text_rules: "Text switch rules",
 };
@@ -71,7 +71,7 @@ function renderRules() {
   const rules = current.text_rules || [];
   $("setRules").innerHTML = rules.length
     ? rules.map(renderRule).join("")
-    : '<div class="rules-empty">No rules: every switch is the pipeline\'s call.</div>';
+    : '<div class="rules-empty">No rules; the pipeline decides each switch.</div>';
   // The tags the models declare, plus the Chinese ones a rule is likely to
   // want, offered as suggestions; anything else may be typed.
   const tags = new Set(["zh-TW", "zh-CN", "zh-Hant", "zh-Hans"]);
@@ -146,8 +146,8 @@ function render() {
   $("setThreads").value = current.num_threads;
   $("setLoaded").value = current.max_loaded_models;
   $("setIdle").value = current.idle_unload_seconds;
-  $("setSentencePause").value = current.max_sentence_pause;
   $("setTemp").value = current.temperature;
+  $("setStreamRtf").value = current.stream_rtf;
   $("setProvider").innerHTML = PROVIDERS.map(
     ([id, label]) =>
       `<option value="${id}"${id === current.execution_provider ? " selected" : ""}>${label}</option>`,
@@ -199,8 +199,8 @@ async function save() {
         execution_provider: $("setProvider").value,
         max_loaded_models: numberOrOmit("setLoaded"),
         idle_unload_seconds: numberOrOmit("setIdle"),
-        max_sentence_pause: numberOrOmit("setSentencePause"),
         temperature: numberOrOmit("setTemp"),
+        stream_rtf: numberOrOmit("setStreamRtf"),
         preload: $("setPreload").checked,
         text_rules: collectRules(),
       }),
@@ -214,7 +214,7 @@ async function save() {
     // and the server names which fields it did that to.
     const kept = (body.ignored || []).map((field) => LABELS[field] || field);
     let text = "Saved.";
-    if (body.reloaded) text += " Resident models were dropped — the next reply loads them again.";
+    if (body.reloaded) text += " Resident models were dropped; the next request reloads them.";
     if (kept.length) text += ` Kept previous value for: ${kept.join(", ")}.`;
     msg($("setMsg"), text, kept.length ? "warn" : "ok");
   } catch (err) {

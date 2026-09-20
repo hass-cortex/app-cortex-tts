@@ -62,6 +62,13 @@ class TestValidation:
         value = 1 + offset if offset < 0 else len(CATALOG) + offset
         assert Preferences().merged({"max_loaded_models": value}).max_loaded_models == 1
 
+    @pytest.mark.parametrize("value", [0.05, 3.5])
+    def test_a_threshold_outside_the_range_is_refused(self, value: float) -> None:
+        assert Preferences().merged({"stream_rtf": value}).stream_rtf == 0.8
+
+    def test_a_threshold_within_it_is_kept(self) -> None:
+        assert Preferences().merged({"stream_rtf": 1.2}).stream_rtf == 1.2
+
     @pytest.mark.parametrize("value", [-1, 86401])
     def test_idle_unload_outside_the_range_is_refused(self, value: int) -> None:
         assert (

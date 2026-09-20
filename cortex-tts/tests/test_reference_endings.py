@@ -1,8 +1,8 @@
 """A reference must end because the speaker stopped, not because a clock did.
 
 The models that clone best read the whole recording as a worked example
-before they say anything: Qwen3-TTS puts its codec frames in the prompt
-beside its transcript, and OmniVoice has no speaker encoder at all. A clip cut
+before they say anything: OmniVoice has no speaker encoder at all and reads
+the recording beside its transcript. A clip cut
 mid-word therefore teaches one thing above all — that is how this speaker
 finishes a sentence — and nothing downstream can tell. The clone renders
 without error, drifts, and clips its own endings.

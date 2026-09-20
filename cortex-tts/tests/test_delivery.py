@@ -41,15 +41,13 @@ class TestWhoTakesWhat:
     def test_a_voice_bound_model_takes_no_language(self) -> None:
         """On these the voice is the language; a request naming one would be
         accepted and ignored, which is indistinguishable from working."""
-        for model_id in ("hojo-40m", "hojo-80m-clone", "moss-nano"):
+        for model_id in ("hojo-40m", "moss-nano"):
             assert not BY_ID[model_id].language_choice
 
-    def test_only_the_custom_voice_checkpoint_takes_an_instruction(self) -> None:
-        """The cloning checkpoint refuses one upstream (`_check_features`), and
-        OmniVoice's is a closed vocabulary already surfaced as designed
-        voices."""
-        taking = {spec.id for spec in CATALOG if spec.style_instruction}
-        assert taking == {"qwen3-tts-0.6b"}
+    def test_no_model_here_takes_an_instruction(self) -> None:
+        """OmniVoice's is a closed vocabulary already surfaced as designed
+        voices, and nothing else reads free text."""
+        assert not {spec.id for spec in CATALOG if spec.style_instruction}
 
     def test_an_instruction_implies_a_language_choice(self) -> None:
         """Both come from the same checkpoint feature set; one without the
@@ -63,9 +61,9 @@ class TestNarrowingALanguageTag:
     """A whole tag arrives and the engine decides how much of it it knows.
 
     Reducing `zh-TW` to `zh` in the caller would throw away a distinction
-    before any model got to say whether it mattered — and these models do name
-    things narrower than a base code: Qwen3-TTS has Beijing and Sichuan
-    dialects, OmniVoice names 646 languages including Cantonese.
+    before any model got to say whether it mattered — and a model does name
+    things narrower than a base code: OmniVoice names 646 languages including
+    Cantonese.
 
     One function, in `engine/base.py`, because a tag cannot mean different
     amounts depending on which model reads it. It used to be copied into both
@@ -86,9 +84,8 @@ class TestNarrowingALanguageTag:
     def test_a_base_code_narrows_to_itself(self) -> None:
         assert narrowing("ja") == ["ja"]
 
-    def test_both_engines_use_the_one_function(self) -> None:
-        """Not "they agree" — the same object, so they cannot disagree."""
-        from cortex_speech.engine import omni, qwen3
+    def test_the_engine_uses_the_one_function(self) -> None:
+        """Not "it agrees" — the same object, so it cannot disagree."""
+        from cortex_speech.engine import omni
 
         assert omni.narrowing is narrowing
-        assert qwen3.narrowing is narrowing

@@ -1,0 +1,6 @@
+# Hand-kept, unlike taiwan_readings.tsv: a stand-in for a polyphone some model
+# reads with the wrong character. Which model needs which word is the
+# catalog's to say (`ModelSpec.misreads`); this only says what to respell it
+# as. Keyed by the Simplified form, so it runs after script conversion.
+# word	stand-in	reading meant	measured
+行程	形程	xing2 cheng2	Hojo 40M read 行 as héng in 「你有 3 個行程」 (2026-09-21); 形程 reads xíng chéng on every model

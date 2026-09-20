@@ -38,8 +38,8 @@
 
   <section>
     <h2>Say something</h2>
-    <p class="hint">Pick a line the way Home Assistant would send it, then check
-    the column on the right before you trust the voice.</p>
+    <p class="hint">Type a line as Home Assistant would send it. The column on
+    the right shows what the model is asked to say.</p>
     <div class="chips" id="samples"></div>
     <div class="field">
       <label for="text">Text</label>
@@ -87,14 +87,13 @@
            property of the text, it is how this one run should be delivered. -->
       <!-- What separates them is when audio is released, not how the text is
            cut: every model splits text to its own `max_chars_per_segment`
-           whichever is chosen. Every one but buffered sends audio as it is
-           made; buffered holds all of it to the end. -->
+           whichever is chosen. Streaming plays from a bank of audio while the
+           rest renders; buffered holds all of it to the end; auto takes the
+           verdict this host's measurements give the voice. -->
       <select id="liveMode" aria-label="Delivery">
-        <option value="auto" selected>auto — stream if the model keeps up, else plan</option>
-        <option value="streaming">streaming — plan as the words arrive, speak once there is a lead</option>
-        <option value="planned">planned — plan once all the words are in, hold the opening so it never stalls</option>
-        <option value="unheld">unheld — plan once all the words are in, speak as fast as it renders (will stall)</option>
-        <option value="buffered">buffered — render the whole reply in one request, then play it</option>
+        <option value="auto" selected>auto — stream if this host measured the voice fast enough, else buffer</option>
+        <option value="streaming">streaming — one sentence per request, play from a bank of audio (may stall)</option>
+        <option value="buffered">buffered — render the whole reply, then play it</option>
       </select>
       <button class="chip" id="norm" aria-pressed="true">normalise numbers</button>
       <button class="chip" id="num" aria-pressed="false">bare numbers</button>
@@ -120,15 +119,10 @@
 <section id="timeline" hidden>
   <div class="sec-head">
     <h2>How the last live reply was delivered</h2>
-    <span class="note">It plays here as it arrives, and every time is
-    observed rather than predicted: one row per request, from when it was sent
-    to when its audio came back, labelled render time → audio produced, and
-    the factor between them. The
-    last row is the listener's own bar — held back, then played, then what is
-    in hand and not played yet, whose width is the lead. When that last piece
-    runs out, playback has caught the renderer: after a cut that ends a
-    sentence that is heard as a pause between sentences, anywhere else as
-    broken.</span>
+    <span class="note">One row per request, from send to audio back, labelled
+    render time → audio produced and the factor between them. The last row is
+    playback: held back, then played, then audio in hand (the lead) — when the
+    lead runs out, the listener hears silence.</span>
   </div>
   <div class="tl">
     <div class="tl-head" id="tlHead" hidden></div>
@@ -142,17 +136,17 @@
     <span><i class="render"></i>rendering</span>
     <span><i class="wait"></i>held back</span>
     <span><i class="play"></i>played</span>
-    <span><i class="buffer"></i>in hand, not played yet (the lead)</span>
-    <span><i class="pause"></i>pause between sentences</span>
-    <span><i class="dry"></i>ran dry mid-sentence</span>
+    <span><i class="buffer"></i>in hand (the lead)</span>
+    <span><i class="warn"></i>gap 0.3–1 s</span>
+    <span><i class="dry"></i>ran dry (over 1 s)</span>
   </div>
 </section>
 
 <section>
   <div class="sec-head">
     <h2>Models</h2>
-    <span class="note">Weights download on demand. Only one model stays in
-    memory at a time by default; the larger ones need 1–2 GB each.</span>
+    <span class="note">Weights download on demand. By default one model stays
+    in memory at a time.</span>
   </div>
   <div class="cards" id="models"></div>
   <div class="msg" id="modelMsg" aria-live="polite" hidden></div>
@@ -163,10 +157,9 @@
     <h2>Settings</h2>
     <span class="note" id="providerNote"></span>
   </div>
-  <p class="hint">Stored by the app; a change takes effect on the next request.
-  <span class="tag">reload</span> settings are bound when a model loads, so
-  changing one drops what is resident. <span class="tag">restart</span> also
-  sizes the maths libraries' thread pools at start-up.</p>
+  <p class="hint">Changes apply on the next request. Changing a
+  <span class="tag">reload</span> setting drops the resident models;
+  a <span class="tag">restart</span> setting takes effect after the app restarts.</p>
   <div class="group">
     <h3>Defaults</h3>
     <div class="row">
@@ -178,8 +171,8 @@
       <div class="field">
         <label for="setVoice">Default voice</label>
         <select id="setVoice"></select>
-        <p class="sub">A request that names no language is read in this
-        voice's; OmniVoice and Qwen3-TTS can also be told one outright.</p>
+        <p class="sub">Used when a request names none; its language is the
+        default language too.</p>
       </div>
     </div>
     <div class="row">
@@ -190,25 +183,23 @@
           <span class="track"></span>
           <span>load the default model at startup</span>
         </label>
-        <p class="sub">Off, the first request after a start pays the load; on, the
-        model's memory is held from start-up.</p>
+        <p class="sub">On, the default model loads at startup; off, the first
+        request loads it.</p>
       </div>
       <div class="field">
         <label for="setTemp">Sampling temperature</label>
         <input id="setTemp" type="number" min="0" max="1" step="0.05">
-        <p class="sub">A request may send its own. High values sometimes append an
-        invented syllable; 0 is reproducible on Hojo but makes Qwen3-TTS fail
-        to stop. MOSS and OmniVoice ignore it.</p>
+        <p class="sub">Default for requests that send none. Lower is steadier;
+        0 can keep some models from stopping.</p>
       </div>
     </div>
   </div>
 
   <div class="group">
     <h3>Text switches, per model and language</h3>
-    <p class="sub">What a request gets for a switch it leaves out. Left alone,
-    each is the pipeline's call: bare numbers by the model, the Chinese
-    rewrites by the language. The most specific rule wins; a language covers
-    every tag it prefixes (<code>zh</code> covers <code>zh-TW</code>).</p>
+    <p class="sub">Defaults for switches a request leaves out. The most specific
+    rule wins; a language covers every tag it prefixes (<code>zh</code> covers
+    <code>zh-TW</code>).</p>
     <div class="rules" id="setRules"></div>
     <datalist id="setLangList"></datalist>
     <button id="setRuleAdd">Add rule</button>
@@ -220,42 +211,39 @@
       <div class="field">
         <label for="setThreads">Inference threads <span class="tag">restart</span></label>
         <input id="setThreads" type="number" min="0" max="16" step="1">
-        <p class="sub">0 lets the runtime decide. More is not always faster — some
-        models are slower at four than at two; check the card's measured
-        figure after changing it.</p>
+        <p class="sub">0 lets the runtime decide. More is not always faster;
+        check the RTF card after changing it.</p>
       </div>
       <div class="field">
         <label for="setProvider">Execution provider <span class="tag">reload</span></label>
         <select id="setProvider"></select>
-        <p class="sub">What the sessions actually got is shown on each loaded card.</p>
+        <p class="sub">The provider actually in use shows on each loaded card.</p>
       </div>
     </div>
     <div class="row lone">
       <div class="field">
         <label for="setLoaded">Models kept in memory</label>
         <input id="setLoaded" type="number" min="1" step="1">
-        <p class="sub">Roughly 0.8 GB for the 40M, 1.1 GB OmniVoice, 1.5 GB Qwen3-TTS,
-        2 GB each for the 80M and MOSS. At 1 they swap on demand.</p>
-      </div>
-    </div>
-    <div class="row lone">
-      <div class="field">
-        <label for="setSentencePause">Silence a sentence end may carry (seconds)</label>
-        <input id="setSentencePause" type="number" min="0" max="10" step="0.5">
-        <p class="sub">Playback that catches the renderer at a sentence end is heard
-        as a longer pause between sentences, which is where a pause belongs — so the
-        opening need not be held against it, and the first word comes sooner. A cut
-        inside a sentence never earns this, and neither does a model that streams
-        audio while it renders. 0 holds until nothing can ever run dry.</p>
+        <p class="sub">How many models stay loaded at once; at 1 they swap on
+        demand. Each card shows its memory.</p>
       </div>
     </div>
     <div class="row lone">
       <div class="field">
         <label for="setIdle">Unload when idle (seconds)</label>
         <input id="setIdle" type="number" min="0" max="86400" step="1">
-        <p class="sub">Drop a model this long after its last request; 0 keeps it
-        until something evicts it. Worth setting on a GPU shared with another
-        workload.</p>
+        <p class="sub">Unload a model this long after its last request; 0 keeps
+        it loaded.</p>
+      </div>
+    </div>
+    <div class="row lone">
+      <div class="field">
+        <label for="setStreamRtf">Stream under RTF</label>
+        <input id="setStreamRtf" type="number" min="0.1" max="3" step="0.05">
+        <p class="sub">A voice whose measured RTF is under this speaks a live
+        reply as it is written; at or over it the reply is held until rendered.
+        Higher: the first word sooner, a gap possible on a long reply. Each
+        card shows the comparison.</p>
       </div>
     </div>
   </div>
@@ -275,26 +263,15 @@
   <p class="hint">One recording becomes a voice on every model that clones,
   under the same id.</p>
   <ul class="guide">
-    <li><b>Six to ten seconds</b> of clean speech that starts talking straight
-    away. Shorter than 2 s or longer than 20 s is refused, and past ten buys
-    nothing on any model here.</li>
-    <li><b>End on a finished sentence.</b> A clip cut by a clock is refused: it
-    teaches the model that sentences end mid-word.</li>
-    <li><b>Clean beats long.</b> The 80M reads only the first six seconds;
-    MOSS, OmniVoice and Qwen3-TTS read all of it.</li>
-    <li><b>Type exactly what is said.</b> The transcript is what tells a
-    model which sounds map to which text, and a wrong one degrades the clone
-    with no error. It is stored as you type it — nothing here rewrites it.
-    <span id="clonesTranscriptNote"></span></li>
-    <li><b>Chinese goes in Simplified.</b> Every model reads Traditional
-    glyphs as the wrong sounds rather than failing on them (measured: 32%
-    character error against 4% converted), so convert the transcript
-    yourself. Every model also reads mainland-standard, so where Taiwan says
-    it differently, write a homophone that forces the reading: 夕阳 comes out
-    <i>xī yáng</i>, and 系阳 — not a word, but read <i>xì yáng</i> — is how
-    you get the Taiwanese one.</li>
-    <li><b>Label the language whole.</b> A voice tagged zh-TW is Taiwanese, so
-    text read in it gets Taiwan readings by default; zh promises only Chinese.</li>
+    <li><b>Six to ten seconds</b> of clean speech that starts straight away.
+    Under 2 s or over 20 s is refused.</li>
+    <li><b>End on a finished sentence.</b> A clip cut mid-word is refused.</li>
+    <li><b>Type exactly what is said.</b> A wrong transcript degrades the clone
+    with no error. <span id="clonesTranscriptNote"></span></li>
+    <li><b>Chinese goes in Simplified.</b> Traditional glyphs are misread. For a
+    Taiwan reading, write a homophone that forces it: 系阳 for 夕阳.</li>
+    <li><b>Tag the language whole.</b> zh-TW gets Taiwan readings by default;
+    zh promises only Chinese.</li>
   </ul>
   <div id="refs" class="refs"></div>
   <div class="addform">

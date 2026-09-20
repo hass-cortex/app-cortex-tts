@@ -19,24 +19,13 @@ from dataclasses import dataclass, field, replace
 from . import en, generic, zh
 from .locales import LOCALES, Locale, primary, register
 from .options import NormalizeOptions
+from .scripts import CLAUSE_BREAK, CLAUSE_MARKS, ENDINGS, SENTENCE_BREAK
 
 _LOGGER = logging.getLogger(__name__)
 
 register(zh.LOCALE)
 register(en.LOCALE)
 
-# A model that says how much text one call may carry declares it here, and a
-# model that does not is not given a number on its behalf: what a request costs
-# is the host's as much as the model's, and a figure that is neither is one
-# that will be wrong on some machine. What truncates rather than slows is the
-# generator's own ceiling, `ModelSpec.max_audio_s`, and that is counted in
-# audio; what bounds a request on this host is `ModelSpec.batch_cap_s`, which
-# the host's own samples replace as soon as they can say anything.
-
-# The ASCII full stop needs its own alternative: it also ends a decimal, so it
-# breaks a sentence only when a non-digit precedes it and whitespace follows.
-_SENTENCE_BREAK = re.compile(r"(?<=[。！？；!?;\n])|(?<=[^\d\s]\.)(?=\s)")
-_CLAUSE_BREAK = re.compile(r"(?<=[，、,])")
 
 _CJK = r"㐀-䶿一-鿿豈-﫿　-〿＀-￯"
 # The scripts that write no space between words: 漢字 and kana. Expanding
@@ -52,10 +41,6 @@ _CJK_GAP = re.compile(rf"(?<=[{_UNSPACED}])[ \t]+(?=[{_UNSPACED}])")
 # or digit of any script is sound.
 _SPEAKABLE = re.compile(r"[^\W_]")
 
-# Without sentence-final punctuation the model misses its cue to stop and
-# invents a syllable, so every segment gets one.
-_TERMINATORS = "。！？；.!?;…"
-_TRAILING_COMMA = "，、,"
 _HAS_CJK = re.compile(rf"[{_CJK}]")
 # What votes for Chinese: 漢字 and kana. `_CJK` also spans fullwidth
 # punctuation, which must not count — "26.5°C。" is a reading, not a script.
@@ -157,12 +142,15 @@ class TextPlan:
         expand_numbers: Whether a bare number is read as a quantity too.
         rewrites: Each rewrite the locale has, and whether it runs — only
             those; a language without script conversion has no entry for it.
+        misreads: Words the model declared it misreads; the locale respells
+            them if it knows how, after every rewrite.
     """
 
     language: str
     normalize_text: bool
     expand_numbers: bool
     rewrites: dict[str, bool] = field(default_factory=dict)
+    misreads: tuple[str, ...] = ()
 
     @property
     def locale(self) -> Locale:
@@ -185,6 +173,7 @@ def plan(
     *,
     reads_numerals: bool = False,
     needs_number_words: bool = False,
+    misreads: tuple[str, ...] = (),
 ) -> TextPlan:
     """Decide the locale and the passes for a text without running them.
 
@@ -198,6 +187,8 @@ def plan(
             because it was measured against the model and won.
         needs_number_words: Whether the model cannot say a digit at all, so
             a bare number is expanded unless the caller said otherwise.
+        misreads: Words the model reads with the wrong character, which the
+            locale respells with a stand-in it reads right.
     """
     tag = resolve_language(text, language)
     locale = locale_for(tag)
@@ -211,14 +202,14 @@ def plan(
         rewrites[rewrite.name] = on and all(
             rewrites.get(r, False) for r in rewrite.requires
         )
-    return TextPlan(tag, normalize, expand, rewrites)
+    return TextPlan(tag, normalize, expand, rewrites, misreads)
 
 
 def _terminate(segment: str, stop: str) -> str:
     """Give a segment the sentence-final punctuation the model needs."""
-    if segment.endswith(tuple(_TERMINATORS)):
+    if segment.endswith(tuple(ENDINGS)):
         return segment
-    if segment.endswith(tuple(_TRAILING_COMMA)):
+    if segment.endswith(tuple(CLAUSE_MARKS)):
         return segment[:-1] + stop
     return segment + stop
 
@@ -235,7 +226,7 @@ def _split_long(chunk: str, limit: int) -> list[str]:
         return [chunk]
     pieces: list[str] = []
     buffer = ""
-    for clause in _CLAUSE_BREAK.split(chunk):
+    for clause in CLAUSE_BREAK.split(chunk):
         if len(buffer) + len(clause) > limit and buffer:
             pieces.append(buffer)
             buffer = clause
@@ -301,7 +292,7 @@ def segment(text: str, limit: int | None = None, stop: str | None = None) -> lis
     final = stop if stop is not None else locale_for(sniff_language(text)).stop
     segments: list[str] = []
     buffer = ""
-    for sentence in _SENTENCE_BREAK.split(text):
+    for sentence in SENTENCE_BREAK.split(text):
         sentence = sentence.strip()
         if not sentence:
             continue
@@ -331,6 +322,8 @@ def run(text: str, decided: TextPlan, options: NormalizeOptions) -> str:
     for rewrite in locale.rewrites:
         if decided.rewrites[rewrite.name]:
             text = rewrite.apply(text)
+    if decided.misreads and locale.misreads is not None:
+        text = locale.misreads(text, decided.misreads)
     return text
 
 
@@ -341,6 +334,7 @@ def prepare_text(
     *,
     reads_numerals: bool = False,
     needs_number_words: bool = False,
+    misreads: tuple[str, ...] = (),
 ) -> str:
     """Run the rewriting passes and return the text, not yet segmented."""
     text = text.strip()
@@ -352,6 +346,7 @@ def prepare_text(
         language,
         reads_numerals=reads_numerals,
         needs_number_words=needs_number_words,
+        misreads=misreads,
     )
     return run(text, decided, options.normalize_options)
 
@@ -363,6 +358,7 @@ def prepare(
     *,
     reads_numerals: bool = False,
     needs_number_words: bool = False,
+    misreads: tuple[str, ...] = (),
     limit: Callable[[str], int | None] | None = None,
 ) -> list[str]:
     """Run the full text path and return synthesis-ready segments.
@@ -373,6 +369,7 @@ def prepare(
         language: The request's language tag, or ``None`` to sniff the text.
         reads_numerals: Whether the model reads digits itself; see `plan`.
         needs_number_words: Whether it cannot say a digit at all; see `plan`.
+        misreads: Words it reads with the wrong character; see `plan`.
         limit: Asked for the characters one segment may carry, given the
             *prepared* text — `ModelSpec.segment_limit`. A function rather
             than a number because the answer depends on the script, which
@@ -393,6 +390,7 @@ def prepare(
         language,
         reads_numerals=reads_numerals,
         needs_number_words=needs_number_words,
+        misreads=misreads,
     )
     prepared = run(text, decided, options.normalize_options)
     segments = segment(

@@ -172,11 +172,17 @@ audio{width:100%}
    block rather than a fourth column — a figure per kind of voice does not fit
    a quarter of a card, and the two belong apart in any case. */
 .measured{margin-top:10px}
-.rtf-rows{display:grid;grid-template-columns:auto auto 1fr;gap:2px 10px;
-  align-items:baseline;margin-top:4px}
-.rtf-rows .rtf-kind{color:var(--ink-2);font-size:12px}
+/* One row per voice: label, RTF, requests, provider, verdict. The label is
+   the only cell allowed to grow or wrap; the four figures stay on one line so
+   a half-width card still reads as a table. */
+.rtf-rows{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto auto auto;
+  gap:2px 8px;align-items:baseline;margin-top:4px}
+.rtf-rows .rtf-kind{color:var(--ink-2);font-size:12px;min-width:0;
+  overflow-wrap:anywhere}
 .rtf-rows .val{font-family:var(--mono);font-variant-numeric:tabular-nums;
   font-size:13px;text-align:right}
+.rtf-rows .rtf-verdict{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+.rtf-rows .rtf-verdict.streaming{color:var(--accent)}
 .rtf-none{margin:4px 0 0;max-width:38ch}
 .bar{height:5px;background:var(--surface-2);border-radius:3px;overflow:hidden}
 .bar span{display:block;height:100%;background:var(--accent)}
@@ -269,10 +275,6 @@ audio{width:100%}
   font-size:12.5px;color:var(--ink);line-height:1.5}
 .tl-said b{flex:none;font-family:var(--mono);font-size:11px;color:var(--ink-3)}
 .tl-said span{min-width:0}
-.tl-mark{flex:none;font-style:normal;font-family:var(--mono);font-size:9.5px;
-  letter-spacing:.03em;padding:1px 5px;border-radius:3px;white-space:nowrap}
-.tl-mark.ok{background:var(--accent-soft);color:var(--accent)}
-.tl-mark.mid{background:var(--warn-soft);color:var(--warn)}
 .tl-track{position:relative;height:20px;background:var(--surface-2);border-radius:3px}
 .tl-bar{position:absolute;top:0;height:20px;border-radius:3px;box-sizing:border-box}
 .tl-bar i{position:absolute;top:0;left:0;right:0;height:20px;display:flex;
@@ -285,15 +287,22 @@ audio{width:100%}
 .tl-bar.out-left i{right:100%;left:auto;justify-content:flex-end}
 .tl-bar.render{background:var(--accent-soft);color:var(--accent);
   border:1px solid var(--accent)}
-.tl-bar.wait{background:repeating-linear-gradient(135deg,transparent 0 5px,
-  var(--line) 5px 6px);color:var(--ink-3)}
+/* Outlined, because this is the one bar with nothing to fill it and its width
+   is the share of a span that grows with every request that lands: the same
+   hold goes from 438px to 106px over four of them, and scattered 1px stripes
+   in `--line` are 1.24:1 on this track — gone long before the bar is. The
+   outline is `--ink-3`, the colour the bar already writes its own label in,
+   which clears 3:1 on both themes. `border-box` keeps the width the
+   measurement it is. */
+.tl-bar.wait{background:repeating-linear-gradient(135deg,transparent 0 7px,
+  var(--ink-3) 7px 8px);color:var(--ink-3);border:1px solid var(--ink-3)}
 .tl-bar.load{background:var(--surface-2);color:var(--ink-3);
   border:1px solid var(--line)}
 .tl-bar.play{background:var(--accent);opacity:.72}
 /* Audio in hand and not played yet. Its width is the lead, so it is the same
    green and merely faded: the same stuff, just not heard yet. */
 .tl-bar.buffer{background:var(--accent);opacity:.26;color:var(--ink-2)}
-.tl-bar.pause{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn)}
+.tl-bar.warn{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn)}
 .tl-bar.dry{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad)}
 .tl-foot .tl-track{height:16px;background:none}
 .tl-ticks{position:relative;height:16px}
@@ -305,8 +314,8 @@ audio{width:100%}
 .tl-key i{width:12px;height:12px;border-radius:3px;display:inline-block}
 .tl-key i.render{background:var(--accent-soft);border:1px solid var(--accent)}
 .tl-key i.wait{background:repeating-linear-gradient(135deg,transparent 0 3px,
-  var(--line) 3px 4px);border:1px solid var(--line)}
+  var(--ink-3) 3px 4px);border:1px solid var(--ink-3)}
 .tl-key i.play{background:var(--accent);opacity:.72}
 .tl-key i.buffer{background:var(--accent);opacity:.26}
-.tl-key i.pause{background:var(--warn-soft);border:1px solid var(--warn)}
+.tl-key i.warn{background:var(--warn-soft);border:1px solid var(--warn)}
 .tl-key i.dry{background:var(--bad-soft);border:1px solid var(--bad)}

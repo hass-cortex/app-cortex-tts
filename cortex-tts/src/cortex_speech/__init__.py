@@ -19,6 +19,7 @@ from .audio import (
     MP3_BITRATE,
     STREAM_ENCODERS,
     AudioFormat,
+    StreamEncoder,
     StreamGain,
     decode_reference,
     encode,
@@ -35,6 +36,7 @@ from .catalog import (
     orphaned_bundles,
 )
 from .download import DownloadManager, DownloadProgress, remove_bundle
+from .engine.backends import BackendUnavailableError
 from .engine.base import (
     AbandonedError,
     Delivery,
@@ -56,25 +58,20 @@ from .engine.registry import (
 from .notifications import notify_models_changed
 from .notifications import subscribe as subscribe_models_changed
 from .pacing import (
+    BANK_S,
     BUFFERED,
-    PLANNED,
+    STREAM_RTF,
     STREAMING,
-    UNHELD,
-    Decision,
-    Finished,
-    Planner,
-    RenderModel,
+    Pacer,
     RenderSample,
-    Send,
-    Wait,
-    ends_sentence,
+    bank_needed,
+    verdict,
 )
-from .pacing.model import count_scripts, speech_rates
-from .pacing.planner import SENTENCE_PAUSE_S
 from .providers import (
     EXECUTION_PROVIDERS,
     ExecutionProvider,
     ProviderUnavailableError,
+    check_installation,
 )
 from .references import (
     MAX_SECONDS as MAX_REFERENCE_SECONDS,
@@ -102,7 +99,8 @@ from .text.pipeline import (
     run,
     segment,
 )
-from .text.zh import taiwan_readings
+from .text.scripts import spoken_seconds
+from .text.zh import standins_for, taiwan_readings
 
 __all__ = [
     # audio encoding
@@ -114,25 +112,20 @@ __all__ = [
     # synthesis
     # text
     "AbandonedError",
+    "BackendUnavailableError",
     "AudioFormat",
+    "BANK_S",
+    "bank_needed",
     "BUFFERED",
+    "Pacer",
+    "STREAM_RTF",
+    "verdict",
     "BY_ID",
-    "count_scripts",
-    "Decision",
-    "ends_sentence",
-    "Finished",
-    "PLANNED",
-    "Planner",
-    "SENTENCE_PAUSE_S",
-    "RenderModel",
     "RenderSample",
-    "speech_rates",
-    "Send",
     "STREAMING",
-    "UNHELD",
     "StopCheck",
-    "Wait",
     "CATALOG",
+    "check_installation",
     "CONTENT_TYPES",
     "decode_reference",
     "Delivery",
@@ -168,12 +161,15 @@ __all__ = [
     "SpeechConfig",
     "SpeechService",
     "STREAM_ENCODERS",
+    "StreamEncoder",
     "StreamGain",
     "StreamingEngine",
     "subscribe_models_changed",
     "Synthesis",
     "TextOptions",
     "TextPlan",
+    "spoken_seconds",
+    "standins_for",
     "taiwan_readings",
     "UnknownModelError",
     "UnknownVoiceError",

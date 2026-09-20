@@ -33,7 +33,7 @@ class _Streaming:
 
 
 class _NotStreaming:
-    """A whole-utterance engine: the shape the 40M and 80M have."""
+    """A whole-utterance engine: the shape the 40M and OmniVoice have."""
 
     sample_rate = 24000
 

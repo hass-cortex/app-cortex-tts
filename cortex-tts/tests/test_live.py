@@ -132,15 +132,12 @@ def _pretend_downloaded(data_dir: Path, model_id: str) -> None:
         path.write_bytes(b"")
 
 
-def _measured(data_dir: Path) -> None:
-    """Pretend this host has seen the model: fast, with a small fixed cost."""
+def _measured(data_dir: Path, rtf: float = 0.3) -> None:
+    """Pretend this host has seen the voice, at the given real-time factor."""
     store = StatsStore(data_dir / STATS_FILE)
     for audio in (2.0, 4.0, 8.0):
         store.record(
-            MODEL,
-            "builtin",
-            VOICE.id,
-            RenderSample(audio, 0.2 + 0.3 * audio, int(audio * 4), 0),
+            MODEL, "builtin", VOICE.id, RenderSample(audio, rtf * audio, "cpu")
         )
 
 
@@ -228,7 +225,7 @@ class TestBatchFrames:
                 message = json.loads(frame["text"])
                 kinds.append(message["type"])
                 if message["type"] == "batch":
-                    assert message["mode"] in ("streaming", "planned", "buffered")
+                    assert message["mode"] in ("streaming", "buffered")
                     assert message["index"] == kinds.count("batch")
                 if message["type"] == "done":
                     break
@@ -311,42 +308,59 @@ class TestTheDeliveryIsLegibleFromOutside:
 
 
 class TestACallerMayInsistOnADelivery:
-    """`auto` is what serves a listener; the rest are for comparing.
-
-    The admin UI's live panel offers all four so one reply can be heard three
-    ways. Insisting is honoured as far as the reply allows, and `done` is what
-    says how it actually went.
-    """
+    """`auto` takes the verdict; `streaming` and `buffered` overrule it."""
 
     @staticmethod
     def _spoken(client: TestClient, mode: str, text: str) -> dict:
         _, _, done = _speak(client, text, mode=mode)
         return done
 
-    def test_paced_waits_for_the_whole_reply_even_on_a_fast_host(
+    def test_auto_takes_the_verdict(
         self, tmp_path: Path, client: TestClient, engine: _FakeEngine
     ) -> None:
-        _measured(tmp_path)
+        _measured(tmp_path, rtf=0.3)
         text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
         assert self._spoken(client, "auto", text)["mode"] == "streaming"
-        assert self._spoken(client, "planned", text)["mode"] == "planned"
 
-    def test_buffered_is_one_request_however_long_the_reply(
+    def test_a_slow_voice_is_buffered_under_auto(
+        self, tmp_path: Path, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        _measured(tmp_path, rtf=1.1)
+        text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
+        assert self._spoken(client, "auto", text)["mode"] == "buffered"
+
+    def test_the_hosts_threshold_decides_auto(
+        self, tmp_path: Path, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        """The same 1.1 voice streams once this host's line is above it, and
+        the `ready` frame names the line the verdict was made against."""
+        _measured(tmp_path, rtf=1.1)
+        # Stored before the app opens, as a host that set it earlier would have.
+        (tmp_path / FILE_NAME).write_text(
+            json.dumps({"preload": False, "stream_rtf": 1.3})
+        )
+        text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
+        ready, _, done = _speak(client, text, mode="auto")
+        assert done["mode"] == "streaming"
+        assert ready["threshold"] == 1.3
+
+    def test_buffered_renders_as_written_and_releases_at_the_end(
         self, tmp_path: Path, client: TestClient, engine: _FakeEngine
     ) -> None:
         _measured(tmp_path)
         text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
         done = self._spoken(client, "buffered", text)
+        # Written in one go, so one request; buffered is about releasing.
         assert done["batches"] == 1
-        # Buffered survives the count: it is about releasing, not cutting.
         assert done["mode"] == "buffered"
 
-    def test_an_unmeasured_host_still_paces_what_it_was_told_to_stream(
+    def test_streaming_can_be_insisted_on_by_an_unmeasured_voice(
         self, client: TestClient, engine: _FakeEngine
     ) -> None:
-        """Sizing a batch to the lead needs a line before the first byte."""
         text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
-        assert self._spoken(client, "streaming", text)["mode"] != "streaming"
+        done = self._spoken(client, "streaming", text)
+        assert done["mode"] == "streaming"
+        assert done["batches"] == 3
 
 
 class TestOpening:
@@ -412,27 +426,41 @@ class TestOpening:
         assert ready["voice"] == "v1"
         assert ready["bitrate"] == 24000 * 16
         assert ready["chunk_streaming"] is False
+        assert ready["mode"] == "buffered"
+        assert ready["rtf"] is None
+        assert ready["samples"] == 0
 
-
-class TestUnmeasuredHostPaces:
-    """Nothing measured is not the same as nothing to go on.
-
-    The reply's own first request is a measurement of this host in this voice,
-    taken a moment ago — so the reply is planned from it rather than held whole.
-    Buffered is a mode a caller asks for, never one the app concludes.
-    """
-
-    def test_it_is_paced_not_buffered(
-        self, client: TestClient, engine: _FakeEngine
+    def test_ready_carries_what_the_voice_measured(
+        self, tmp_path: Path, client: TestClient
     ) -> None:
+        _measured(tmp_path, rtf=0.3)
+        ready, _, _ = _speak(client, "好了。")
+        assert ready["mode"] == "streaming"
+        assert ready["rtf"] == pytest.approx(0.3)
+        assert ready["samples"] == 3
+
+
+class TestUnmeasuredVoiceIsBuffered:
+    """Nothing measured is the one case that can never run dry."""
+
+    def test_it_is_buffered(self, client: TestClient, engine: _FakeEngine) -> None:
         ready, audio, done = _speak(client, "從前有一座山。山上有一間小廟。")
-        assert ready["mode"] != "buffered"
-        assert done["mode"] == "whole", "short enough to fit one request"
+        assert ready["mode"] == "buffered"
+        assert done["mode"] == "buffered"
         assert done["batches"] == 1
         assert len(engine.calls) == 1
         # 44-byte WAV header plus the audio
         assert len(audio) > 44
         assert done["audio_seconds"] > 0
+
+    def test_three_requests_make_it_measured(
+        self, tmp_path: Path, client: TestClient, engine: _FakeEngine
+    ) -> None:
+        for _ in range(3):
+            _speak(client, "從前有一座山。")
+        ready, _, _ = _speak(client, "從前有一座山。")
+        assert ready["samples"] == 3
+        assert ready["rtf"] is not None
 
 
 class TestMeasuredHostStreams:
@@ -447,10 +475,12 @@ class TestMeasuredHostStreams:
         text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
         ready, audio, done = _speak(client, text)
         assert ready["mode"] == "streaming"
-        assert done["batches"] >= 2
+        assert done["batches"] == 3, "one sentence per request"
         assert len(engine.calls) == done["batches"]
         assert done["first_audio_ms"] >= 0
+        assert done["bank_wait_ms"] is not None
         assert done["min_lead_s"] is not None
+        assert done["gap_at"] in (2, 3)
         # What the model was busy for, not what the listener waited.
         assert 0 < done["render_ms"] < done["wall_ms"]
         assert 0 <= done["writer_ms"] <= done["wall_ms"]
@@ -462,21 +492,16 @@ class TestMeasuredHostStreams:
     def test_every_request_is_recorded(
         self, tmp_path: Path, client: TestClient, engine: _FakeEngine
     ) -> None:
-        """One sample per request, whatever cadence the planner chose.
-
-        A planned reply's requests are short and of one length, which is exactly
-        the end of the line a fit needs and exactly what an average of ratios
-        could not survive.
-        """
+        """One sample per request: a sentence is what a streaming reply is made of."""
         _measured(tmp_path)
         engine.unit_seconds = 0.2
         text = "從前有一座山，山上有一間小廟。廟裡住著一位老和尚和一位小和尚。每天早上他們都到溪邊打水。"
         _, _, done = _speak(client, text)
-        assert done["batches"] >= 2
+        assert done["batches"] == 3
         stored = json.loads((tmp_path / STATS_FILE).read_text())
-        assert (
-            len(stored[MODEL][f"builtin:{VOICE.id}"]["renders"]) == 3 + done["batches"]
-        )
+        renders = stored["models"][MODEL][f"builtin:{VOICE.id}"]["renders"]
+        assert len(renders) == 3 + done["batches"]
+        assert all(r[2] == "cpu" for r in renders)
 
     def test_a_held_reply_is_not_one_enormous_frame(
         self, tmp_path: Path, client: TestClient
@@ -502,7 +527,6 @@ class TestMeasuredHostStreams:
         _measured(tmp_path)
         ready, _, done = _speak(client, "從前有一座山。", mode="buffered")
         assert ready["mode"] == "buffered"
-        # One request, but still reported as held rather than as `whole`.
         assert done["mode"] == "buffered"
 
 
@@ -568,3 +592,138 @@ class TestLeaving:
         time.sleep(0.5)
         assert engine.units == settled, "the engine kept rendering after the cancel"
         assert engine.units < 80
+
+
+class _PacedEngine(_FakeEngine):
+    """Renders at a chosen real-time factor: 0.25 s of audio per character."""
+
+    def __init__(self, rtf: float) -> None:
+        super().__init__()
+        self.rtf = rtf
+
+    def synthesize(
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
+    ) -> Synthesis:
+        for segment in segments:
+            check_stop(stop)
+            time.sleep(self.rtf * 0.25 * len(segment))
+        return super().synthesize(segments, voice, delivery=delivery, stop=stop)
+
+
+class _BreakingEngine(_FakeEngine):
+    """Fails after the reply is under way with an error nothing gave a shape to."""
+
+    def synthesize(
+        self,
+        segments: list[str],
+        voice: str,
+        *,
+        delivery: Delivery = Delivery(),
+        stop: StopCheck | None = None,
+    ) -> Synthesis:
+        del segments, voice, delivery, stop
+        raise RuntimeError("Non-zero status code returned while running Add")
+
+
+class TestARuntimeFailureAfterReadyIsSaidOnTheSocket:
+    """A listener whose reply simply stops cannot tell a crash from a slow
+    render, so even a failure no one gave a wire shape to ends in an `error`
+    frame — not an exception left to the server."""
+
+    @pytest.fixture
+    def engine(self) -> _BreakingEngine:
+        return _BreakingEngine()
+
+    def test_the_error_frame_arrives(self, client: TestClient) -> None:
+        with client, client.websocket_connect("/api/speak/live", headers=AUTH) as ws:
+            ws.send_json({"type": "start", "model": MODEL, "format": "wav"})
+            assert ws.receive_json()["type"] == "ready"
+            ws.send_json({"type": "text", "text": "好的。"})
+            ws.send_json({"type": "end"})
+            frames = []
+            while True:
+                frame = ws.receive()
+                if frame.get("bytes") is not None:
+                    continue
+                if frame.get("type") == "websocket.close":
+                    break
+                message = json.loads(frame["text"])
+                frames.append(message)
+                if message["type"] in {"done", "error"}:
+                    break
+        assert frames[-1]["type"] == "error"
+        assert "Non-zero status code" in frames[-1]["message"]
+
+
+class TestAShortReplyInHandIsNotHeldForSixSeconds:
+    """Two sentences, 3.25 s and 1.25 s of audio, at 1.05x with the whole
+    text already in hand: the rest needs about 1.3 s of lead, the first
+    sentence banks 3.25, so it plays as soon as it is rendered — before the
+    second is. Held to six seconds it would have waited for both."""
+
+    @pytest.fixture
+    def engine(self) -> _PacedEngine:
+        return _PacedEngine(rtf=1.05)
+
+    def test_the_first_sentence_plays_before_the_second_is_rendered(
+        self, tmp_path: Path, client: TestClient
+    ) -> None:
+        _measured(tmp_path, rtf=1.05)
+        with client, client.websocket_connect("/api/speak/live", headers=AUTH) as ws:
+            # 1.05x is over the default threshold; the hold is what is under test.
+            ws.send_json(
+                {"type": "start", "model": MODEL, "format": "wav", "mode": "streaming"}
+            )
+            assert ws.receive_json()["rtf"] == pytest.approx(1.05)
+            ws.send_json(
+                {"type": "text", "text": "好的，客廳的燈已經打開了。現在幾點。"}
+            )
+            ws.send_json({"type": "end"})
+            seen: list[str] = []
+            while True:
+                frame = ws.receive()
+                if frame.get("bytes") is not None:
+                    seen.append("audio")
+                    continue
+                message = json.loads(frame["text"])
+                seen.append(message["type"])
+                if message["type"] == "done":
+                    break
+        rendered = [i for i, kind in enumerate(seen) if kind == "rendered"]
+        assert len(rendered) == 2
+        assert seen.index("audio") < rendered[1], seen
+        assert message["min_lead_s"] >= 0
+
+
+class TestTheBankOutlastsAShortSentenceBeforeALongOne:
+    """The shape that breaks releasing each sentence as it lands.
+
+    A one-second sentence followed by a seven-second one at 0.6x: released
+    unheld, the second lands 3.2 s after the first has finished playing.
+    Banked to six seconds, both go out together and the third sentence lands
+    with seconds of lead to spare. Replayed over production replies this is
+    what the bank buys — see `scripts/replay_pacing.py`.
+    """
+
+    @pytest.fixture
+    def engine(self) -> _PacedEngine:
+        return _PacedEngine(rtf=0.6)
+
+    def test_it_never_runs_dry(self, tmp_path: Path, client: TestClient) -> None:
+        _measured(tmp_path, rtf=0.6)
+        short, long, medium = (
+            "好了。",
+            "從前有一座山，山上有一間小廟，廟裡住著一位老和尚。",
+            "每天早上他們都打水。",
+        )
+        ready, _, done = _speak(client, short + long + medium)
+        assert ready["mode"] == "streaming"
+        assert done["batches"] == 3
+        assert done["bank_wait_ms"] > 0, "the first sentence waited in the bank"
+        assert done["min_lead_s"] is not None and done["min_lead_s"] >= 0
+        assert done["gap_at"] == 3

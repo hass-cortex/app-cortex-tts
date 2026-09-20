@@ -1,10 +1,10 @@
 """One cache, one invalidation rule.
 
-Encoding a reference is the dominant cost of a cloned utterance, so both
-cloning engines cache it. They used to cache it separately, with two different
-rules for when an entry goes stale — the 80M compared the recording's
-fingerprint, MOSS trusted `forget()` alone. A divergence like that is silent:
-the wrong branch still produces audio, in the wrong voice.
+Encoding a reference is the dominant cost of a cloned utterance, so every
+cloning engine caches it — in the one cache here, under the one rule for when
+an entry goes stale. An engine keeping its own would be a second rule, and a
+divergence between two is silent: the wrong branch still produces audio, in
+the wrong voice.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ class TestInvalidation:
         """The encoding is of the audio alone; re-encoding is waste.
 
         An engine whose conditioning object also carries the transcript
-        (OmniVoice, Qwen3) replaces that copy on use — see
+        (OmniVoice) replaces that copy on use — see
         `test_transcript_refresh.py`.
         """
         cache: ConditioningCache[str] = ConditioningCache()
@@ -115,14 +115,14 @@ class TestNoEngineKeepsItsOwn:
     this cache replaced, so the shape is pinned rather than the behaviour.
     """
 
-    @pytest.mark.parametrize("module", ["clone.py", "moss.py"])
+    @pytest.mark.parametrize("module", ["moss.py"])
     def test_an_engine_with_reference_voices_uses_the_shared_cache(
         self, module: str
     ) -> None:
         source = (SRC / module).read_text(encoding="utf-8")
         assert "ConditioningCache" in source, f"{module} caches conditioning itself"
 
-    @pytest.mark.parametrize("module", ["clone.py", "moss.py", "preset.py"])
+    @pytest.mark.parametrize("module", ["moss.py", "preset.py"])
     def test_no_engine_annotates_a_dict_keyed_by_reference_id(
         self, module: str
     ) -> None:

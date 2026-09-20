@@ -24,6 +24,7 @@ from . import __version__, config, discovery, events, preferences
 from .api.deps import AppState
 from .api.live import live
 from .api.routes import api, compat, public
+from .api.updates import events as events_socket
 from .stats import FILE_NAME as STATS_FILE
 from .stats import StatsStore
 
@@ -97,8 +98,6 @@ async def lifespan(app: FastAPI):
     )
     # The library reports that the voice set changed; turning that into an
     # event on the Home Assistant bus is the app's job, not the library's.
-    unsubscribe = subscribe_models_changed(events.fire_models_changed)
-
     state = AppState(
         settings=settings,
         speech=speech,
@@ -108,6 +107,13 @@ async def lifespan(app: FastAPI):
         preferences=prefs,
     )
     app.state.cortex = state
+
+    async def models_changed(reason: str) -> None:
+        state.updates.publish("models", "voices")
+        await events.fire_models_changed(reason)
+
+    unsubscribe = subscribe_models_changed(models_changed)
+    state.updates.watch(state.downloads)
 
     _LOGGER.info(
         "cortex-tts %s listening on %s:%d "
@@ -148,6 +154,7 @@ async def lifespan(app: FastAPI):
     yield
 
     unsubscribe()
+    await state.updates.close()
     if preload is not None and not preload.done():
         preload.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -196,6 +203,7 @@ def create_app() -> FastAPI:
     app.include_router(api)
     app.include_router(compat)
     app.include_router(live)
+    app.include_router(events_socket)
 
     # The lifespan builds its own; this one only needs where the UI lives.
     static_dir = config.load().static_dir
