@@ -15,8 +15,8 @@ figures.
 | Model         | Voices                            | Languages  | RTF      | Memory  | Disk   |
 | ------------- | --------------------------------- | ---------- | -------- | ------- | ------ |
 | **Hojo 40M**  | 15 built in (2 zh, 13 en)         | zh, en     | **0.55** | ~780 MB | 241 MB |
-| **MOSS Nano** | 18 built in (6 zh) **and** clones | zh, en, ja | 1.07     | ~2 GB   | 729 MB |
-| **OmniVoice** | 9 designed **and** clones         | 800+       | 3.83     | ~1.1 GB | 1.4 GB |
+| **MOSS Nano** | 18 built in (6 zh) **and** clones | zh, en, ja | 1.06     | ~2 GB   | 729 MB |
+| **OmniVoice** | 9 designed **and** clones         | 800+       | 3.71     | ~1.1 GB | 1.4 GB |
 
 RTF — real-time factor, render seconds divided by audio seconds; below 1 means
 the model speaks faster than the audio plays. One measurement, every model on
@@ -34,88 +34,58 @@ more
 of playback** — read the column as what each costs, not as a ranking, and
 read [Which model](#which-model) before reaching past the top two.
 
-### The reference host
-
-|          |                                                                                                                                                                                                                |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Machine  | Ubuntu virtual machine, KVM, 4 vCPU on an Intel Core i7-9750H, 11 GB RAM, amd64 — the second VM on the host the Home Assistant VM itself runs on                                                               |
-| App      | Cortex TTS 0.2.2, ONNX Runtime 1.29.0, CPU execution provider                                                                                                                                                  |
-| Settings | Inference threads 2, one model resident, temperature 0.8 where the model takes one                                                                                                                             |
-| Load     | Nothing else running; 1-minute load 0.0 before the run                                                                                                                                                         |
-| Method   | `scripts/bench_rtf.py`, 2026-09-13: one model at a time, a warm-up synthesis discarded so model load and reference conditioning are not counted, then three runs per sentence, the server's own `X-Cortex-Rtf` |
-| Text     | Four Chinese sentences of 10, 31, 44 and 92 characters (2–21 s of audio)                                                                                                                                       |
-| Voices   | `hojo_zh_f_01` (40M), `Yuewen` (MOSS), `female-young` (OmniVoice)                                                                                                                                              |
-
-The median of three runs per sentence:
-
-| Sentence   | Chars | Hojo 40M | MOSS Nano | OmniVoice |
-| ---------- | ----- | -------- | --------- | --------- |
-| One clause | 10    | 0.50     | 1.12      | 3.73      |
-| Two facts  | 31    | 0.54     | 1.06      | 3.63      |
-| A forecast | 44    | 0.56     | 1.06      | 3.93      |
-| A story    | 92    | 0.63     | 1.08      | 4.00      |
-
-The 40M's lead narrows on long text. MOSS cannot stream here and is fine for
-announcements; OmniVoice renders a three-second announcement in
-twelve seconds and belongs on a faster machine or a GPU
-([Running it elsewhere](standalone.md)). Your host will differ:
-`sensor.<model>_real_time_factor` is your number
-([Delivering a reply](delivery.md)).
-
-### The other VM on the same CPU
-
-The Home Assistant OS VM beside this one, on the same physical CPU, measures
-the first two at 0.67 and 1.06: MOSS agrees to 0.01, the reference host is
-18% faster on the 40M. Both are quoted because the reference VM can hold all
-three models and the Home Assistant VM —
-8 GB, shared with Home Assistant itself — is what you can actually run there.
-
 ## Measured across the models
 
 ### Hardware, and running it elsewhere
 
-The same script, the same text, four environments. Every figure is the median
-over the four sentences above; the reference host is the first column.
+The same script, the same text, four environments: two machines, each one's
+CPU then its own GPU. Every figure is the median over the four sentences above.
 
-| Model         | 4 vCPU of an i7-9750H, CPU | Ryzen 9 9955HX, CPU | RTX 5070 Ti Laptop, CUDA | GTX 1650 Laptop, CUDA |
-| ------------- | -------------------------- | ------------------- | ------------------------ | --------------------- |
-| **Hojo 40M**  | 0.67                       | **0.28**            | 0.50                     | 0.31                  |
-| **MOSS Nano** | 1.06                       | **0.38**            | 0.58                     | 0.37                  |
-| **OmniVoice** | 3.83                       | 1.72                | —                        | **0.80**              |
+| Model         | 4 vCPU of an i7-9750H, CPU | GTX 1650 Laptop, CUDA | Ryzen 9 9955HX, CPU | RTX 5070 Ti Laptop, CUDA |
+| ------------- | -------------------------- | --------------------- | ------------------- | ------------------------ |
+| **Hojo 40M**  | 0.57                       | 0.31                  | **0.26**            | 0.48                     |
+| **MOSS Nano** | 1.09                       | 0.38                  | **0.35**            | 0.75                     |
+| **OmniVoice** | 3.77                       | 0.74                  | 1.67                | **0.18**                 |
 
-Column one is two VMs on that CPU — the HAOS VM for the first two rows, the
-VM beside it for OmniVoice
-([The other VM on the same CPU](#the-other-vm-on-the-same-cpu)). Columns two
-and three are the development laptop (16-core AMD Ryzen 9 9955HX, 39 GB, RTX
-5070 Ti Laptop GPU, Windows), 2026-09-13, CPU at two threads then GPU;
-OmniVoice's Ryzen figure is a single sentence, and it has not run on the 5070
-Ti. Column four is a second VM on the reference host's i7-9750H with its
-GTX 1650 passed through (4 vCPU, 11 GB, Ubuntu, driver 575), one run with the
-provider set to `cuda`; that VM's CPU alone measured 0.54 and 1.04.
+Column one is the Home Assistant OS VM, which ran all three
+([The other VM on the same CPU](#the-other-vm-on-the-same-cpu)). Column two
+is the reference VM on that same i7-9750H with its GTX 1650 passed through
+(4 vCPU, 11 GB, Ubuntu, driver 575), the provider set to `cuda`; its CPU
+figures are the reference host's, 0.55, 1.06 and 3.71. Columns three and four
+are the development laptop (16-core AMD Ryzen 9 9955HX, 39 GB, RTX 5070 Ti
+Laptop GPU, Windows), CPU at two threads then GPU. All four were measured
+2026-09-21 with two inference threads and one model resident; the two i7
+columns ran Cortex TTS 0.7.0 on ONNX Runtime 1.26.0, the laptop 0.8.0 on
+1.29.0 with CUDA 13.4 and cuDNN 9.26.
 
 - **Home Assistant OS cannot use a GPU.** It ships no NVIDIA driver, so on
   HAOS every model runs on the CPU whatever the provider is set to.
 - **A faster CPU is the reliable win**: two to three times faster on the Ryzen
   for every model, enough to put the 40M and MOSS ahead of playback.
-- **A GPU is what makes OmniVoice usable**: 3.83 to **0.80**, the largest gain
-  from a card here. A cloned voice re-encodes its reference on every request
-  (about 1.5 s on the GTX 1650), which keeps it past the streaming threshold,
-  so a live reply in it is buffered.
-- **VRAM on load**: 1102 MiB for OmniVoice — one model at a time on a 4 GB
-  card; MOSS failed to allocate while another process held 1.1 GB.
+- **A GPU is what makes OmniVoice usable**: 3.77 to **0.18** on the 5070 Ti,
+  by far the largest gain from a card here and the fastest figure in the
+  table. A cloned voice re-encodes its reference on every request (about 1.5 s
+  on the GTX 1650), which keeps it past the streaming threshold, so a live
+  reply in it is buffered.
+- **VRAM on load**, one model at a time on the 4 GB GTX 1650: 556 MiB for the
+  40M, 634 MiB for OmniVoice, **2414 MiB for MOSS**. MOSS is the one with no
+  room beside anything else, and it fails to allocate if another process holds
+  about 1.5 GB.
 - **A GPU pays beside a weak CPU, not a strong one.** The GTX 1650 takes the
-  i7-9750H VM's 40M from 0.54 to 0.31 and MOSS from 1.04 to 0.37; the RTX 5070
-  Ti was slower than the Ryzen's own CPU for both. The decode loop is
-  thousands of tiny kernels with a host sync per token, bound by launch
-  latency — about 30 µs per small ONNX call on either card against 5–20 µs on
-  the Ryzen's CPU; the card only wins at matrices far larger than these
-  models use (4096²: 199 µs against 463). Windows adds a tail (p99 123 µs,
-  spikes past 400, against 66 on native-Linux GTX 1650), so the laptop's GPU
-  figures wander (40M 0.36–0.60, MOSS 0.50–0.68) while the 1650's repeat to the
-  hundredth. Kept busy the 5070 Ti is 1.8x the 1650; fed one token at a time
-  it is not.
+  i7-9750H VM's 40M from 0.55 to 0.31 and MOSS from 1.06 to 0.38; the RTX 5070
+  Ti was slower than the Ryzen's own CPU for both — 0.48 against 0.26, 0.75
+  against 0.35. The decode loop is thousands of tiny kernels with a host sync
+  per token, bound by launch latency: one 64² ONNX MatMul takes 80 µs on the
+  5070 Ti and 53 µs on the 1650, against 6.7 µs on the Ryzen's CPU and 11 µs
+  on the i7's. The card only wins once the matrices are far larger than these
+  models use — at 4096² the 5070 Ti takes 18.8 ms against the Ryzen's 267 ms.
+  Windows adds a tail (p99 262 µs, spikes past 2 ms, against 76 µs and a 113 µs
+  worst case on the native-Linux GTX 1650), so the laptop's GPU figures wander
+  (40M 0.37–0.58, MOSS 0.56–0.98) while the 1650's repeat to the hundredth.
+  Kept busy the 5070 Ti is 5.5x the 1650; fed one token at a time it is not.
 - **Threads are a trade between models.** Four against two on the same four
-  cores: OmniVoice 3.83 to **2.66** (1.4x), MOSS 70% _slower_.
+  cores: OmniVoice 3.71 to **2.65** (1.4x), MOSS 60% _slower_, the 40M
+  unmoved (0.55 to 0.54).
 
 ### What a benchmark cannot measure
 
@@ -194,7 +164,7 @@ ONNX export, two bundles (weights and audio codec) downloaded together.
   is refused (`NO_TEMPERATURE`). Ceiling 30 s. Slower at four threads (above).
 - **Reads Latin words poorly**: 32% character error on a reply with a product
   name, against 0–9% for Hojo. Suits replies that are Chinese throughout.
-- **A GPU takes it under real time**: 1.06 here, **0.37** on a GTX 1650 —
+- **A GPU takes it under real time**: 1.06 here, **0.38** on a GTX 1650 —
   which means [running outside HAOS](standalone.md).
 
 ### OmniVoice 0.8B
@@ -225,8 +195,8 @@ torchaudio and transformers.
   replaces `forward` on a meta-device module — 1.1 GB peak resident against
   4.7 GB loaded whole.
 - **`cuda` covers the ONNX graph only**; tokenizer, prompt handling and decoder
-  stay in torch on the CPU, and `/health` reports the session. Still 3.83 to
-  0.80, because the graph is where the time goes.
+  stay in torch on the CPU, and `/health` reports the session. Still 3.77 to
+  0.18, because the graph is where the time goes.
 - **No chunk streaming** (a fixed number of unmasking steps over the whole
   utterance). No ceiling declared. Gains the most from threads (above).
 
@@ -274,8 +244,8 @@ every ten seconds it speaks ([Delivering a reply](delivery.md)).
 - **Long replies with a short wait**: whichever your host measures **under
   its threshold**. Read `sensor.<model>_real_time_factor`, not the table.
 
-OmniVoice measured 3.83 on the reference host — 7x the 40M, a nine-second
-answer taking 35 seconds to render. It is reasonable on a fast desktop CPU or
+OmniVoice measured 3.71 on the reference host — 7x the 40M, a nine-second
+answer taking 33 seconds to render. It is reasonable on a fast desktop CPU or
 a GPU and does not belong in a conversation on a Home Assistant box:
 [Running it elsewhere](standalone.md).
 

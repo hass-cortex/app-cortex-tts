@@ -15,8 +15,8 @@ audio tokenizer, the prompt handling and the iterative decoder stay in torch on
 the CPU whatever it is set to. `provider` is therefore honest about the
 sessions and silent about the rest — `providers.in_use` is defined over ONNX
 Runtime sessions, and this engine has exactly one. It is still the biggest win
-a card gives any model in the catalog: RTF 3.83 to 0.80 on a GTX 1650, because
-the graph is where the time goes. Moving the torch half across was left alone
+a card gives any model in the catalog: RTF 3.77 to 0.74 on a GTX 1650 and 0.18
+on an RTX 5070 Ti, because the graph is where the time goes. Moving the torch half across was left alone
 deliberately — the loop hands ONNX small integer tensors every step, so it
 would buy GPU work at the price of a copy in each direction.
 
