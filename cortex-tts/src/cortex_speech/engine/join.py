@@ -7,7 +7,15 @@ import numpy as np
 # Long text is synthesised a sentence at a time, so the joins have to sound
 # like sentence breaks rather than splices. A short silence supplies the pause
 # the model would otherwise have to be prompted into.
-SEGMENT_GAP_MS = 160
+#
+# MOSS's runtime is the only upstream here that states a figure for this, and
+# it puts 0.24 s between the chunks it splits text into (0.40 s after a chunk
+# of four words or fewer — a shape not followed here, where one number serves
+# three engines). Taking it rather than keeping a number nobody measured: it
+# is the only one with a source, and a join that is too tight reads as a
+# splice, which is the failure this constant exists to avoid. Hojo and
+# OmniVoice inherit it without a measurement of their own.
+SEGMENT_GAP_MS = 240
 
 # The model occasionally ends a segment on a click. Fading the last and first
 # few milliseconds costs nothing audible and removes the discontinuity.

@@ -398,17 +398,31 @@ class _Session:
         # **Speaking mode**.
         held: list[np.ndarray] = []
         with engine_errors():
-            async for chunk in self._state.registry.synthesize_stream(
-                spec.id, segments, voice_id, delivery, stop=self._gone.is_set
-            ):
-                produced += len(chunk)
-                self._inflight_done += len(chunk) / spec.sample_rate
-                if self._mode == BUFFERED:
-                    held.append(chunk)
-                    continue
-                await self._emit(
-                    encoder.encode(gain.frames(chunk)), len(chunk) / spec.sample_rate
+            if self._mode == BUFFERED:
+                # Nothing is released until the reply is over, so the render
+                # can be awaited whole — which is what lets the engine notice
+                # a generation that stopped early and try it at another seed.
+                # The streamed path cannot: its chunks are already on the wire.
+                synthesis = await self._state.registry.synthesize(
+                    spec.id,
+                    segments,
+                    voice_id,
+                    delivery=delivery,
+                    stop=self._gone.is_set,
                 )
+                produced += len(synthesis.audio)
+                self._inflight_done += len(synthesis.audio) / spec.sample_rate
+                held.append(synthesis.audio)
+            else:
+                async for chunk in self._state.registry.synthesize_stream(
+                    spec.id, segments, voice_id, delivery, stop=self._gone.is_set
+                ):
+                    produced += len(chunk)
+                    self._inflight_done += len(chunk) / spec.sample_rate
+                    await self._emit(
+                        encoder.encode(gain.frames(chunk)),
+                        len(chunk) / spec.sample_rate,
+                    )
         if held:
             await self._emit(
                 encoder.encode(levelled_frames(held)), produced / spec.sample_rate

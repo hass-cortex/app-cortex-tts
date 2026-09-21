@@ -43,17 +43,27 @@ def expected_seconds(text: str) -> float:
     return len(text) / rate
 
 
-def looks_truncated(text: str, seconds: float) -> bool:
+def looks_truncated(
+    text: str, seconds: float, *, ratio: float = TRUNCATION_RATIO
+) -> bool:
     """Whether a generation stopped far short of the text it was given.
 
     The model can emit its end-of-speech token early, which yields a clean but
     incomplete clip — no error, no warning, just a sentence that stops. There
     is no signal for it in the output, so the length of the text is the only
     thing left to compare against.
+
+    Args:
+        text: The segment the generation was asked for.
+        seconds: How much audio came back.
+        ratio: How far below the estimate counts as short, for engines whose
+            pacing sits differently against `expected_seconds` than the
+            default was measured on. The number is only as good as that
+            estimate, so it is per engine rather than one figure for all.
     """
     if len(text) < MIN_JUDGEABLE_CHARS:
         return False
-    return seconds < expected_seconds(text) * TRUNCATION_RATIO
+    return seconds < expected_seconds(text) * ratio
 
 
 # A gap this long inside one segment separates utterances rather than words.
@@ -164,6 +174,8 @@ def render_with_retries(
     generate: Callable[[int], np.ndarray],
     *,
     seed: int,
+    ratio: float = TRUNCATION_RATIO,
+    trim: bool = True,
 ) -> np.ndarray:
     """Render one segment, retrying a generation that stopped early.
 
@@ -180,14 +192,22 @@ def render_with_retries(
             gets what that model produces unseeded. It is per model — a Hojo
             LM defaults to 42 — and the streaming path, which
             cannot retry, uses the same one.
+        ratio: Passed to `looks_truncated`; see there.
+        trim: Whether to also drop trailing babble. Only for models the
+            pathology was measured on: past `MAX_BABBLE_CHARS` the trimmer is
+            inert anyway, and under it an over-cut is the worse of the two
+            failures — see the comment on `MAX_BABBLE_CHARS`.
     """
     wave = np.zeros(0, dtype=np.float32)
-    seeds = (seed, *RETRY_SEEDS)
+    # De-duplicated: a model whose own seed is already in `RETRY_SEEDS` would
+    # otherwise spend a whole render repeating its first attempt, which
+    # sampling being seeded makes identical down to the sample.
+    seeds = tuple(dict.fromkeys((seed, *RETRY_SEEDS)))
     for attempt, seed in enumerate(seeds):
         wave = generate(seed)
         seconds = len(wave) / sample_rate
-        if not looks_truncated(text, seconds):
-            return trim_trailing_babble(wave, sample_rate, text)
+        if not looks_truncated(text, seconds, ratio=ratio):
+            return trim_trailing_babble(wave, sample_rate, text) if trim else wave
         _LOGGER.warning(
             "generation for %d chars stopped at %.1fs (seed %d, attempt %d/%d)",
             len(text),

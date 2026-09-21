@@ -205,6 +205,7 @@ class EngineRegistry:
                 num_threads=self._num_threads,
                 temperature=self._temperature,
                 execution_provider=self._execution_provider,
+                max_text_tokens=spec.max_text_tokens,
             ),
         )
 

@@ -345,6 +345,38 @@ class TestChunkStreamingIsOneFact:
         assert {spec.backend for spec in CATALOG} <= set(ENGINE_CLASSES)
 
 
+class TestTokenBudgetIsOneFact:
+    """`max_text_tokens` and the engine that applies it must agree.
+
+    The one declared bound `segment_limit` cannot settle, because counting it
+    needs the model's own tokenizer. Nothing else would notice a spec
+    declaring a budget its engine never reads: the segments would simply
+    arrive whole and the model would truncate them, which is the silence this
+    field exists to end.
+    """
+
+    @pytest.mark.parametrize("spec", CATALOG, ids=lambda spec: spec.id)
+    def test_a_declared_budget_reaches_its_engine(self, spec: ModelSpec) -> None:
+        if spec.max_text_tokens is None:
+            return
+        module, class_name = ENGINE_CLASSES[spec.backend]
+        init = _engine_init(module, class_name)
+        names = {arg.arg for arg in init.args.args + init.args.kwonlyargs}
+        assert "max_text_tokens" in names, (
+            f"{spec.id} declares max_text_tokens={spec.max_text_tokens} but "
+            f"{class_name} does not take it"
+        )
+
+    def test_the_backend_table_passes_it_on(self) -> None:
+        """`registry._build` reads the spec; the builder must hand it over."""
+        source = (ENGINE_DIR / "backends.py").read_text(encoding="utf-8")
+        for spec in CATALOG:
+            if spec.max_text_tokens is None:
+                continue
+            assert "max_text_tokens=context.max_text_tokens" in source
+            break
+
+
 class TestOrphanedBundles:
     """Weights outlive the catalog entry that named them.
 

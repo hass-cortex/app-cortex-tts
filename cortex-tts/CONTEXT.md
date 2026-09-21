@@ -43,11 +43,21 @@ _Avoid_: "output" (the output is audio), "result"
 
 **Segment**:
 One synthesis-sized piece of Prepared text: at most what
-`ModelSpec.segment_limit` allows on the chosen model, one model call, always
-ending in sentence-final punctuation. Several sentences may share one; one
-long sentence may span several.
+`ModelSpec.segment_limit` allows on the chosen model, always ending in
+sentence-final punctuation. Several sentences may share one; one long sentence
+may span several.
 _Avoid_: "sentence" (a **Sentence** is what the splitter sees on the way in; a
-segment is what the engine gets on the way out)
+segment is what the engine gets on the way out), "chunk" (see below — a
+segment is what the engine is handed, a chunk is what it hands the model)
+
+**Chunk**:
+What one call into the model actually carries. Usually the whole Segment; on
+a model declaring `ModelSpec.max_text_tokens` the engine cuts an over-budget
+segment into several, using the model's own tokenizer and its own splitter.
+The cut is the engine's because only the engine can count the model's tokens.
+_Avoid_: "segment" (the pipeline decides those, in characters, before any
+model is chosen); and do not read this into **Chunk streaming**, which is
+about audio — one chunk of text yields many pieces of streamed audio
 
 **Locale**:
 What the pipeline knows about one language: how its numbers are read, which
@@ -270,6 +280,10 @@ count's BLAS/OpenMP side is fixed at import and waits for a restart.
   audio mid-segment). The _outcome_ named `streaming` is the first of the two
   ways a live reply is released, beside `buffered`. Name which one, every
   time.
+- **"chunk" is two things.** A **Chunk** of text is what one call into the
+  model carries; a chunk of audio is what **Chunk streaming** emits from
+  inside one of those calls. One of the first yields many of the second. Say
+  "text chunk" or "audio chunk" where both are in reach.
 - **"voice" without a model is meaningless.** `hojo_zh_f_01` exists on the 40M
   and nowhere else, `Yuewen` only on MOSS, and a reference is a voice on
   _every_ model that can clone, under the same id — so even a reference id

@@ -101,9 +101,12 @@ any host whose figures are in use.
 
 A segment is one call into the model. What one call may **produce** is the
 model's own and is declared; what it should **cost** on this machine is not.
-**The ceiling that truncates** is `ModelSpec.max_audio_s`, counted in audio:
-past it the call returns what it had and the rest of the text is never spoken
-— it does not slow down first — so the text path splits to stay under it.
+Two declared bounds keep a call inside what the model can do, and they fail
+differently.
+
+**The ceiling** is `ModelSpec.max_audio_s`, counted in audio: past it the call
+returns what it had and the rest of the text is never spoken — it does not
+slow down first — so the text path splits to stay under it.
 
 | Model         | Ceiling    | Where it comes from                   |
 | ------------- | ---------- | ------------------------------------- |
@@ -117,6 +120,29 @@ read off the generation limit the model declares. OmniVoice is left
 without one, and without a character bound — a figure neither the model's nor
 this host's will be wrong on some machine; at 108 characters it returned
 everything it was given.
+
+**The budget** is `ModelSpec.max_text_tokens`, counted in the model's own text
+tokens, and it is not a ceiling at all. A model that stops when it samples an
+end-of-speech token can stop anywhere, and a longer call is more chances to
+stop early; the budget only makes each call short enough for that to be rare.
+It is applied by the engine, because counting it needs the model's tokenizer
+and characters per token is a property of the script (measured on MOSS: 3.8 to
+4.0 for Latin, about 1 for Han).
+
+| Model         | Budget        | Where it comes from                                                   |
+| ------------- | ------------- | --------------------------------------------------------------------- |
+| MOSS-TTS-Nano | **50 tokens** | largest chunk that kept all its text: 49; smallest that lost some: 61 |
+| Hojo 40M      | none          | its early stops have not needed one                                   |
+| OmniVoice     | none          | decodes a fixed number of steps                                       |
+
+The same 411-character English text at MOSS's pinned seed: one call, 12.00 s
+of the 28 s it needed; cut to the budget, all of it. Upstream's own splitter
+defaults to 75, which is a different code path's figure and too loose here —
+at 75 the first chunk came back at 0.77 of the duration its text needed.
+What survives the budget is caught afterwards: a generation judged to have
+stopped early is retried at another seed, and where it cannot be (a streamed
+reply, whose chunks have already gone) it is logged
+([ADR 0003](adr/0003-overrun-trimming-and-stopping.md)).
 
 A ceiling in seconds becomes text through the slow-side speech-rate priors in
 `text.scripts` — **4.1 characters a second** for Han, kana and hangul, **14.7**
@@ -161,7 +187,14 @@ ONNX export, two bundles (weights and audio codec) downloaded together.
 - **Chunk streaming**, the only model here with it: first audio 143–178 ms
   after the request against 1.8 s for the whole utterance.
 - **No sampling temperature** (fused into the ONNX graph); a request naming one
-  is refused (`NO_TEMPERATURE`). Ceiling 30 s. Slower at four threads (above).
+  is refused (`NO_TEMPERATURE`). Ceiling 30 s, budget 50 tokens. Slower at four
+  threads (above).
+- **Stops when it samples the stop**, which is why it has a budget at all: the
+  same text at a different seed runs to a different length, measured on one
+  411-character segment at 12.00 s, 26.64 s, 11.60 s, 26.32 s and 27.52 s for
+  five seeds. A rendered reply that came back short is retried at another
+  seed; a streamed one says so in the log instead
+  ([ADR 0003](adr/0003-overrun-trimming-and-stopping.md)).
 - **Reads Latin words poorly**: 32% character error on a reply with a product
   name, against 0–9% for Hojo. Suits replies that are Chinese throughout.
 - **A GPU takes it under real time**: 1.06 here, **0.38** on a GTX 1650 —

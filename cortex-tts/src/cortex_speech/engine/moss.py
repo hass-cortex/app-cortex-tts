@@ -46,6 +46,7 @@ from .base import (
 )
 from .conditioning import ConditioningCache
 from .join import fade_in, join_segments, segment_gap
+from .overrun import looks_truncated, render_with_retries
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +66,18 @@ _STREAM_QUEUE_CHUNKS = 8
 # pieces consistent; the sampling itself is untouched (`sample_mode` stays
 # `fixed`, which is the mode that stops reliably).
 _SAMPLING_SEED = 1234
+
+# How far below `overrun.expected_seconds` a generation may fall before it is
+# taken for one that stopped early. Tighter than the shared default because
+# this model's truncations land close to its honest variation: across two
+# replies chunked four ways, the generations that kept all their text ran
+# 0.83 to 1.23 of the estimate (0.83 and 0.91 the two lowest, both Mandarin)
+# and the ones that lost text ran 0.77 and 0.41. The window is (0.77, 0.83)
+# and this sits in it. The margin above is 0.03, so the error this makes is a
+# needless re-render rather than a sentence delivered without its ending.
+# The figures are in `overrun`'s own frame (`CHARS_PER_SECOND` 4.5,
+# `LATIN_CHARS_PER_SECOND` 14.0), not `text.scripts`' 4.1 and 14.7.
+_TRUNCATION_RATIO = 0.8
 
 # A chunk arrives every few hundred milliseconds, so an abandoned worker
 # notices within one chunk; this only bounds a decode that never returns.
@@ -149,6 +162,7 @@ class MossEngine:
         num_threads: int = 0,
         temperature: float = 0.8,
         execution_provider: ExecutionProvider = "auto",
+        max_text_tokens: int | None = None,
     ) -> None:
         """Load the MOSS bundle.
 
@@ -163,6 +177,9 @@ class MossEngine:
                 the model the choice matters most for — measured at RTF 1.025
                 on a laptop i7 against 0.354 on a GTX 1650, which is the
                 difference between falling behind playback and outrunning it.
+            max_text_tokens: `ModelSpec.max_text_tokens`; a segment carrying
+                more is cut into chunks before it reaches the model. `None`
+                passes every segment through whole.
 
         Raises:
             ProviderUnavailableError: `cuda` was required and CPU is what the
@@ -170,6 +187,7 @@ class MossEngine:
         """
         del temperature
         self._references = references
+        self._max_text_tokens = max_text_tokens
         started = time.perf_counter()
         self._runtime = OnnxTtsRuntime(
             model_dir=str(models_dir),
@@ -231,14 +249,75 @@ class MossEngine:
             raise UnknownVoiceError(f"unknown voice {voice!r}")
         return self._prompts.get(reference, self._encode)
 
-    def _reseed(self) -> None:
-        """Put the runtime's sampler back to its starting state.
+    def _reseed(self, seed: int = _SAMPLING_SEED) -> None:
+        """Put the runtime's sampler back to a known starting state.
 
         Reaching for the attribute is the vendor boundary's fault: the entry
         point this engine uses, `synthesize_single_chunk`, takes no seed, and
         the one that does is the file-writing path we do not call.
         """
-        self._runtime.rng = np.random.default_rng(_SAMPLING_SEED)
+        self._runtime.rng = np.random.default_rng(seed)
+
+    def _chunks(self, segments: list[str]) -> list[str]:
+        """Segments cut down to what one call into this model may carry.
+
+        The budget is counted in the model's own text tokens, so the runtime's
+        splitter is the one that can apply it; it cuts on clause punctuation,
+        which is where a pause belongs anyway. A segment already inside the
+        budget is passed through untouched rather than round-tripped, because
+        that splitter also normalises what it is given — it appends a stop and
+        pads very short Latin text — and nothing but the app's own text path
+        may decide what the model is asked to say.
+        """
+        budget = self._max_text_tokens
+        if budget is None:
+            return segments
+        out: list[str] = []
+        for text in segments:
+            if self._runtime.count_text_tokens(text) <= budget:
+                out.append(text)
+                continue
+            pieces = self._runtime.split_voice_clone_text(text, max_tokens=budget)
+            _LOGGER.debug(
+                "segment of %d chars split into %d chunks", len(text), len(pieces)
+            )
+            out.extend(pieces)
+        return out
+
+    def _render(
+        self, text: str, codes: list[list[int]], stop: StopCheck | None
+    ) -> np.ndarray:
+        """Render one chunk, retrying a generation that stopped early.
+
+        Stopping is a token this model samples, so a seed that ends a chunk
+        early ends it early on every repeat of the same text and only another
+        seed changes the outcome — measured on one 411-character chunk, which
+        came back at 12.00 s under the pinned seed and 26.64 s under the next
+        one tried.
+        """
+
+        def generate(seed: int) -> np.ndarray:
+            self._reseed(seed)
+            # The callback is the only place inside the runtime's decode loop
+            # this code runs, so it is where a lost listener is noticed.
+            result = self._runtime.synthesize_single_chunk(
+                text=text,
+                prompt_audio_codes=codes,
+                streaming=True,
+                on_audio_chunk=lambda _chunk: check_stop(stop),
+            )
+            return _downmix(np.asarray(result.get("waveform"), dtype=np.float32))
+
+        return render_with_retries(
+            text,
+            self.sample_rate,
+            generate,
+            seed=_SAMPLING_SEED,
+            ratio=_TRUNCATION_RATIO,
+            # The babble pathology the trimmer exists for has not been measured
+            # on this model, and an over-cut is the worse of the two failures.
+            trim=False,
+        )
 
     def synthesize(
         self,
@@ -254,20 +333,12 @@ class MossEngine:
             raise NoAudioError("no segments to synthesize")
 
         codes = self._prompt_codes(voice)
+        chunks = self._chunks(segments)
         started = time.perf_counter()
         waves: list[np.ndarray] = []
-        for text in segments:
+        for text in chunks:
             check_stop(stop)
-            self._reseed()
-            # The callback is the only place inside the runtime's decode loop
-            # this code runs, so it is where a lost listener is noticed.
-            result = self._runtime.synthesize_single_chunk(
-                text=text,
-                prompt_audio_codes=codes,
-                streaming=True,
-                on_audio_chunk=lambda _chunk: check_stop(stop),
-            )
-            waves.append(_downmix(np.asarray(result.get("waveform"), dtype=np.float32)))
+            waves.append(self._render(text, codes, stop))
 
         if not any(wave.size for wave in waves):
             raise NoAudioError(f"model produced no audio for {segments!r}")
@@ -305,6 +376,7 @@ class MossEngine:
             raise NoAudioError("no segments to synthesize")
 
         codes = self._prompt_codes(voice)
+        chunks_of = self._chunks(segments)
         # From join.py, so a streamed reply pauses between sentences exactly
         # as a rendered one does.
         gap = segment_gap(self.sample_rate)
@@ -330,24 +402,43 @@ class MossEngine:
                 return True
             return False
 
+        # Samples the chunk being rendered has produced so far. A list because
+        # `deliver` runs on the worker thread and only needs to add to it.
+        chunk_samples = [0]
+
         def deliver(chunk: np.ndarray) -> None:
+            array = np.asarray(chunk)
+            chunk_samples[0] += array.shape[0] if array.ndim == 1 else max(array.shape)
             if not offer(chunk):
                 raise _StreamAbandonedError
 
         def render() -> None:
             try:
-                for index, text in enumerate(segments):
+                for index, text in enumerate(chunks_of):
                     # Nothing joins these afterwards, so the pause between
                     # sentences is emitted rather than added after.
                     if index and not offer(gap):
                         return
                     self._reseed()
+                    chunk_samples[0] = 0
                     self._runtime.synthesize_single_chunk(
                         text=text,
                         prompt_audio_codes=codes,
                         streaming=True,
                         on_audio_chunk=deliver,
                     )
+                    # Said rather than fixed: the chunks are already gone, and
+                    # only another seed would change what this one produced.
+                    seconds = chunk_samples[0] / self.sample_rate
+                    if looks_truncated(text, seconds, ratio=_TRUNCATION_RATIO):
+                        _LOGGER.warning(
+                            "streamed chunk %d/%d of %d chars stopped at %.1fs; "
+                            "a streamed generation cannot be retried",
+                            index + 1,
+                            len(chunks_of),
+                            len(text),
+                            seconds,
+                        )
             except _StreamAbandonedError:
                 return
             except Exception as err:  # noqa: BLE001 - re-raised on the consumer

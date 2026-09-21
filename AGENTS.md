@@ -101,7 +101,8 @@ Each links to the ADR that argues it.
 
 **Rendering** — [ADR 0003](cortex-tts/docs/adr/0003-overrun-trimming-and-stopping.md), [ADR 0005](cortex-tts/docs/adr/0005-device-memory-and-providers.md)
 
-- An autoregressive model is trimmed only on short text (`MAX_BABBLE_CHARS`).
+- An autoregressive model is trimmed only on short text (`MAX_BABBLE_CHARS`), and only where the babble pathology was measured on it (`render_with_retries(trim=...)`).
+- A generation that stopped early is retried at another seed, at a ratio the engine chooses; a streamed one cannot be and is logged instead, while a buffered live reply is rendered through `EngineRegistry.synthesize` so that it can be.
 - The execution provider is read from the sessions, never assumed from the build; one ONNX Runtime build is installed, chosen by dependency group, and the app refuses to start with two.
 - At most `max_loaded_models` engines are resident, LRU-evicted; one synthesis per engine at a time.
 - A model's lifecycle is legible from the log alone.
@@ -146,6 +147,7 @@ Each links to the ADR that argues it.
 The figures are in [`docs/models.md`](cortex-tts/docs/models.md).
 
 - `ModelSpec.max_audio_s` is the generator's ceiling in audio and it truncates rather than slows; `segment_limit` converts it to characters with the slow-side priors so a segment never depends on which voice says it. OmniVoice declares no ceiling and is given none.
+- `ModelSpec.max_text_tokens` is the other bound and not a ceiling: a model that samples its own stop can end anywhere, so the engine — the only thing holding a tokenizer — cuts an over-budget segment into chunks. MOSS declares 50.
 - Hojo 40M declares `needs_number_words`; no model declares `reads_numerals`.
 - MOSS and OmniVoice condition on the whole recording; neither has a speaker encoder.
 - OmniVoice takes a designed voice from a closed attribute vocabulary; the nine offered are checked by test against that vocabulary.

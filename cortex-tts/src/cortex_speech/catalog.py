@@ -131,18 +131,30 @@ class ModelSpec:
     misreads: tuple[str, ...] = ()
     max_chars_per_segment: int | None = None
     max_audio_s: float | None = None
+    # The third bound, and the only one `segment_limit` cannot settle: what
+    # one call into the model may carry, counted in the model's own text
+    # tokens. Applied by the engine, which is the only thing here holding a
+    # tokenizer; see `ModelSpec.segment_limit` and the entry that declares it.
+    max_text_tokens: int | None = None
     sample_rate: int = 24000
     rss_hint_mb: int = 0
 
     def segment_limit(self, text: str) -> int | None:
         """Characters one synthesis may carry, for this text; `None` for no bound.
 
-        Two bounds meet here and they are not the same kind. A model's token
-        budget is counted in characters and `max_chars_per_segment` says it.
-        A model's generation budget is counted in audio, and a segment over it
-        is not slow but truncated — so `max_audio_s` is turned into characters
-        by `text.scripts.chars_within`, which owns the speech rates. What is settled
-        here is only which of the two bounds a text meets first.
+        Two bounds meet here and they are not the same kind. A model's
+        character budget is `max_chars_per_segment`. A model's generation
+        budget is counted in audio, and a segment over it is not slow but
+        truncated — so `max_audio_s` is turned into characters by
+        `text.scripts.chars_within`, which owns the speech rates. What is
+        settled here is only which of the two bounds a text meets first.
+
+        A third bound, `max_text_tokens`, is deliberately absent: counting it
+        needs the model's own tokenizer, and characters per token is a
+        property of the script rather than of the text (measured on MOSS:
+        3.8-4.0 for Latin, nothing like it for Han). Converting it here would
+        make a segment depend on a guess about the writing system; the engine
+        holds the tokenizer and applies it exactly.
         """
         if self.max_audio_s is None:
             return self.max_chars_per_segment
@@ -239,15 +251,23 @@ CATALOG: tuple[ModelSpec, ...] = (
         builtin_voices=True,
         cloning=True,
         chunk_streaming=True,
-        # The runtime splits the text by its own token budget whatever
-        # arrives, so there is no character bound of this model's to declare.
-        # What the generation budget allows, and it is a hard stop rather than
-        # a slowdown: the shipped manifest sets `max_new_frames` to 375 and
-        # the codec runs at 12.5 Hz. Measured on this host, seven inputs from
-        # 155 to 284 Chinese characters all came back as exactly 30.0 s, the
-        # rest of each one missing — the runtime's own text splitting does not
-        # save it, because the budget is spent on audio and not on text.
+        # Two bounds, and they fail differently.
+        #
+        # The ceiling is a hard stop: the shipped manifest sets
+        # `max_new_frames` to 375 and the codec runs at 12.5 Hz. Measured on
+        # this host, seven inputs from 155 to 284 Chinese characters all came
+        # back as exactly 30.0 s, the rest of each one missing.
         max_audio_s=30.0,
+        # The budget is not a ceiling at all. This model stops when it samples
+        # an end-of-audio token, so a chunk can end anywhere, and a longer one
+        # is more chances to end early: the same 411-character English text at
+        # the engine's pinned seed came back whole as 12.00 s of the 28 s it
+        # needed, and cut to this budget as all of it. Measured at the chunk
+        # rather than the request — the largest chunk that kept all its text
+        # was 49 tokens, the smallest that lost some was 61 — which is why
+        # this is well under upstream's own 75, a default belonging to a code
+        # path this app does not call.
+        max_text_tokens=50,
         sample_rate=48000,
         rss_hint_mb=1990,
     ),

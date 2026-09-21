@@ -47,6 +47,10 @@ class BuildContext:
             back what it actually got — see `cortex_speech.providers`. It does
             not reach what an engine keeps outside ORT: OmniVoice's tokenizer,
             prompt and decoder stay on the CPU in torch whatever is asked.
+        max_text_tokens: `ModelSpec.max_text_tokens` for the model being
+            built, or ``None`` where the catalog declares no such bound. The
+            one model fact that travels this way rather than being read off
+            the text: only the engine can count it.
     """
 
     directory: Path
@@ -54,6 +58,7 @@ class BuildContext:
     num_threads: int
     temperature: float
     execution_provider: ExecutionProvider = "auto"
+    max_text_tokens: int | None = None
 
 
 Builder = Callable[[BuildContext], Engine]
@@ -170,6 +175,7 @@ def _register_builtin_backends() -> None:
             num_threads=context.num_threads,
             temperature=context.temperature,
             execution_provider=context.execution_provider,
+            max_text_tokens=context.max_text_tokens,
         )
 
     def omnivoice(context: BuildContext) -> Engine:
