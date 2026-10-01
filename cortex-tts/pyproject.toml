@@ -67,7 +67,7 @@ cortex-tts = "cortex_tts.__main__:main"
 # between the two GPU groups; the wheels ship the CUDA libraries themselves.
 cpu = ["onnxruntime>=1.20"]
 cuda = [
-    "onnxruntime-gpu==1.29.*",
+    "onnxruntime-gpu>=1.29,<1.31",
     "nvidia-cuda-runtime; sys_platform == 'linux'",
     "nvidia-cuda-nvrtc; sys_platform == 'linux'",
     "nvidia-cublas; sys_platform == 'linux'",
@@ -76,7 +76,7 @@ cuda = [
     "nvidia-cudnn-cu13; sys_platform == 'linux'",
 ]
 cuda12 = [
-    "onnxruntime-gpu==1.26.*",
+    "onnxruntime-gpu>=1.26,<1.31",
     "nvidia-cuda-runtime-cu12; sys_platform == 'linux'",
     "nvidia-cuda-nvrtc-cu12; sys_platform == 'linux'",
     "nvidia-cublas-cu12; sys_platform == 'linux'",
