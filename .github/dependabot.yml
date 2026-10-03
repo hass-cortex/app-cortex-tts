@@ -4,7 +4,7 @@ updates:
   - package-ecosystem: "uv"
     directory: "/cortex-tts"
     schedule:
-      interval: "monthly"
+      interval: "quarterly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -17,11 +17,8 @@ updates:
     # serves (docs/standalone.md); a bump needs a GPU host, not a lockfile refresh.
     ignore:
       - dependency-name: "onnxruntime-gpu"
-    groups:
-      # Minor/patch bumps only — majors get their own PR for manual review
-      python-deps:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
+      - dependency-name: "*"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
