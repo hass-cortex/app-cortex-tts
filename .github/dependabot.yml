@@ -13,6 +13,10 @@ updates:
     cooldown:
       default-days: 7
       semver-major-days: 30
+    # The cuda/cuda12 groups pin onnxruntime-gpu to the build each CUDA generation
+    # serves (docs/standalone.md); a bump needs a GPU host, not a lockfile refresh.
+    ignore:
+      - dependency-name: "onnxruntime-gpu"
     groups:
       # Minor/patch bumps only — majors get their own PR for manual review
       python-deps:
