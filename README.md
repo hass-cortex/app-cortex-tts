@@ -51,7 +51,3 @@ assign a voice to a pipeline.
 [OmniVoice](https://github.com/k2-fsa/OmniVoice) — the models this app serves.
 OmniVoice's ONNX graph is
 [rhasspy/omnivoice-onnx](https://huggingface.co/rhasspy/omnivoice-onnx).
-
-## License
-
-MIT — see [LICENSE.md](LICENSE.md).
