@@ -10,7 +10,7 @@ handful of attributes, or read ten languages — downloaded from the app's own
 UI on first use.
 
 Pair it with the [Cortex TTS integration](https://github.com/hass-cortex/cortex-tts)
-from HACS, which discovers the app by itself and puts every voice in the
+from the Marketplace, which discovers the app by itself and puts every voice in the
 pipeline picker. The **Documentation** tab covers installation, settings and
 which model to pick; a machine with a faster CPU or a GPU can run the app
 outside Home Assistant OS, which cannot use a GPU.

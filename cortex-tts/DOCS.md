@@ -42,11 +42,11 @@ start. For a different model, or with Preload off, open the panel →
 
 ### 2. Install the companion integration
 
-[![Open your Home Assistant instance and add the Cortex TTS integration via HACS.][hacs-badge]][hacs]
+[![Open your Home Assistant instance and add the Cortex TTS integration via the Marketplace.][hacs-badge]][hacs]
 
-Press **Add**, then restart Home Assistant. Requires [HACS](https://hacs.xyz)
-and Home Assistant 2026.3.0 or later. Without it Home Assistant has no Cortex
-TTS platform, and nothing is discovered.
+Press **Open link**, install the integration from the Marketplace, then restart
+Home Assistant. Without it Home Assistant has no Cortex TTS platform, and
+nothing is discovered.
 
 ### 3. Pair with the running app
 
@@ -236,7 +236,7 @@ models often.
 
 - Source: <https://github.com/hass-cortex/app-cortex-tts>
 - Issues: <https://github.com/hass-cortex/app-cortex-tts/issues>
-- Integration (HACS): <https://github.com/hass-cortex/cortex-tts>
+- Integration: <https://github.com/hass-cortex/cortex-tts>
 
 [app]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=24127962_cortex_tts&repository_url=https%3A%2F%2Fgithub.com%2Fhass-cortex%2Frepository
 [app-badge]: https://my.home-assistant.io/badges/supervisor_addon.svg

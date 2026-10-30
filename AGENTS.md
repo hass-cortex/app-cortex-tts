@@ -23,7 +23,7 @@ figure lives in [`docs/models.md`](cortex-tts/docs/models.md) and nowhere else.
 | The HA App Store page: install, settings, troubleshooting                      | [`cortex-tts/DOCS.md`](cortex-tts/DOCS.md)                                                                                                                                                                                               |
 | Reference pages the App Store page and the integration link to                 | [`cortex-tts/docs/`](cortex-tts/docs/): models, text pipeline, cloning, delivery, standalone, HTTP API                                                                                                                                   |
 | How a release happens and where it lands                                       | `.github/workflows/release.yml` (tag → checks → GitHub Release) and `deploy.yaml` (→ GHCR, then a dispatch to the [stable](https://github.com/hass-cortex/repository) or [beta](https://github.com/hass-cortex/repository-beta) catalog) |
-| The consumer this app exists for                                               | the [`cortex-tts`](https://github.com/hass-cortex/cortex-tts) HACS integration — required; without it HA has no Cortex TTS platform                                                                                                      |
+| The consumer this app exists for                                               | the [`cortex-tts`](https://github.com/hass-cortex/cortex-tts) Marketplace integration — required; without it HA has no Cortex TTS platform                                                                                               |
 
 ## Working here
 
