@@ -1,0 +1,16 @@
+# Release notes only: release.yml renders them with `cz changelog`.
+# Versions come from the tags; nothing is bumped with cz here.
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_provider = "scm"
+version_scheme = "semver"
+# Release-note sections; refactor and perf share "Other Changes"
+change_type_order = ["Breaking Changes", "Features", "Fixes", "Other Changes"]
+
+[tool.commitizen.change_type_map]
+"BREAKING CHANGE" = "Breaking Changes"
+feat = "Features"
+fix = "Fixes"
+refactor = "Other Changes"
+perf = "Other Changes"
