@@ -1,13 +1,9 @@
-# Global ARG — must be before any FROM to be usable in FROM lines.
-# HA Supervisor injects BUILD_FROM via --build-arg from build.yaml.
-ARG BUILD_FROM=ghcr.io/hassio-addons/debian-base:9.3.0
-
 # The uv binary is copied in from its own published image; naming the
 # stage is what lets `COPY --from` reference it.
 FROM ghcr.io/astral-sh/uv:0.9.9 AS uv
 
-# hadolint ignore=DL3006
-FROM ${BUILD_FROM}
+# A literal FROM: Supervisor injects an Alpine BUILD_FROM default an ARG would accept.
+FROM ghcr.io/hassio-addons/debian-base:9.3.0
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -60,24 +56,21 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
 
 ARG BUILD_ARCH
 ARG BUILD_DATE
-ARG BUILD_DESCRIPTION
-ARG BUILD_NAME
 ARG BUILD_REF
-ARG BUILD_REPOSITORY
 ARG BUILD_VERSION
 
 LABEL \
-    io.hass.name="${BUILD_NAME}" \
-    io.hass.description="${BUILD_DESCRIPTION}" \
+    io.hass.name="Cortex TTS" \
+    io.hass.description="On-device text-to-speech for Home Assistant — a choice of models with built-in, designed and cloned voices, and the Chinese text pipeline they lack" \
     io.hass.arch="${BUILD_ARCH}" \
     io.hass.type="addon" \
     io.hass.version="${BUILD_VERSION}" \
     maintainer="hass-cortex" \
-    org.opencontainers.image.title="${BUILD_NAME}" \
-    org.opencontainers.image.description="${BUILD_DESCRIPTION}" \
+    org.opencontainers.image.title="Cortex TTS" \
+    org.opencontainers.image.description="On-device text-to-speech for Home Assistant — a choice of models with built-in, designed and cloned voices, and the Chinese text pipeline they lack" \
     org.opencontainers.image.vendor="hass-cortex" \
     org.opencontainers.image.licenses="MIT" \
-    org.opencontainers.image.source="https://github.com/${BUILD_REPOSITORY}" \
+    org.opencontainers.image.source="https://github.com/hass-cortex/app-cortex-tts" \
     org.opencontainers.image.created="${BUILD_DATE}" \
     org.opencontainers.image.revision="${BUILD_REF}" \
     org.opencontainers.image.version="${BUILD_VERSION}"

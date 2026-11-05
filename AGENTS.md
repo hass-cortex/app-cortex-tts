@@ -42,7 +42,7 @@ figure lives in [`docs/models.md`](cortex-tts/docs/models.md) and nowhere else.
 ├── .pre-commit-config.yaml   ruff, yamllint, hadolint, shellcheck, prettier; pyright + pytest at pre-push
 ├── README.md, LICENSE.md, images/
 └── cortex-tts/
-    ├── config.yaml, build.yaml, Dockerfile, rootfs/   HA app shell; venv baked in, source on top
+    ├── config.yaml, Dockerfile, rootfs/   HA app shell; venv baked in, source on top
     ├── DOCS.md, README.md, docs/, samples/            user documentation; README is the Supervisor's long_description
     ├── CONTEXT.md, CONTRIBUTING.md
     ├── pyproject.toml, uv.lock                        ruff, pyright, pytest config
