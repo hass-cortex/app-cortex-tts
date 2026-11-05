@@ -55,8 +55,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8771/health || exit 1
 
 ARG BUILD_ARCH
-ARG BUILD_DATE
-ARG BUILD_REF
 ARG BUILD_VERSION
 
 LABEL \
@@ -71,6 +69,4 @@ LABEL \
     org.opencontainers.image.vendor="hass-cortex" \
     org.opencontainers.image.licenses="MIT" \
     org.opencontainers.image.source="https://github.com/hass-cortex/app-cortex-tts" \
-    org.opencontainers.image.created="${BUILD_DATE}" \
-    org.opencontainers.image.revision="${BUILD_REF}" \
     org.opencontainers.image.version="${BUILD_VERSION}"

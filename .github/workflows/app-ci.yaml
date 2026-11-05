@@ -26,7 +26,7 @@ jobs:
     name: Gather app information
     runs-on: ubuntu-latest
     outputs:
-      architectures: ${{ steps.information.outputs.architectures }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
       target: ${{ steps.information.outputs.target }}
     steps:
       - name: Check out code from GitHub
@@ -48,6 +48,12 @@ jobs:
             echo "name=$(yq '.name' "${config}")"
             echo "slug=$(yq '.slug' "${config}")"
           } >> "$GITHUB_OUTPUT"
+      - name: Prepare build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
+        with:
+          architectures: ${{ steps.information.outputs.architectures }}
+          image-name: ${{ steps.information.outputs.slug }}
 
   lint-app:
     name: Lint App
@@ -167,7 +173,7 @@ jobs:
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
 
   build:
-    name: Build ${{ matrix.architecture }}
+    name: Build ${{ matrix.arch }}
     needs:
       - information
       - lint-app
@@ -177,44 +183,21 @@ jobs:
       - lint-shellcheck
       - lint-yamllint
       - lint-zizmor
-    runs-on: ${{ matrix.architecture == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.os }}
     strategy:
-      matrix:
-        architecture: ${{ fromJson(needs.information.outputs.architectures) }}
+      matrix: ${{ fromJson(needs.information.outputs.matrix) }}
     steps:
       - name: Check out code from GitHub
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: Compose build flags
-        id: flags
-        env:
-          ARCHITECTURE: ${{ matrix.architecture }}
-        run: |
-          echo "date=$(date +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
-
-          if [[ "${ARCHITECTURE}" = "amd64" ]]; then
-            echo "platform=linux/amd64" >> "$GITHUB_OUTPUT"
-          elif [[ "${ARCHITECTURE}" = "aarch64" ]]; then
-            echo "platform=linux/arm64/v8" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error ::Could not determine platform for architecture ${ARCHITECTURE}"
-            exit 1
-          fi
-      - name: Build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      - name: Build image
+        uses: home-assistant/builder/actions/build-image@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
         with:
-          push: false
-          # zizmor: ignore[template-injection] - path input to action, not shell-executed
+          arch: ${{ matrix.arch }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
           context: ${{ needs.information.outputs.target }}
-          file: ${{ needs.information.outputs.target }}/Dockerfile
-          cache-from: type=gha,scope=${{ matrix.architecture }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.architecture }}
-          platforms: ${{ steps.flags.outputs.platform }}
-          build-args: |
-            BUILD_ARCH=${{ matrix.architecture }}
-            BUILD_DATE=${{ steps.flags.outputs.date }}
-            BUILD_REF=${{ github.sha }}
-            BUILD_VERSION=edge
+          image: ${{ matrix.image }}
+          image-tags: edge
+          push: false
+          version: edge

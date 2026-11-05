@@ -171,7 +171,7 @@ Discovery: `discovery.announce` publishes a Supervisor discovery record with hos
 
 Live voice sync: a download finishing, a model deleted, a reference added or deleted, or a reference relabelled ends in `events.fire_models_changed`, and the integration adds or removes entities in place — no reload, no restart.
 
-Distribution: CI publishes `ghcr.io/hass-cortex/cortex_tts/{arch}` (amd64 only) on a `X.Y.Z` tag and dispatches the catalog; a pre-release tag routes to the beta catalog only. `release.yml` runs the checks with the uv cache off.
+Distribution: CI publishes `ghcr.io/hass-cortex/cortex_tts`, a multi-arch manifest over `amd64-cortex_tts` (amd64 only), on a `X.Y.Z` tag and dispatches the catalog; a pre-release tag routes to the beta catalog only. `release.yml` runs the checks with the uv cache off.
 
 ## How to
 
