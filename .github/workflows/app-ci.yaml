@@ -62,7 +62,8 @@ jobs:
       - name: Run App Lint
         uses: frenck/action-app-linter@b9cfd1bc62ba60d2c4fc96317b5f7ada5923f4a7 # v2.21.1
         with:
-          community: true
+          # The community checks require a build file, which no app has
+          community: false
           path: "./${{ needs.information.outputs.target }}"
 
   lint-hadolint:
