@@ -33,9 +33,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Run app information action
+      - name: Read app information
         id: information
-        uses: frenck/action-addon-information@ce1377e9851cf569c29329e65fb2c57e67ca0f69 # v1.4.2
+        # frenck/action-addon-information requires a build.yaml, which no app has
+        run: |
+          config=$(find . -mindepth 2 -maxdepth 2 -name config.yaml -not -path './.github/*' -printf '%P\n' | head -1)
+          if [[ -z "${config}" ]]; then
+            echo "::error ::Could not find the app's config.yaml"
+            exit 1
+          fi
+          {
+            echo "target=$(dirname "${config}")"
+            echo "architectures=$(yq -o=json -I=0 '.arch' "${config}")"
+            echo "name=$(yq '.name' "${config}")"
+            echo "slug=$(yq '.slug' "${config}")"
+          } >> "$GITHUB_OUTPUT"
 
   lint-app:
     name: Lint App
