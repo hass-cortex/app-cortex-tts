@@ -33,8 +33,11 @@ jobs:
           # The release notes need the tags
           fetch-depth: 0
 
+      # No cache: a tag build must not read anything a pull request could have written.
       - name: Set up uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
 
       - name: Generate release notes
         # Rendered from the conventional commits since the previous version tag,
@@ -58,14 +61,18 @@ jobs:
           cat body.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
-        with:
-          # Use the PAT so the release.published event triggers deploy.yaml.
-          # GITHUB_TOKEN-created releases do not trigger downstream workflows.
-          token: ${{ secrets.DISPATCH_TOKEN }}
-          name: ${{ github.ref_name }}
-          body_path: body.md
-          # Semver pre-release tags (0.2.0-beta.1) are marked prerelease so
-          # deploy.yaml routes them to repository-beta only, leaving the
-          # stable catalog untouched.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+        # Use the PAT so the release.published event triggers deploy.yaml.
+        # GITHUB_TOKEN-created releases do not trigger downstream workflows.
+        # Semver pre-release tags (0.2.0-beta.1) are marked prerelease so
+        # deploy.yaml routes them to repository-beta only, leaving the
+        # stable catalog untouched.
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ contains(github.ref_name, '-') }}
+        run: |
+          args=(--title "${TAG_NAME}" --notes-file body.md)
+          if [[ "${IS_PRERELEASE}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${TAG_NAME}" "${args[@]}"
